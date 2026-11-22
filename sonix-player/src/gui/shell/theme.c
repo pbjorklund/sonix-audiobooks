@@ -18,23 +18,23 @@ lv_style_t theme_style_switch_checked; // switch indicator, on state
 lv_style_t theme_style_accent_bg;	   // anything that must follow the accent
 lv_style_t theme_style_slider_track;   // a slider's unfilled part
 
-// GNOME Adwaita (libadwaita) colours, dark variant: window #242424, cards
-// #303030 (white at 8%% over the window), accent blue #3584e4. Secondary text
-// is white at 55%%, flattened against the card colour.
+// Dark palette, matching the boot screen: a near-black window (#0a0a0a) with
+// cards a step above it (#1a1a1a) and a royal-blue accent (#0086fc). Secondary
+// text is #a0a0a0, flattened against the card colour.
 static theme_palette_t palette_dark = {
-	.screen_bg = LV_COLOR_MAKE(36, 36, 36),
-	.surface = LV_COLOR_MAKE(48, 48, 48),
-	.surface_pressed = LV_COLOR_MAKE(64, 64, 64),
-	.panel = LV_COLOR_MAKE(30, 30, 30),
-	.cover_bg = LV_COLOR_MAKE(30, 30, 30),
+	.screen_bg = LV_COLOR_MAKE(10, 10, 10),
+	.surface = LV_COLOR_MAKE(26, 26, 26),
+	.surface_pressed = LV_COLOR_MAKE(38, 38, 38),
+	.panel = LV_COLOR_MAKE(15, 15, 15),
+	.cover_bg = LV_COLOR_MAKE(15, 15, 15),
 	.text_primary = LV_COLOR_MAKE(255, 255, 255),
 	.text_secondary = LV_COLOR_MAKE(160, 160, 160),
-	.accent = LV_COLOR_MAKE(53, 132, 228),
+	.accent = LV_COLOR_MAKE(0, 134, 252),
 	.dark = true,
 };
 
 // Adwaita light: window #fafafa, cards white, pressed = black at 8%%, text
-// black at 80%%. The accent is the same #3584e4 in both variants.
+// black at 80%%. The accent is the same royal blue #0086fc in both variants.
 static theme_palette_t palette_light = {
 	// The window is pushed further from white than stock Adwaita's #fafafa:
 	// on this panel white cards on a #fafafa window are indistinguishable, so
@@ -46,7 +46,7 @@ static theme_palette_t palette_light = {
 	.cover_bg = LV_COLOR_MAKE(224, 226, 230),
 	.text_primary = LV_COLOR_MAKE(50, 50, 50),
 	.text_secondary = LV_COLOR_MAKE(115, 115, 115),
-	.accent = LV_COLOR_MAKE(53, 132, 228),
+	.accent = LV_COLOR_MAKE(0, 134, 252),
 	.dark = false,
 };
 
@@ -69,7 +69,7 @@ static theme_palette_t *active = &palette_dark;
 // The accent presets, Adwaita's named accents, ordered as requested: blue
 // (the default), then warm to cool -- orange, yellow, green, purple, pink.
 static const lv_color_t ACCENT_COLORS[THEME_ACCENT_COUNT] = {
-	LV_COLOR_MAKE(53, 132, 228), // blue (#3584e4, the default)
+	LV_COLOR_MAKE(0, 134, 252),  // blue (#0086fc, royal — matches the boot-screen gnome)
 	LV_COLOR_MAKE(255, 120, 0),  // orange (#ff7800)
 	LV_COLOR_MAKE(229, 165, 10), // yellow (#e5a50a)
 	LV_COLOR_MAKE(46, 194, 126), // green (#2ec27e)
