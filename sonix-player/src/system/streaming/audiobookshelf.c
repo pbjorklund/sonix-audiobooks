@@ -60,8 +60,21 @@ static bool progress_reconnect = true;
 // These two carry the same strings the durable AUDIOBOOK_ABS_SYNC row does,
 // so they use the durable-row ceiling (§11.5): a wider slot here would accept
 // a watch key the checkpoint row cannot hold.
-static char progress_force_book[SONIX_LINKED_DB_PATH_MAX];
 static char progress_watch_file[SONIX_LINKED_DB_PATH_MAX];
+
+// §11.4 step 6: an immediate checkpoint wake is keyed by (normalized server,
+// book) instead of one unqualified path, so a checkpoint on server B can no
+// longer erase the pending immediate hint of server A. Four is the profile
+// bound (§11.1); the slots drain every pass, and the touch stamp only decides
+// which hint a pathological fifth same-pass burst replaces.
+typedef struct {
+	char server[ABS_SERVER_MAX];
+	char book[SONIX_LINKED_DB_PATH_MAX];
+	long stamp;
+} progress_forced_t;
+
+static progress_forced_t progress_forced[ABS_PROFILE_MAX];
+static long progress_forced_stamp;
 static audiobookshelf_sync_status_t progress_status = ABS_SYNC_CHECKING;
 static void progress_worker_start(void);
 
@@ -574,9 +587,14 @@ static void *progress_worker(void *unused) {
 		progress_wake = false;
 		bool reconnect = progress_reconnect;
 		progress_reconnect = false;
-		char force[512];
-		snprintf(force, sizeof(force), "%s", progress_force_book);
-		progress_force_book[0] = '\0';
+		// Drain every pending (server, book) immediate, not just the latest:
+		// each slot re-arms its own durable row, so one profile's checkpoint
+		// can never push another's out of the pass (§11.4 step 6). The server
+		// half of the key is what made the individual hints holdable at all;
+		// audiobookdb_abs_retry() re-arms by book, which names one row.
+		progress_forced_t forced[ABS_PROFILE_MAX];
+		memcpy(forced, progress_forced, sizeof(forced));
+		memset(progress_forced, 0, sizeof(progress_forced));
 		pthread_mutex_unlock(&progress_lock);
 		// No flush hook here: upstream's background writer is a single-slot
 		// queue guarded by queue_lock/card_epoch (see H2/H3 of the rebase
@@ -585,7 +603,9 @@ static void *progress_worker(void *unused) {
 		// pending by construction, and audiobookdb_abs_import() refuses to
 		// import while a write is outstanding.
 		if (reconnect) audiobookdb_abs_reconnect();
-		if (force[0]) audiobookdb_abs_retry(force);
+		for (int i = 0; i < ABS_PROFILE_MAX; i++) {
+			if (forced[i].book[0]) audiobookdb_abs_retry(forced[i].book);
+		}
 		progress_refresh_status();
 		// Offline first: a device with no data connection takes no pass at all,
 		// whatever a profile might want (§11.4 step 5 keeps the wake/sleep
@@ -678,7 +698,34 @@ void audiobookshelf_queue_progress(const char *book_path, const char *file, doub
 		(progress_status == ABS_SYNC_SYNCED || progress_status == ABS_SYNC_SYNCED_OFFLINE)) {
 		progress_status = progress_online() ? ABS_SYNC_PENDING : ABS_SYNC_OFFLINE;
 	}
-	if (immediate) snprintf(progress_force_book, sizeof(progress_force_book), "%s", book_path);
+	if (immediate) {
+		// §11.4 step 6: key the hint by (server, book), not just the path. The
+		// server half is this device's current unbound identity -- the active
+		// profile or the legacy pair in its migration window (§11.3) -- which is
+		// what a checkpoint queued here binds to: the link flow above just
+		// linked against it, and local playback queues under whatever is active
+		// now. A hint on server B can no longer evict the still-pending one on
+		// server A; each slot drains its own row next pass.
+		char server[ABS_SERVER_MAX];
+		request_credentials_copy(NULL, server, sizeof(server), NULL, 0);
+		long stamp = ++progress_forced_stamp;
+		int target = -1; // an exact (server, book) match refreshes in place
+		for (int i = 0; i < ABS_PROFILE_MAX && target < 0; i++) {
+			if (progress_forced[i].book[0] &&
+				strcmp(progress_forced[i].server, server) == 0 &&
+				strcmp(progress_forced[i].book, book_path) == 0)
+				target = i;
+		}
+		int oldest = -1; // all slots full and no match: evict the least recent touch
+		for (int i = 0; i < ABS_PROFILE_MAX && target < 0; i++) {
+			if (!progress_forced[i].book[0]) { target = i; break; }
+			if (oldest < 0 || progress_forced[i].stamp <= progress_forced[oldest].stamp) oldest = i;
+		}
+		if (target < 0) target = oldest;
+		snprintf(progress_forced[target].server, sizeof(progress_forced[target].server), "%s", server);
+		snprintf(progress_forced[target].book, sizeof(progress_forced[target].book), "%s", book_path);
+		progress_forced[target].stamp = stamp;
+	}
 	progress_wake = true;
 	pthread_cond_signal(&progress_cond);
 	pthread_mutex_unlock(&progress_lock);

@@ -57,9 +57,12 @@ static void draw(void) {
 	entry_count = 0;
 	for (int i = 0; i < count && entry_count < ABS_PROFILE_MAX; i++) {
 		picker_entry_t *entry = &entries[entry_count++];
-		snprintf(entry->id, sizeof(entry->id), "%s", profiles[i].id);
-		snprintf(entry->name, sizeof(entry->name), "%s", profiles[i].name);
-		snprintf(entry->server, sizeof(entry->server), "%s", profiles[i].server);
+		// Same-size fixed fields, copied directly: an snprintf("%s") from one
+		// fixed buffer into another of the same size is correct but makes GCC
+		// suspect truncation (-Wformat-truncation) in this very same-size case.
+		memcpy(entry->id, profiles[i].id, sizeof(entry->id));
+		memcpy(entry->name, profiles[i].name, sizeof(entry->name));
+		memcpy(entry->server, profiles[i].server, sizeof(entry->server));
 		// The token bytes served their one pass through this copy; drop them.
 		memset(profiles[i].token, 0, sizeof(profiles[i].token));
 	}

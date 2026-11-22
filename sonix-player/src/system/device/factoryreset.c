@@ -13,6 +13,7 @@
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/tidalcache.h"
+#include "src/system/streaming/abs_profiles.h"
 #include "src/system/remote/dlna.h"
 #include "src/system/device/sysserver.h"
 #include "src/system/device/system.h"
@@ -147,6 +148,9 @@ bool factoryreset_supported(void) {
 
 void factoryreset_run(void) {
 #ifdef HOST_BUILD
+	// The simulated reset mirrors the device's: profile credentials (§11.6) go
+	// with the configuration, so a host test can model what the R1 does.
+	abs_profiles_factory_reset();
 	printf("factoryreset: (build host) would delete %s and %s, write the note and reboot\n", CONFIG_FILE,
 		   EBOOK_CONFIG_FILE);
 #else
@@ -188,6 +192,11 @@ void factoryreset_run(void) {
 	unmount_card();
 
 	// This player's configuration goes now, without waiting for the reboot.
+	// The profile file carries server tokens at mode 0600 (§11.6), so the
+	// reset clears the store, unlinks the file and its temporary and empties
+	// the legacy config keys -- a later boot must find no ABS credentials at
+	// all, not one re-migrated from device_config.ini.
+	abs_profiles_factory_reset();
 	static const char *const OURS[] = {CONFIG_FILE, EBOOK_CONFIG_FILE};
 	for (size_t i = 0; i < sizeof(OURS) / sizeof(OURS[0]); i++) {
 		if (unlink(OURS[i]) == 0) {

@@ -658,6 +658,12 @@ bool abs_profiles_add(const char *name, const char *server, const char *token, c
 	char normalized[ABS_SERVER_MAX];
 	char reason[96] = "";
 	if (!abs_profiles_server_valid(server, normalized, sizeof(normalized), reason, sizeof(reason))) return false;
+	// The fixed store fields cap the name at 63 bytes and the token at 1023.
+	// The file parser rejects over-length values instead of truncating, and so
+	// does the API (§11.1's "no silent truncation"): a cut token would never
+	// authenticate anything, and a cut name would only mislead the picker.
+	if (name && !fits(name, ABS_PROFILE_NAME_MAX)) return false;
+	if (token && !fits(token, ABS_TOKEN_MAX)) return false;
 
 	pthread_mutex_lock(&store_lock);
 	bool ok = false;
@@ -688,6 +694,10 @@ done:
 }
 
 bool abs_profiles_edit(const char *id, const char *name, const char *token) {
+	// Same no-silent-truncation rule as abs_profiles_add() and the file parser:
+	// an over-length value is rejected whole, before anything is modified.
+	if (name && !fits(name, ABS_PROFILE_NAME_MAX)) return false;
+	if (token && !fits(token, ABS_TOKEN_MAX)) return false;
 	pthread_mutex_lock(&store_lock);
 	abs_profile_t *p = find_profile(id);
 	if (!p) {
@@ -797,4 +807,33 @@ void abs_profiles_snapshot_wipe(abs_auth_snapshot_t *snap) {
 	if (!snap) return;
 	volatile char *bytes = (volatile char *)snap;
 	memset((void *)bytes, 0, sizeof(*snap));
+}
+
+void abs_profiles_factory_reset(void) {
+	pthread_mutex_lock(&store_lock);
+	// A cleared store cannot hand out credentials: every snapshot call after
+	// this returns false because no profile id exists to look up. The secret
+	// bytes die with the store, so nothing needs a separate zeroing pass.
+	memset(&store, 0, sizeof(store));
+	store.next_num = 1; // a re-added profile starts from p1 again
+	const char *path = store_path();
+	if (path) {
+		char temp[640];
+		snprintf(temp, sizeof(temp), "%s.tmp", path);
+		if (unlink(temp) != 0 && errno != ENOENT)
+			fprintf(stderr, "abs_profiles: factory reset could not remove %s\n", temp);
+		if (unlink(path) != 0 && errno != ENOENT)
+			fprintf(stderr, "abs_profiles: factory reset could not remove %s\n", path);
+	}
+	pthread_mutex_unlock(&store_lock);
+	// The legacy 0.5.0 keys must not survive either, or migration would put
+	// the credentials straight back on the next boot. Same best-effort second
+	// step as migration: a failed config save leaves the in-memory clear in
+	// place and is reported, not ignored.
+	if (config_path()) {
+		config_set("audiobookshelf", "server", "");
+		config_set("audiobookshelf", "token", "");
+		if (!config_save())
+			fprintf(stderr, "abs_profiles: factory reset could not clear the legacy keys\n");
+	}
 }

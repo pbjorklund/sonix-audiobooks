@@ -57,14 +57,17 @@ bool abs_profiles_select(const char *id);
 
 // Adds a profile. `server` is normalized+validated (http/https, no userinfo,
 // no fragment, no control bytes, no duplicate normalized URL). `id_out` (may
-// be NULL) receives the new id. Fails at four profiles.
+// be NULL) receives the new id. Fails at four profiles. Over-length display
+// names (>= 64 bytes) or tokens (>= 1024 bytes) are rejected whole -- like the
+// file parser, never silently truncated (§11.1).
 bool abs_profiles_add(const char *name, const char *server, const char *token,
 					  char *id_out, size_t id_size);
 
 // Edits display name and/or token of an existing profile. The server URL is
 // immutable after creation (§11.2); pass NULL to keep a value. A blank token
 // retains the stored one, because with an immutable URL there is no
-// "reuse the old host's token" ambiguity left to remove.
+// "reuse the old host's token" ambiguity left to remove. Over-length values
+// are rejected whole, never silently truncated (§11.1).
 bool abs_profiles_edit(const char *id, const char *name, const char *token);
 
 // Blocks while a download queue references the profile (none exists yet in
@@ -111,6 +114,15 @@ bool abs_profiles_server_valid(const char *server, char *normalized_out, size_t 
 // Zeroes a snapshot's credential bytes once a job finished with it. The
 // volatile sink keeps the pass from being optimized away.
 void abs_profiles_snapshot_wipe(abs_auth_snapshot_t *snap);
+
+// Factory reset (§11.6): locks the store, clears it (no new snapshot hands out
+// a credential again), and unlinks both the profile file and its temporary, so
+// no 0600 token-bearing file survives the reset. The legacy [audiobookshelf]
+// config keys are cleared the same way migration does, or the next boot would
+// re-migrate the credentials. No physical secure erase is claimed for UBIFS.
+// Called by the device's factory reset; also callable from tests. On a host
+// build without an injected path, nothing is written to disk by design.
+void abs_profiles_factory_reset(void);
 
 // Storage location override for host tests; device builds use
 // /usr/data/audiobookshelf_profiles.ini.

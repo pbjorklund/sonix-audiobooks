@@ -45,6 +45,9 @@ jobs:
       - name: Run the outbox and decision unit tests
         working-directory: ${{ github.workspace }}
         run: bash tools/audiobookshelf-outbox-test.sh
+      - name: Run the profile store unit tests (§11.6/§14.2)
+        working-directory: ${{ github.workspace }}
+        run: bash tools/audiobookshelf-profiles-test.sh
       - name: Upload audiobook smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7

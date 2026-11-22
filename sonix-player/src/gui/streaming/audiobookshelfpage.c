@@ -71,6 +71,7 @@ static void draw_libraries(void);
 typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_ITEMS, JOB_SEARCH, JOB_GROUPS, JOB_DOWNLOAD, JOB_LINK } job_kind_t;
 typedef struct {
 	job_kind_t kind;
+	uint32_t generation; // browse generation at submit time (§11.4)
 	char id[ABS_ID_MAX];
 	char path[1280];
 	char query[ABS_NAME_MAX];
@@ -79,17 +80,32 @@ typedef struct {
 } job_t;
 static void run_loading(const job_t *job);
 
+// Job queue and browse generation, all under job_lock (§11.4). Every submitted
+// job AND every profile switch advances the generation: a completion that lands
+// after something newer was requested is stale and must not repaint this page
+// with another profile's data (the spec's own discard mechanism). The queue
+// holds one slot -- the newest browse intent replaces an older queued one, so a
+// switch during an in-flight request queues its reload instead of dropping it.
 static pthread_mutex_t job_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t job_cond = PTHREAD_COND_INITIALIZER;
 static job_t pending;
 static bool have_pending;
 static bool worker_started;
-static bool busy;
+static bool busy; // a request is in flight or queued (GUI-thread view)
+static uint32_t browse_generation = 0;
 
-static job_kind_t result_kind;
-static bool result_ok;
-static char result_error[256];
-static char downloaded_path[1024];
+// The last completed job. The worker publishes it under job_lock and only
+// job_done_async on the GUI thread reads it -- that pair, not the fields
+// themselves, is the synchronization (§11.4: no unsynchronized shared writes).
+typedef struct {
+	job_kind_t kind;
+	bool ok;
+	uint32_t generation;
+	char error[256];
+} job_result_t;
+static job_result_t result;
+
+// Download/link outcomes ride along with the job result (same lock, same reader).
 static char downloaded_resume_file[1280];
 static double downloaded_resume_seconds;
 static bool downloaded_finished;
@@ -151,13 +167,18 @@ static void picker_setup_cb(void *user) {
 }
 
 // A profile was selected in the picker and the store has already persisted it.
-// §11.4: the switch clears remote list/detail state and loads the new active
-// profile's libraries; queue jobs and manifests are untouched, and the next
-// browse request resolves its credentials against the newly active profile.
-// In-flight results that land after the clear are overwritten on return:
-// page_loaded_cb re-runs the libraries request whenever the page reopens.
+// §11.4: the switch increments the browse generation, clears remote list/detail
+// state, and loads the new active profile's libraries; queue jobs and manifests
+// are untouched, and the next browse request resolves its credentials against
+// the newly active profile. The bump happens before the clear so an in-flight
+// result from the old profile is stale by the time it lands: job_done_async
+// discards it instead of repainting this page with another server's data (and a
+// tap on a stale row could never send that item id to the active server), and
+// the reload below queues behind it rather than being dropped while busy.
 static void profile_selected_cb(void *user) {
 	(void)user;
+	pthread_mutex_lock(&job_lock);
+	browse_generation++; // invalidate every in-flight or queued old-profile result
 	view = VIEW_LIBRARIES;
 	library_count = 0;
 	item_count = item_total = 0;
@@ -170,6 +191,7 @@ static void profile_selected_cb(void *user) {
 	item_filter[0] = group_name[0] = '\0';
 	selected_item = -1;
 	selected_local_book[0] = '\0';
+	pthread_mutex_unlock(&job_lock);
 
 	draw_libraries();
 	if (!audiobookshelf_configured() || !wifi_connected()) return;
@@ -207,20 +229,26 @@ static void top_row_label(char *out, size_t size) {
 	snprintf(out, size, "%s", audiobookshelf_server());
 }
 
+// Queues the next job, stamping it with a fresh generation. Never drops: when
+// one is already queued the newest browse intent replaces it (a second switch
+// supersedes the first), and an in-flight job simply runs to completion -- its
+// stale result is discarded on return (§11.4).
 static void submit(const job_t *job) {
+	job_t queued = *job;
 	pthread_mutex_lock(&job_lock);
-	if (!busy) {
-		pending = *job;
-		have_pending = true;
-		busy = true;
-		pthread_cond_signal(&job_cond);
-	}
+	queued.generation = ++browse_generation;
+	pending = queued;
+	have_pending = true;
+	busy = true;
+	pthread_cond_signal(&job_cond);
 	pthread_mutex_unlock(&job_lock);
 }
 
 static void run_loading(const job_t *job) {
-	if (busy) return;
-	toast_busy("loading");
+	pthread_mutex_lock(&job_lock);
+	bool first = !busy; // the busy toast stays up while anything is queued
+	pthread_mutex_unlock(&job_lock);
+	if (first) toast_busy("loading");
 	submit(job);
 }
 
@@ -629,15 +657,25 @@ static void resume_import_cb(lv_timer_t *timer) {
 	}
 
 	char book[1280];
-	if (audiobookdb_book_for_file(downloaded_resume_file, book, sizeof(book))) {
-		audiobookdb_save_position(book, downloaded_resume_file, downloaded_resume_seconds);
-		if (downloaded_finished) audiobookdb_mark_finished(book);
+	char file[1280], server[512];
+	double seconds = 0;
+	bool finished = false;
+	long long updated_ms = 0;
+	pthread_mutex_lock(&job_lock); // the worker publishes these under this lock (§11.4)
+	snprintf(file, sizeof(file), "%s", downloaded_resume_file);
+	seconds = downloaded_resume_seconds;
+	finished = downloaded_finished;
+	updated_ms = downloaded_updated_ms;
+	snprintf(server, sizeof(server), "%s", downloaded_server);
+	pthread_mutex_unlock(&job_lock);
+
+	if (audiobookdb_book_for_file(file, book, sizeof(book))) {
+		audiobookdb_save_position(book, file, seconds);
+		if (finished) audiobookdb_mark_finished(book);
 		audiobookdb_abs_checkpoint_t checkpoint;
-		if (downloaded_updated_ms > 0 && audiobookdb_abs_get(book, &checkpoint))
-			audiobookdb_abs_import(&checkpoint, downloaded_server, downloaded_resume_file,
-				downloaded_resume_seconds, downloaded_finished, downloaded_updated_ms);
-		printf("audiobookshelf: imported resume %.1f s into %s\n", downloaded_resume_seconds,
-			   downloaded_resume_file);
+		if (updated_ms > 0 && audiobookdb_abs_get(book, &checkpoint))
+			audiobookdb_abs_import(&checkpoint, server, file, seconds, finished, updated_ms);
+		printf("audiobookshelf: imported resume %.1f s into %s\n", seconds, file);
 		lv_timer_delete(resume_import_timer);
 		resume_import_timer = NULL;
 		return;
@@ -655,7 +693,11 @@ static void resume_import_cb(lv_timer_t *timer) {
 }
 
 static void start_resume_import(bool scan_first) {
-	if (!downloaded_resume_file[0]) return;
+	char file[1280];
+	pthread_mutex_lock(&job_lock); // published by the worker under this lock (§11.4)
+	snprintf(file, sizeof(file), "%s", downloaded_resume_file);
+	pthread_mutex_unlock(&job_lock);
+	if (!file[0]) return;
 	resume_import_attempts = 0;
 	resume_scan_attempts = 0;
 	resume_scan_needed = scan_first;
@@ -694,18 +736,32 @@ static void download_progress(int track, int tracks, long long done, long long t
 
 static void job_done_async(void *user) {
 	(void)user;
+	job_result_t done;
+	bool more, stale;
 	pthread_mutex_lock(&job_lock);
-	busy = false;
+	done = result; // published by the worker under this lock (§11.4)
+	more = have_pending; // a queued job follows: keep the busy state up for it
+	busy = more;
+	stale = done.generation != browse_generation;
 	pthread_mutex_unlock(&job_lock);
-	toast_busy_end();
+	if (!more) toast_busy_end();
 
-	if (result_kind == JOB_DOWNLOAD) gui_modal_hide();
-	if (!result_ok) {
-		gui_notify_popup(result_error[0] ? result_error : tr("audiobookshelf_request_failed"));
+	// §11.4: a completion that landed after something newer was requested -- a
+	// profile switch or a superseding request -- is stale. Its data belongs to
+	// another profile's session and must not repaint this page (a tap on such a
+	// row would send the old server's item id to the active one). Download and
+	// link are different: their modal was shown for them, and the book they
+	// finished belongs to its own server whatever is active now, so their chrome
+	// and local resume import run even when stale.
+	if (done.kind == JOB_DOWNLOAD) gui_modal_hide();
+	if (stale && done.kind != JOB_DOWNLOAD && done.kind != JOB_LINK) return;
+
+	if (!done.ok) {
+		gui_notify_popup(done.error[0] ? done.error : tr("audiobookshelf_request_failed"));
 		return;
 	}
 
-	switch (result_kind) {
+	switch (done.kind) {
 	case JOB_TEST:
 		if (lv_screen_active() == setup_screen) back_btn_cb(NULL);
 		toast_success("audiobookshelf_connected");
@@ -745,80 +801,111 @@ static void *worker_main(void *user) {
 		have_pending = false;
 		pthread_mutex_unlock(&job_lock);
 
-		result_kind = job.kind;
-		result_ok = false;
-		result_error[0] = '\0';
+		// The network calls below run unlocked and fill the shared arrays in
+		// place: every GUI reader of those arrays either runs after this job's
+		// publish (ordered through job_lock by job_done_async) or is gated on
+		// `busy`, which stays set until then. What the lock still owns is what
+		// the profile-switch clear touches -- the counts and metadata beside
+		// the arrays, and the groups pointer swap -- so a switch can never
+		// interleave with them (§11.4: no unsynchronized shared-field writes).
+		job_result_t done = {.kind = job.kind, .ok = false, .generation = job.generation};
+		char dl_path[1024] = "";
+		char dl_resume_file[1280] = "";
+		double dl_seconds = 0;
+		bool dl_finished = false;
+		long long dl_updated_ms = 0;
+		char dl_server[512] = "";
+
 		if (job.kind == JOB_TEST || job.kind == JOB_LIBRARIES) {
 			int count = audiobookshelf_libraries(libraries, ABS_LIBRARY_MAX);
 			if (count >= 0) {
+				pthread_mutex_lock(&job_lock);
 				library_count = count;
-				result_ok = true;
+				pthread_mutex_unlock(&job_lock);
+				done.ok = true;
 			}
 		} else if (job.kind == JOB_ITEMS) {
-			int count = audiobookshelf_filtered_items(job.id, job.page, job.filter, items, ABS_PAGE_LIMIT, &item_total);
+			int total = 0;
+			int count = audiobookshelf_filtered_items(job.id, job.page, job.filter, items, ABS_PAGE_LIMIT, &total);
 			if (count >= 0) {
+				pthread_mutex_lock(&job_lock);
 				item_count = count;
+				item_total = total;
 				item_page = job.page;
 				search_query[0] = '\0';
 				snprintf(item_filter, sizeof(item_filter), "%s", job.filter);
 				if (job.query[0]) snprintf(group_name, sizeof(group_name), "%s", job.query);
-				result_ok = true;
+				pthread_mutex_unlock(&job_lock);
+				done.ok = true;
 			}
 		} else if (job.kind == JOB_SEARCH) {
 			int count = audiobookshelf_search(job.id, job.query, items, ABS_PAGE_LIMIT);
 			if (count >= 0) {
+				pthread_mutex_lock(&job_lock);
 				item_count = item_total = count;
 				item_page = 0;
 				item_filter[0] = '\0';
 				snprintf(search_query, sizeof(search_query), "%s", job.query);
-				result_ok = true;
+				pthread_mutex_unlock(&job_lock);
+				done.ok = true;
 			}
 		} else if (job.kind == JOB_GROUPS) {
 			audiobookshelf_library_t *next = NULL;
 			int count = audiobookshelf_groups(job.id, job.page != 0, &next);
 			if (count >= 0) {
+				pthread_mutex_lock(&job_lock);
 				free(groups); groups = next; group_count = count; group_page = 0;
-				group_series = job.page != 0; result_ok = true;
+				group_series = job.page != 0;
+				pthread_mutex_unlock(&job_lock);
+				done.ok = true;
 			}
 		} else if (job.kind == JOB_DOWNLOAD || job.kind == JOB_LINK) {
 			audiobookshelf_book_t *book = calloc(1, sizeof(*book));
-			if (!book) snprintf(result_error, sizeof(result_error), "%s", tr("out_of_memory"));
+			if (!book) snprintf(done.error, sizeof(done.error), "%s", tr("out_of_memory"));
 			else {
-				downloaded_resume_file[0] = '\0';
-				downloaded_resume_seconds = 0;
-				downloaded_finished = false;
-				downloaded_updated_ms = 0;
-				snprintf(downloaded_server, sizeof(downloaded_server), "%s", audiobookshelf_server());
+				snprintf(dl_server, sizeof(dl_server), "%s", audiobookshelf_server());
 				if (job.kind == JOB_DOWNLOAD) {
 					const char *root = config->sd_root_path;
-					result_ok = root && root[0] && audiobookshelf_book(job.id, book) &&
-						audiobookshelf_download(book, root, download_progress, NULL,
-										 downloaded_path, sizeof(downloaded_path));
-					if (result_ok)
-						audiobookshelf_resume_target(book, downloaded_path, downloaded_resume_file,
-											 sizeof(downloaded_resume_file), &downloaded_resume_seconds,
-											 &downloaded_finished);
+					done.ok = root && root[0] && audiobookshelf_book(job.id, book) &&
+						audiobookshelf_download(book, root, download_progress, NULL, dl_path, sizeof(dl_path));
+					if (done.ok)
+						audiobookshelf_resume_target(book, dl_path, dl_resume_file,
+											 sizeof(dl_resume_file), &dl_seconds, &dl_finished);
 				} else {
-					result_ok = audiobookshelf_book(job.id, book) &&
-						audiobookshelf_link_local(book, job.path, downloaded_resume_file,
-										 sizeof(downloaded_resume_file), &downloaded_resume_seconds,
-										 &downloaded_finished);
-					if (result_ok) {
+					done.ok = audiobookshelf_book(job.id, book) &&
+						audiobookshelf_link_local(book, job.path, dl_resume_file,
+										 sizeof(dl_resume_file), &dl_seconds, &dl_finished);
+					if (done.ok) {
 						char local_file[1280];
 						double local_seconds = 0;
 						if (audiobookdb_get_position(job.path, local_file, sizeof(local_file), &local_seconds)) {
 							audiobookshelf_queue_progress(job.path, local_file, local_seconds,
 													 audiobookdb_is_finished(job.path), true);
-							downloaded_resume_file[0] = '\0';
+							dl_resume_file[0] = '\0'; // the local position is already pending
 						}
 					}
 				}
-				if (result_ok) downloaded_updated_ms = book->progress_updated_ms;
+				if (done.ok) dl_updated_ms = book->progress_updated_ms;
 				free(book);
 			}
 		}
-		if (!result_ok && !result_error[0])
-			snprintf(result_error, sizeof(result_error), "%s", audiobookshelf_last_error());
+		if (!done.ok && !done.error[0])
+			snprintf(done.error, sizeof(done.error), "%s", audiobookshelf_last_error());
+
+		// One locked handoff to the GUI thread: the result plus, for download
+		// and link jobs only, their outcomes. Browse jobs must not touch
+		// downloaded_* -- a resume import may still be polling them from an
+		// earlier download while the user browses again.
+		pthread_mutex_lock(&job_lock);
+		result = done;
+		if (done.kind == JOB_DOWNLOAD || done.kind == JOB_LINK) {
+			snprintf(downloaded_resume_file, sizeof(downloaded_resume_file), "%s", dl_resume_file);
+			downloaded_resume_seconds = dl_seconds;
+			downloaded_finished = dl_finished;
+			downloaded_updated_ms = dl_updated_ms;
+			snprintf(downloaded_server, sizeof(downloaded_server), "%s", dl_server);
+		}
+		pthread_mutex_unlock(&job_lock);
 		gui_post(job_done_async, NULL);
 	}
 	return NULL;
