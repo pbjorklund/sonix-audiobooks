@@ -423,13 +423,16 @@ const eq_preset_t EQ_DEFAULT_PRESETS[] = {
 };
 const int EQ_DEFAULT_PRESET_COUNT = (int)(sizeof(EQ_DEFAULT_PRESETS) / sizeof(EQ_DEFAULT_PRESETS[0]));
 
+// Ten no-file-write setters, then one save: a preset is one transaction, and
+// the ten whole-dB saving calls of the old shape wrote the file ten times over.
 void eq_apply_preset(const eq_preset_t *preset) {
 	if (!preset) {
 		return;
 	}
 	for (int i = 0; i < EQ_BANDS; i++) {
-		eq_set_band(i, preset->gain_db[i]);
+		eq_set_band_tenths(i, preset->gain_db[i] * 10);
 	}
+	eq_save();
 }
 
 void eq_presets_set_dir(const char *sd_root) {
@@ -503,6 +506,10 @@ static bool preset_read(const char *path, int tenths[EQ_BANDS], int *width) {
 	return any;
 }
 
+// A preset is written to a temporary beside the final name, every output call
+// checked, and renamed over the old file only when all of it got out: so a
+// read-only or full card reports failure here and the preset that was there
+// still stands, instead of standing half-written or gone.
 bool eq_preset_save(const char *name) {
 	if (!eq_preset_dir[0] || !name_is_usable(name)) {
 		return false;
@@ -511,21 +518,45 @@ bool eq_preset_save(const char *name) {
 
 	char path[700];
 	snprintf(path, sizeof(path), "%s/%s.ini", eq_preset_dir, name);
+	char tmp[708];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
 
-	FILE *f = fopen(path, "w");
+	FILE *f = fopen(tmp, "w");
 	if (!f) {
-		fprintf(stderr, "eq: cannot write '%s': %s\n", path, strerror(errno));
+		fprintf(stderr, "eq: cannot write '%s': %s\n", tmp, strerror(errno));
 		return false;
 	}
-	fputs("# equalizer preset\n", f);
-	for (int i = 0; i < EQ_BANDS; i++) {
-		fprintf(f, "b%d=%d\n", i, band_whole_db(band_tenths[i]));
+	bool ok = fputs("# equalizer preset\n", f) != EOF && !ferror(f);
+	for (int i = 0; ok && i < EQ_BANDS; i++) {
+		ok = fprintf(f, "b%d=%d\n", i, band_whole_db(band_tenths[i])) > 0 && !ferror(f);
 	}
-	for (int i = 0; i < EQ_BANDS; i++) {
-		fprintf(f, "t%d=%d\n", i, band_tenths[i]);
+	for (int i = 0; ok && i < EQ_BANDS; i++) {
+		ok = fprintf(f, "t%d=%d\n", i, band_tenths[i]) > 0 && !ferror(f);
 	}
-	fprintf(f, "w=%d\n", eq_width);
-	fclose(f);
+	if (ok) {
+		ok = fprintf(f, "w=%d\n", eq_width) > 0 && !ferror(f);
+	}
+	// The buffered bytes must be out of the stdio library and answered for
+	// before the old file is replaced: a failing flush or close is a failed
+	// write, not one to rename over the old preset after.
+	if (ok) {
+		ok = fflush(f) == 0;
+	}
+	if (ok) {
+		ok = fclose(f) == 0;
+	} else {
+		fclose(f);
+	}
+	if (!ok) {
+		fprintf(stderr, "eq: could not write '%s': %s\n", tmp, strerror(errno));
+		remove(tmp);
+		return false;
+	}
+	if (rename(tmp, path) != 0) {
+		fprintf(stderr, "eq: cannot rename '%s' to '%s': %s\n", tmp, path, strerror(errno));
+		remove(tmp);
+		return false;
+	}
 	return true;
 }
 
@@ -593,8 +624,9 @@ int eq_preset_for_each(eq_preset_name_cb_t cb, void *user) {
 
 void eq_reset(void) {
 	for (int i = 0; i < EQ_BANDS; i++) {
-		eq_set_band(i, 0);
+		eq_set_band_tenths(i, 0);
 	}
+	eq_save();
 }
 
 // ---------------------------------------------------------------------------

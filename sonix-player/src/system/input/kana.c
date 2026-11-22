@@ -329,10 +329,18 @@ size_t kana_feed(kana_t *k, int c, char *out, size_t cap) {
 	return at;
 }
 
+// Each branch asks for what it writes: a three-byte kana fits when the kana
+// and the terminator still do (`at + 3 < cap`). One over-strict loop predicate
+// for the two shapes rejected a single kana in exactly a four-byte buffer,
+// which is a boundary every candidate label and one-character conversion
+// touches. Invalid UTF-8 leaves byte by byte as it came in.
 void kana_to_katakana(const char *in, char *out, size_t cap) {
 	size_t at = 0;
-	for (const unsigned char *p = (const unsigned char *)in; *p && at + 4 < cap;) {
+	for (const unsigned char *p = (const unsigned char *)in; *p;) {
 		if (p[0] == 0xE3 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+			if (at + 3 >= cap) {
+				break; // no room for the katakana and its NUL
+			}
 			uint32_t cp = ((uint32_t)(p[0] & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6) | (uint32_t)(p[2] & 0x3F);
 			if (cp >= 0x3041 && cp <= 0x3096) {
 				cp += 0x60;
@@ -342,6 +350,9 @@ void kana_to_katakana(const char *in, char *out, size_t cap) {
 			out[at++] = (char)(0x80 | (cp & 0x3F));
 			p += 3;
 		} else {
+			if (at + 1 >= cap) {
+				break;
+			}
 			out[at++] = (char)*p++;
 		}
 	}

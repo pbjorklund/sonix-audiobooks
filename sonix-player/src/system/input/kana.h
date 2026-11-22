@@ -10,8 +10,9 @@
 // "k" of a "ka" not finished) is kept in the converter to be shown as pre-edit.
 //
 // Katakana is the same kana 0x60 higher: kana_to_katakana() converts a string.
-// There is no kanji conversion; that needs a dictionary the player has no room
-// for.
+// Kanji candidates come from the reading dictionary in jpdict.c (see there);
+// whether that dictionary ships is a resource measurement, and input below the
+// candidate strip works with or without it.
 
 #define KANA_PENDING_MAX 4 // the longest romaji here is "xtsu"
 

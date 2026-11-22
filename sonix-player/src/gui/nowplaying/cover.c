@@ -13,6 +13,7 @@
 
 #include "src/system/db/sqlite3.h"
 
+#include "src/system/core/sha256.h"
 #include "src/system/library/albumart.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/image/art_shrink.h"
@@ -2159,19 +2160,47 @@ static void thumb_db_store(const char *key, const cover_image_t *img, bool has_i
 // browser thumbnails
 // ---------------------------------------------------------------------------
 
-// A key for a picture rather than a file: the bytes' id (bytes_id) and the box.
-// The two kinds never meet: a file's key is sixteen hex digits, and this one
-// starts with a letter that is not one.
-static void thumb_picture_key(char *out, size_t out_size, uint64_t id, int box) { snprintf(out, out_size, "p%016llx|%d", (unsigned long long)id, box); }
+// The identity of a picture-level cache entry: the full SHA-256 of the
+// compressed source bytes, every one of them. The fold it replaces (byte
+// length plus the first and last 4 KiB) let two covers that agreed on those
+// three things share their thumbnails; the digest does not, at the cost of a
+// pass over bytes the decode would read anyway.
+static void picture_id(const albumart_t *art, char out[SHA256_HEX_LEN]) {
+	sha256_ctx c;
+	sha256_init(&c);
+	sha256_update(&c, art->data, art->size);
+	sha256_final_hex(&c, out);
+}
+
+// The keys carry a namespace of their own -- "p2-<64 hex>|<box>" -- so the
+// weak older family, "p<16 hex>|<box>" against the sampled fold, is never
+// trusted by this reader: the p2 range below touches only keys its own
+// identity scheme wrote. ('p2-' to 'p2.': '-' is followed by '.' in the byte
+// order, and no other key family begins "p2-".)
+#define THUMB_PICTURE_PREFIX "p2-"
+
+// How many picture-level entries are kept. Older insertions than the newest
+// 256 (by rowid) go, after a store; not a true LRU, but a bound a schema
+// migration can be skipped for, and an evicted image is regenerated for the
+// cost of a decode.
+#define THUMB_PICTURE_MAX_ROWS 256
+
+static void thumb_picture_key(char *out, size_t out_size, const char id[SHA256_HEX_LEN], int box) {
+	if (snprintf(out, out_size, "%s%s|%d", THUMB_PICTURE_PREFIX, id, box) >= (int)out_size) {
+		out[0] = '\0'; // cannot name it: treat as absent rather than name a prefix of it
+	}
+}
 
 // The same picture already made at a larger size -- for Cover Flow, say --
 // shrunk to `size`. The smallest one that is still big enough is taken. A few
 // milliseconds against a decode, which for a large progressive JPEG is over a
 // second on this processor.
-static bool thumb_shrink_cached(uint64_t id, int size, cover_image_t *out) {
-	char from[40], to[40];
-	snprintf(from, sizeof(from), "p%016llx|", (unsigned long long)id);
-	snprintf(to, sizeof(to), "p%016llx}", (unsigned long long)id);
+static void thumb_picture_prune(void); // defined with the store hook, below
+
+static bool thumb_shrink_cached(const char id[SHA256_HEX_LEN], int size, cover_image_t *out) {
+	char from[80], to[80];
+	snprintf(from, sizeof(from), "%s%s|", THUMB_PICTURE_PREFIX, id);
+	snprintf(to, sizeof(to), "%s%s}", THUMB_PICTURE_PREFIX, id);
 
 	cover_image_t big;
 	memset(&big, 0, sizeof(big));
@@ -2204,7 +2233,7 @@ static bool thumb_shrink_cached(uint64_t id, int size, cover_image_t *out) {
 
 typedef struct {
 	int box;
-	char key[40]; // empty when the bytes last looked up have no id
+	char key[80]; // "p2-<64 hex>|<box>" and room to spare; empty when the bytes last looked up have no identity
 } thumb_picture_t;
 
 static bool thumb_picture_lookup(void *ctx, const albumart_t *art, cover_image_t *outs) {
@@ -2213,7 +2242,8 @@ static bool thumb_picture_lookup(void *ctx, const albumart_t *art, cover_image_t
 	if (!art->size) {
 		return false;
 	}
-	uint64_t id = bytes_id(art->data, art->size);
+	char id[SHA256_HEX_LEN];
+	picture_id(art, id);
 	// Asked after the hash, not before: a card pulled during it leaves an id
 	// computed over zeroed pages, which names nothing.
 	if (albumart_faulted(art)) {
@@ -2226,15 +2256,38 @@ static bool thumb_picture_lookup(void *ctx, const albumart_t *art, cover_image_t
 	}
 	if (thumb_shrink_cached(id, pic->box, outs)) {
 		thumb_db_store(pic->key, outs, true);
+		thumb_picture_prune();
 		return true;
 	}
 	return false;
+}
+
+// The store only ever follows a successful, non-faulted decode (the source
+// walk above calls it), and keeps the picture table bounded while it is at
+// it. Every failure in the prune is ignored: a cache I/O failure may cost a
+// decode, never playback or browsing.
+static void thumb_picture_prune(void) {
+	pthread_mutex_lock(&thumb_db_lock);
+	if (thumb_db) {
+		sqlite3_stmt *stmt = NULL;
+		if (sqlite3_prepare_v2(thumb_db,
+							   "DELETE FROM thumbs WHERE key >= 'p2-' AND key < 'p2.' AND rowid IN"
+							   " (SELECT rowid FROM thumbs WHERE key >= 'p2-' AND key < 'p2.'"
+							   " ORDER BY rowid DESC LIMIT -1 OFFSET ?1)",
+							   -1, &stmt, NULL) == SQLITE_OK) {
+			sqlite3_bind_int(stmt, 1, THUMB_PICTURE_MAX_ROWS);
+			sqlite3_step(stmt); // a failure here only costs a future re-decode
+			sqlite3_finalize(stmt);
+		}
+	}
+	pthread_mutex_unlock(&thumb_db_lock);
 }
 
 static void thumb_picture_store(void *ctx, const cover_image_t *outs) {
 	thumb_picture_t *pic = ctx;
 	if (pic->key[0]) {
 		thumb_db_store(pic->key, outs, true);
+		thumb_picture_prune();
 	}
 }
 
@@ -2244,10 +2297,10 @@ static void thumb_picture_store(void *ctx, const cover_image_t *outs) {
 // the same embedded cover would otherwise be a dozen decodes the first time
 // the album is opened -- seconds each for a large progressive JPEG, which
 // TJpgDec cannot scale and stb_image decodes whole. So each candidate's bytes
-// are identified before they are decoded, and a thumbnail already made from
-// the same picture at the same size is taken instead. A picture key is only
-// written for the bytes an image was actually built from, so the answer is
-// the one the decode would have given.
+// are identified by their full digest before they are decoded, and a
+// thumbnail already made from the same picture at the same size is taken
+// instead. A picture key is only written for the bytes an image was actually
+// built from, so the answer is the one the decode would have given.
 static cover_build_t thumb_build_track(const char *path, int size, cover_image_t *out) {
 	image_request_t req = {.w = size, .h = size, .fit = COVER_FIT_CONTAIN, .backdrop = false};
 	if (size > THUMB_DISK_MAX_SIZE) {

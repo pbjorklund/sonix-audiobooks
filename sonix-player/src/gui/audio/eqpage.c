@@ -56,10 +56,19 @@ static struct {
 	lv_obj_t *headroom;
 
 	lv_draw_buf_t *buf;
+	// The curve's columns, one float per plot pixel: scratch for a render,
+	// alive as long as the page is (render_plot used to malloc it per plot,
+	// which on 480 pixels was an allocator round-trip every drag event and a
+	// cleanup path that could be skipped by an early return).
+	float *ys;
 	int plot_w, plot_h;
 	int selected;
 	bool pressing;
 	bool dragging;
+	bool holding;		   // one of the +/- buttons is mid-hold: the repeats have changed things and the press's one save is still owed
+	bool render_pending;   // a plot redraw is asked for and has not run yet
+	uint32_t scratch_report_ms; // last time the scratch failure was diagnosed, so the log stays rare
+	lv_timer_t *render_timer; // the one-shot that runs at most one render a timer tick
 	lv_point_t press_at;
 	int press_value;
 } eq;
@@ -166,7 +175,14 @@ static void vline(int x, int h, lv_color_t c, float a) {
 }
 
 static void render_plot(void) {
+	eq.render_pending = false;
 	if (!eq.buf) {
+		return;
+	}
+	// Scratch, not a per-render malloc: a drag asks for a render every event,
+	// and this is the one place a failed allocation has to end quietly.
+	float *ys = eq.ys;
+	if (!ys) {
 		return;
 	}
 	int w = (int)eq.buf->header.w;
@@ -208,10 +224,6 @@ static void render_plot(void) {
 	float curve[CURVE_POINTS + 1];
 	for (int i = 0; i <= CURVE_POINTS; i++) {
 		curve[i] = (float)tenths_at[i];
-	}
-	float *ys = malloc(sizeof(float) * (size_t)w);
-	if (!ys) {
-		return;
 	}
 	for (int x = 0; x < w; x++) {
 		float pos = (float)x * CURVE_POINTS / (float)(w - 1);
@@ -255,10 +267,28 @@ static void render_plot(void) {
 			blend(base + yy * stride + x * 4, accent, half + 0.5f - d);
 		}
 	}
-	free(ys);
 
 	lv_image_cache_drop(eq.buf);
 	lv_obj_invalidate(eq.plot);
+}
+
+// A plot redraw is asked for: one render per timer tick, so a drag's PRESSING
+// events cost a single pass over the 400 KB buffer between two refreshes
+// rather than one each. The timer is one-shot: it fires once, draws the last
+// state, and waits for the next ask.
+static void request_render(void) {
+	if (!eq.buf || !eq.render_timer) {
+		return; // nothing to draw into (an allocation failed at screen load)
+	}
+	eq.render_pending = true;
+	lv_timer_resume(eq.render_timer);
+}
+
+static void render_timer_cb(lv_timer_t *timer) {
+	lv_timer_pause(timer);
+	if (eq.render_pending) {
+		render_plot();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -325,17 +355,21 @@ static void paint_all(void) {
 	render_plot();
 }
 
-// A band's value changed: what it moves on the page.
+// A band's value changed: what it moves on the page. The knobs and the labels
+// are cheap enough to paint at once; the plot goes through request_render().
 static void band_changed(int band) {
 	paint_knob(band);
 	if (band == eq.selected) {
 		paint_band_card();
 	}
-	render_plot();
+	request_render();
 }
 
 // After a change is finished: the file, and what is worked out from all ten.
+// The plot is flushed here too, so a drag's final frame is not left to the
+// timer.
 static void settled(void) {
+	render_plot();
 	eq_save();
 	paint_headroom();
 }
@@ -409,16 +443,41 @@ static void board_cb(lv_event_t *e) {
 	}
 }
 
+// The +/- buttons: a click does its step and saves on the spot; a held press
+// keeps stepping without a write per repeat -- the repeats only move live
+// state -- and the press's single save comes when the finger lifts.
 static void step_cb(lv_event_t *e) {
 	if (!eq_get_enabled()) {
 		return;
 	}
 	int step = (int)(intptr_t)lv_event_get_user_data(e);
-	int before = eq_get_band_tenths(eq.selected);
-	eq_set_band_tenths(eq.selected, step == 0 ? 0 : before + step);
-	if (eq_get_band_tenths(eq.selected) != before) {
-		band_changed(eq.selected);
-		settled();
+	lv_event_code_t code = lv_event_get_code(e);
+
+	if (code == LV_EVENT_SHORT_CLICKED) {
+		int before = eq_get_band_tenths(eq.selected);
+		eq_set_band_tenths(eq.selected, step == 0 ? 0 : before + step);
+		if (eq_get_band_tenths(eq.selected) != before) {
+			eq.holding = false; // a click closes itself
+			band_changed(eq.selected);
+			settled();
+		}
+		return;
+	}
+	if (code == LV_EVENT_LONG_PRESSED_REPEAT) {
+		// The step lands in live state only; eq_save() for the whole press
+		// happens once, on release.
+		int before = eq_get_band_tenths(eq.selected);
+		eq_set_band_tenths(eq.selected, step == 0 ? 0 : before + step);
+		if (eq_get_band_tenths(eq.selected) != before) {
+			eq.holding = true;
+			band_changed(eq.selected);
+		}
+		return;
+	}
+	// LV_EVENT_RELEASED or LV_EVENT_PRESS_LOST, ending a hold.
+	if (eq.holding) {
+		eq.holding = false;
+		settled(); // one save for every repeat of the press
 	}
 }
 
@@ -452,14 +511,26 @@ static void presets_cb(lv_event_t *e) {
 	eqsettings_open();
 }
 
-// The plot's picture exists only while the page is on screen.
+// The plot's picture exists only while the page is on screen, and the render
+// scratch with it. Allocation failure leaves a page with usable band controls
+// and no curve, and says so at most once per ten seconds.
 static void screen_loaded_cb(lv_event_t *e) {
 	(void)e;
 	if (!eq.buf) {
-		eq.buf = lv_draw_buf_create((uint32_t)eq.plot_w, (uint32_t)eq.plot_h, LV_COLOR_FORMAT_ARGB8888,
-									LV_STRIDE_AUTO);
-		if (eq.buf) {
+		eq.buf = lv_draw_buf_create((uint32_t)eq.plot_w, (uint32_t)eq.plot_h, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO);
+		eq.ys = malloc(sizeof(float) * (size_t)eq.plot_w);
+		if (eq.buf && eq.ys) {
 			lv_image_set_src(eq.plot, eq.buf);
+		} else {
+			lv_draw_buf_destroy(eq.buf);
+			eq.buf = NULL;
+			free(eq.ys);
+			eq.ys = NULL;
+			if (lv_tick_elaps(eq.scratch_report_ms) >= 10000) {
+				eq.scratch_report_ms = lv_tick_get();
+				fprintf(stderr, "eq: plot alloc failed (%u x %u); controls stay usable, curve is off\n",
+						(unsigned)eq.plot_w, (unsigned)eq.plot_h);
+			}
 		}
 	}
 	eqpage_refresh();
@@ -467,6 +538,13 @@ static void screen_loaded_cb(lv_event_t *e) {
 
 static void screen_unloaded_cb(lv_event_t *e) {
 	(void)e;
+	if (eq.render_timer) {
+		lv_timer_pause(eq.render_timer);
+	}
+	eq.render_pending = false;
+	eq.holding = false; // a press cannot outlive its screen
+	free(eq.ys);
+	eq.ys = NULL;
 	if (eq.buf) {
 		lv_image_set_src(eq.plot, NULL);
 		lv_image_cache_drop(eq.buf);
@@ -602,8 +680,11 @@ static lv_obj_t *round_button(lv_obj_t *parent, const char *text, const lv_image
 	lv_obj_set_style_opa(b, LV_OPA_40, LV_STATE_DISABLED);
 	lv_obj_add_event_cb(b, step_cb, LV_EVENT_SHORT_CLICKED, (void *)(intptr_t)step);
 	if (step != 0) {
-		// Held, it keeps stepping.
+		// Held, it keeps stepping (step_cb); these two end the hold, and the
+		// one save for all of its repeats.
 		lv_obj_add_event_cb(b, step_cb, LV_EVENT_LONG_PRESSED_REPEAT, (void *)(intptr_t)step);
+		lv_obj_add_event_cb(b, step_cb, LV_EVENT_RELEASED, (void *)(intptr_t)step);
+		lv_obj_add_event_cb(b, step_cb, LV_EVENT_PRESS_LOST, (void *)(intptr_t)step);
 	}
 	if (glyph) {
 		lv_obj_t *icon = lv_image_create(b);
@@ -687,6 +768,12 @@ void eqpage_init(gui_config_t *cfg) {
 
 	corner_button(0, &icon_music_settings, presets_cb);
 	eq.reset_btn = corner_button(1, &icon_reset, reset_cb);
+
+	// The plot's render throttle: paused until a redraw is asked for, and it
+	// draws once and pauses itself (render_timer_cb), so drag redraws cost at
+	// most one render per timer tick.
+	eq.render_timer = lv_timer_create(render_timer_cb, 0, NULL);
+	lv_timer_pause(eq.render_timer);
 
 	eqpage_refresh();
 	lv_obj_add_event_cb(eq.screen, screen_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);

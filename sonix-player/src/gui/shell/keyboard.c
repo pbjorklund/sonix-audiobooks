@@ -5,6 +5,8 @@
 #include "src/system/input/kana.h"
 #include "src/system/input/kblayout.h"
 
+#include "lvgl/src/misc/lv_text_private.h" // the character count a candidate swap is measured in
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -199,6 +201,11 @@ struct keyboard_s {
 	lv_obj_t *kp_accept_btn;
 	bool kana_overflow; // a letter did not fit in the field (max length) while it was being written
 
+	// The password state the keys were last laid out for (keyboard.c always
+	// types a password as Latin): keyboard_refresh_password only runs the
+	// layout pass again when this has moved.
+	bool password_mode_applied;
+
 	// The Japanese parts (mode key, kana pad, candidate strip) are built the first
 	// time the layout is Japanese (kb_japanese_ensure), so that a keyboard that never
 	// types Japanese does not carry their objects. What building them needs is kept.
@@ -273,6 +280,10 @@ static void kb_register_refresh(void) {
 static lv_color_t kb_tray_color(void) {
 	return theme()->dark ? lv_color_make(22, 22, 22) : lv_color_make(206, 209, 216);
 }
+
+// Commits a multitap character still going (defined with the T9 panel); every
+// leave of a layout, screen or field goes past it, so a cycle never carries.
+static void kb_t9_commit(keyboard_t *kb);
 
 // ---------------------------------------------------------------------------
 // Japanese: romaji to kana on the letter rows (kana.c)
@@ -381,8 +392,12 @@ static void kb_cand_hide(keyboard_t *kb) {
 }
 
 // Kanji are offered while typing hiragana, in the Japanese layout, into a
-// field that is not a password, with the keyboard on screen.
-static bool kb_cand_active(const keyboard_t *kb) { return kb->layout == KB_LAYOUT_JAPANESE && kb->jp_mode == KB_JP_HIRAGANA && !kb->symbols && !kb->t9_numbers && kb->field && !lv_textarea_get_password_mode(kb->field) && kb->tray && !lv_obj_is_hidden(kb->tray); }
+// field that is not a password, with the keyboard on screen on the screen the
+// player is showing: a keyboard that was left on another page keeps its tray
+// object visible, and a refresh that reached it from a theme change or a value
+// event would build a strip nobody sees (and keep it alive over a field two
+// screens away).
+static bool kb_cand_active(const keyboard_t *kb) { return kb->layout == KB_LAYOUT_JAPANESE && kb->jp_mode == KB_JP_HIRAGANA && !kb->symbols && !kb->t9_numbers && kb->field && !lv_textarea_get_password_mode(kb->field) && kb->tray && !lv_obj_is_hidden(kb->tray) && lv_obj_get_screen(kb->tray) == lv_screen_active(); }
 
 // The buttons carry the candidates of the current page; the key at the end
 // turns the page and is there only when there is more than one.
@@ -439,6 +454,21 @@ static void kb_cand_next_cb(lv_event_t *e) {
 	kb_cand_show_page(kb);
 }
 
+// Swapping the reading for a candidate only fits when the field ends no
+// longer than it may be: the reading's characters go, the candidate's arrive,
+// and a field with a maximum length (the search box, at ABS_NAME_MAX - 1) can
+// refuse a longer candidate. In characters, not bytes, the way LVGL counts.
+static bool kb_candidate_fits(const keyboard_t *kb, const char *candidate) {
+	uint32_t max_chars = lv_textarea_get_max_length(kb->field);
+	if (!max_chars) {
+		return true; // no maximum: everything fits
+	}
+	unsigned field_chars = lv_text_get_encoded_length(lv_textarea_get_text(kb->field));
+	unsigned candidate_chars = lv_text_get_encoded_length(candidate);
+	// The reading is in the field, so the subtraction cannot go below zero.
+	return field_chars - kb->cand_chars + candidate_chars <= max_chars;
+}
+
 static void kb_cand_cb(lv_event_t *e) {
 	key_ref_t *ref = lv_event_get_user_data(e);
 	if (!ref || !ref->kb || !ref->kb->field) {
@@ -459,6 +489,12 @@ static void kb_cand_cb(lv_event_t *e) {
 
 	char cand[JPDICT_CAND_MAX];
 	if (jpdict_candidate(&kb->cand_hit, kb->cand_page * KB_CAND_PAGE + ref->index, cand, sizeof(cand)) == 0) {
+		return;
+	}
+	// The reading is only deleted when the swap provably fits. Without this a
+	// nearly full field lost the reading and gained part of a kanji.
+	if (!kb_candidate_fits(kb, cand)) {
+		kb_cand_refresh(kb); // leave the reading; the strip keeps showing what still fits
 		return;
 	}
 	// A kana still cycling on the keypad is finished: tapping the same key again
@@ -616,7 +652,8 @@ static void kb_layout_pick(void *user) {
 		return;
 	}
 	keyboard_t *kb = layout_choices[i].kb;
-	kb_kana_flush(kb); // the romaji typed so far belongs to the layout being left
+	kb_kana_flush(kb);   // the romaji typed so far belongs to the layout being left
+	kb_t9_commit(kb);	// and a kana still cycling on the keypad belongs to the old layout
 	kb->layout = layout_choices[i].layout;
 	kb->symbols = false;	 // the letters are the point of the choice
 	kb->symbols2 = false;
@@ -633,6 +670,11 @@ static void kb_screen_left_cb(lv_event_t *e) {
 	}
 	kana_reset(&kb->kana); // the field is not in front of anyone any more
 	kb_cand_hide(kb);
+	// A multitap character still cycling belongs to the visit that started it:
+	// its next tap on a reopened page would otherwise delete a character of the
+	// field instead of stepping its own cycle.
+	kb_t9_commit(kb);
+	kb->flick_consumed = false;
 	kb->jp_mode = KB_JP_DEFAULT_MODE;
 	if (kb->layout == kblayout_default()) {
 		kb_apply_layout(kb); // the mode key and the third row follow the mode it was put back to
@@ -1058,11 +1100,13 @@ static void kb_jp_mode_cb(lv_event_t *e) {
 }
 
 // Pressed before the page's own accept handler (registered after it in
-// keyboard_create), so a waiting n is its kana by the time the page reads the field.
+// keyboard_create), so a waiting n is its kana by the time the page reads the
+// field, and nothing is left going: the accept hands the page a settled field.
 static void kb_accept_flush_cb(lv_event_t *e) {
 	keyboard_t *kb = lv_event_get_user_data(e);
 	if (kb && kb->field) {
 		kb_kana_flush(kb);
+		kb_t9_commit(kb);
 	}
 }
 
@@ -1852,6 +1896,9 @@ keyboard_t *keyboard_create(lv_obj_t *parent, int width, int height, lv_obj_t *f
 
 	kb->layout = kblayout_default();
 	kb_apply_layout(kb);
+	// The state the layout above saw, so the first password refresh of no
+	// change reapplies nothing.
+	kb->password_mode_applied = kb->field && lv_textarea_get_password_mode(kb->field);
 
 	// Leaving the page puts the alphabet back to the default. That is what
 	// makes a layout picked from the "123" key temporary: it lasts as long as
@@ -1886,8 +1933,11 @@ bool keyboard_is_visible(keyboard_t *kb) { return kb && kb->tray && !lv_obj_is_h
 void keyboard_set_field(keyboard_t *kb, lv_obj_t *field) {
 	if (kb) {
 		kb->field = field;
-		kana_reset(&kb->kana); // the waiting letters were in the other field
-		kb_apply_layout(kb);   // a password is typed as Latin: no mode key, no "-" key
+		kana_reset(&kb->kana);   // the waiting letters were in the other field
+		kb_t9_commit(kb);		// a multitap cycle does not carry into the other field
+		kb->flick_consumed = false;
+		kb->password_mode_applied = kb_is_password(kb);
+		kb_apply_layout(kb);	 // a password is typed as Latin: no mode key, no "-" key
 	}
 }
 
@@ -1999,9 +2049,14 @@ void keyboard_refresh_password(lv_obj_t *field) {
 		lv_obj_set_style_pad_left(field, dots ? KB_PASSWORD_CARET_PAD : 0, parts[i]);
 	}
 
-	// A password is typed as Latin: the keyboard in front of it follows.
+	// A password is typed as Latin: the keyboard in front of it follows. The
+	// layout is only reapplied when the password mode has actually moved (the
+	// eye's toggle, a field that gained or lost its mode); before this, every
+	// letter of a password ran a full caps-and-layout pass.
+	bool mode = lv_textarea_get_password_mode(field);
 	for (keyboard_t *kb = kb_list; kb; kb = kb->next) {
-		if (kb->field == field) {
+		if (kb->field == field && kb->password_mode_applied != mode) {
+			kb->password_mode_applied = mode;
 			kb_apply_layout(kb); // the mode key and the "-" key are not there for a password
 		}
 	}

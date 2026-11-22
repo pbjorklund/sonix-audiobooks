@@ -453,6 +453,11 @@ static volatile int fade_secs = 3;
 // decoder made them, with no effect and no fade. Read at every buffer, so a
 // change takes effect at once. Bluetooth is left out: the link has a rate and
 // a codec of its own whatever is sent to it.
+//
+// Despite the name it is an effects bypass, not an end-to-end guarantee: the
+// path before this guard (time-stretch, USB software volume) and the ALSA
+// rate/depth fallback behind it are untouched. Do not present the feature as
+// bit-identical end to end.
 static volatile bool bit_perfect;
 
 void audio_set_fade(bool enabled, int seconds) {

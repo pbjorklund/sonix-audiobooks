@@ -1763,22 +1763,27 @@ static void build_dsd_page(gui_config_t *cfg) {
 
 // ---------------------------------------------------------------------------
 // Bit-perfect: the samples reach the DAC as the decoder made them, every
-// effect passed over (audio_set_bit_perfect). The settings that touch the sound
-// are switched off for as long as it is on, and put back as they were when it
-// goes off (bit_perfect_hold); their rows and the control centre's buttons are
-// greyed out meanwhile.
+// effect passed over -- on the non-Bluetooth routes (pure_now() in audio.c
+// leaves the Bluetooth link's own processing in place, so its configured
+// effects keep working).
 //
-// What was on is written down in [bit_perfect_hold] the moment it comes on;
-// `held` while the settings are switched off.
+// Nothing is "held" here any more. [audio] bit_perfect is the whole of the
+// feature: the effect settings keep their values exactly as the listener left
+// them, and when the bypass goes off they are simply in force again, with no
+// restoration sequence. An earlier design switched each effect off and wrote
+// down what it had been in [bit_perfect_hold], to be put back on exit -- and
+// lost people's settings when they re-enabled an effect under the bypass or
+// the run stopped between the two halves of the transaction. bit_perfect_paint
+// still dims and deafens the controls while the bypass is on, so that nothing
+// that cannot currently be heard looks alive.
+//
+// This is an effects bypass, not an end-to-end bit-perfect guarantee: USB
+// software volume, time-stretch before the guard, Bluetooth conversion and
+// ALSA rate/depth fallback are all still in the road. Documentation says so,
+// keeps the config and API names as they are.
 // ---------------------------------------------------------------------------
 
-#define BP_SECTION "bit_perfect_hold"
-
 static lv_obj_t *bit_perfect_switch;
-
-static bool bp_saved(const char *key) { return config_get_int(BP_SECTION, key, 0) != 0; }
-
-static void bp_note(const char *key, long value) { config_set_int(BP_SECTION, key, value); }
 
 // Greyed out and deaf to touch, or back as it was.
 static void bp_dim(lv_obj_t *obj, bool off) {
@@ -1815,65 +1820,18 @@ static void bit_perfect_paint(void) {
 	bp_disable(mono_switch, on);
 }
 
-// Holds the settings off (`on`) or puts them back, when they are not already
-// that way.
-static void bit_perfect_hold(bool on) {
-	if (on == bp_saved("held")) {
-		return;
-	}
-	if (on) {
-		// Written down before anything is switched off.
-		bp_note("replaygain", (long)replaygain_mode());
-		bp_note("eq", eq_get_enabled());
-		bp_note("peq", peq_get_enabled());
-		bp_note("mseb", mseb_get_enabled());
-		bp_note("soundfield", soundfield_get_enabled());
-		bp_note("crossfeed", crossfeed_get_enabled());
-		bp_note("balance", balance_get_enabled());
-		bp_note("mono", mono_get_enabled());
-		bp_note("fade", musicsettings_fade_enabled());
-		bp_note("held", 1);
-		config_save();
-	}
-
-	replaygain_set_mode(on ? REPLAYGAIN_OFF
-						   : (replaygain_mode_t)config_get_int(BP_SECTION, "replaygain", REPLAYGAIN_OFF));
-	rg_apply_to_loaded_track();
-	rg_refresh();
-	musicsettings_set_eq_enabled(!on && bp_saved("eq"));
-	peq_set_enabled(!on && bp_saved("peq"));
-	musicsettings_set_mseb_enabled(!on && bp_saved("mseb"));
-	soundfield_set_enabled(!on && bp_saved("soundfield"));
-	if (soundfield_switch) {
-		soundfield_refresh();
-	}
-	crossfeed_set_enabled(!on && bp_saved("crossfeed"));
-	if (crossfeed_switch) {
-		crossfeed_refresh();
-	}
-	balance_set_enabled(!on && bp_saved("balance"));
-	if (balance_switch) {
-		balance_refresh();
-	}
-	mono_set_enabled(!on && bp_saved("mono"));
-	if (mono_switch) {
-		lv_obj_set_state(mono_switch, LV_STATE_CHECKED, mono_get_enabled());
-	}
-	musicsettings_set_fade_enabled(!on && bp_saved("fade"));
-
-	bp_note("held", on ? 1 : 0);
-	config_save();
-	refresh_active_chevrons();
-}
-
+// One logical change, nothing behind it: the config key, the engine flag, the
+// dimmed and deafened controls, and the control centre's chevrons. No effect
+// setter is called, so a toggle can no longer move a saved EQ, ReplayGain or
+// effect choice.
 static void bit_perfect_toggle_cb(lv_event_t *e) {
 	(void)e;
 	bool on = lv_obj_has_state(bit_perfect_switch, LV_STATE_CHECKED);
 	config_set_int("audio", "bit_perfect", on ? 1 : 0);
 	config_save();
 	audio_set_bit_perfect(on);
-	bit_perfect_hold(on);
 	bit_perfect_paint();
+	refresh_active_chevrons();
 }
 
 static void musicsettings_loaded_cb(lv_event_t *e) {
@@ -2000,8 +1958,9 @@ void musicsettings_init(gui_config_t *cfg) {
 	// follows the control centre's button while the page is under it.
 	lv_obj_add_event_cb(musicsettings_screen, screen_loaded_cb, LV_EVENT_REFRESH, NULL);
 
-	// The hold made to match the switch where the two disagree: a run cut
-	// short between switching and writing it down.
-	bit_perfect_hold(bit_perfect_on);
+	// Startup reads [audio] bit_perfect (above) and turns the flag in. The
+	// effects keep the values their keys have always carried: no hold
+	// transaction to replay, so nothing to restore and nothing to get wrong.
 	bit_perfect_paint();
+	refresh_active_chevrons();
 }
