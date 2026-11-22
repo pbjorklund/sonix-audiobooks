@@ -15,6 +15,8 @@ progress that syncs by itself once Wi-Fi is back.
 ## Release 0.5.0
 Rebuilt on upstream sonix-player v1.3.1. This release introduces a custom boot screen (SonixOS lockup + blue DJ gnome) and several correctness fixes, including non-destructive effects bypass, atomic EQ presets, and hardened cover-cache indexing.
 
+<p align="center"><img src="docs/screenshots/boot-screen.png" width="240" alt="Sonix Audiobooks 0.5.0 boot screen"></p>
+
 ## Quick Start (Installation)
 
 
