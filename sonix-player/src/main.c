@@ -42,6 +42,7 @@
 #include "src/system/audio/eq.h"
 #include "src/system/audio/headset.h"
 #include "src/system/input/keymap.h"
+#include "src/system/streaming/abs_profiles.h"
 #include "src/system/streaming/audiobookshelf.h"
 #include "src/system/streaming/qobuz.h"
 #include "src/system/streaming/tidal.h"
@@ -1970,6 +1971,12 @@ int main(int argc, char **argv) {
 	// the GUI builds its pages, because the Qobuz page is drawn one way or
 	// the other depending on whether the keys are there.
 	streamkeys_init();
+	// The profile store before the streaming credentials load (§11.6): it
+	// migrates the legacy [audiobookshelf] pair into profile p1 and clears
+	// those keys on success, so audiobookshelf_init() reads what is actually
+	// authoritative. It reads SONIX_AUDIOBOOKSHELF_PROFILES itself for host
+	// and test injection; on the device the fixed userdata path applies.
+	abs_profiles_init();
 	qobuz_init();
 	tidal_init();
 	audiobookshelf_init();

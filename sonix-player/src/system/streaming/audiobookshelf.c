@@ -1,4 +1,5 @@
 #include "audiobookshelf.h"
+#include "abs_profiles.h"
 #include "abs_sync.h"
 
 #include <ctype.h>
@@ -14,6 +15,7 @@
 
 #include "src/system/core/config.h"
 #include "src/system/core/json.h"
+#include "src/system/core/pathlimits.h"
 #include "src/system/core/utils.h"
 #include "src/system/decode/decode.h"
 #include "src/system/library/audiobookdb.h"
@@ -24,10 +26,17 @@
 #define ABS_BODY_LIMIT (3u * 1024u * 1024u)
 #define ABS_TIMEOUT_SECS 30
 #define ABS_DOWNLOAD_CHUNK 32768
-#define ABS_LOCAL_PATH_MAX 1280
-#define ABS_SIDECAR_PATH_MAX 1310
-#define ABS_TEMP_PATH_MAX 1320
+// The linked-media ceilings live in one place (pathlimits.h) so the download,
+// the durable checkpoint rows and the progress watch slots can never drift
+// apart; re-deriving local copies here is what produced "downloaded fine,
+// truncated on resume" in the first place (§11.5).
+#define ABS_LOCAL_PATH_MAX SONIX_LINKED_PATH_MAX
+#define ABS_SIDECAR_PATH_MAX SONIX_LINKED_SIDECAR_PATH_MAX
+#define ABS_TEMP_PATH_MAX (SONIX_LINKED_SIDECAR_PATH_MAX + 10)
 
+// Legacy 0.5.0 credentials, kept only for the migration fallback (§11.1,
+// §11.3): request code resolves credentials through the profile store via
+// request_credentials_copy() and never reads these globals directly.
 static char server_url[512];
 static char bearer_token[1024];
 static pthread_mutex_t credentials_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -48,8 +57,11 @@ static pthread_cond_t progress_cond = PTHREAD_COND_INITIALIZER;
 static bool progress_worker_ready;
 static bool progress_wake;
 static bool progress_reconnect = true;
-static char progress_force_book[512];
-static char progress_watch_file[512];
+// These two carry the same strings the durable AUDIOBOOK_ABS_SYNC row does,
+// so they use the durable-row ceiling (§11.5): a wider slot here would accept
+// a watch key the checkpoint row cannot hold.
+static char progress_force_book[SONIX_LINKED_DB_PATH_MAX];
+static char progress_watch_file[SONIX_LINKED_DB_PATH_MAX];
 static audiobookshelf_sync_status_t progress_status = ABS_SYNC_CHECKING;
 static void progress_worker_start(void);
 
@@ -85,20 +97,131 @@ void audiobookshelf_init(void) {
 	if (audiobookshelf_configured()) pthread_once(&progress_once, progress_worker_start);
 }
 
-static void credentials_copy(char *server, size_t server_size, char *token, size_t token_size) {
+// ---------------------------------------------------------------------------
+// Explicit auth/request context (§11.3)
+//
+// Every request's credentials are resolved here, never raced out of the legacy
+// globals:
+//
+//   * A request bound to a manifest server (progress sync) resolves the
+//     configured profile that owns that normalized server, re-read under the
+//     store lock immediately before the request (§11.4 step 4). A token the
+//     editor just rotated wins the very next request, and an inactive profile
+//     never borrows the active one's token.
+//   * Unbound requests (browse/catalog) use the active profile.
+//   * The legacy [audiobookshelf] globals are only a fallback for the
+//     migration window (§11.1): no profile store configured at all, or a
+//     present-but-incomplete active profile. Once any profile is configured,
+//     a server with no owning profile resolves to "not ours" and the caller
+//     keeps its checkpoint (ABS_SYNC_OTHER_SERVER territory, §11.4).
+// ---------------------------------------------------------------------------
+static bool request_credentials_copy(const char *expected_server,
+									 char *server, size_t server_size,
+									 char *token, size_t token_size) {
+	if (server && server_size) server[0] = '\0';
+	if (token && token_size) token[0] = '\0';
+	if (expected_server && expected_server[0] && abs_profiles_any_configured()) {
+		char expected[ABS_SERVER_MAX];
+		abs_profiles_normalize_server(expected_server, expected, sizeof(expected));
+		abs_profile_t profiles[ABS_PROFILE_MAX];
+		int count = abs_profiles_list(profiles, ABS_PROFILE_MAX);
+		for (int i = 0; i < count; i++) {
+			char normalized[ABS_SERVER_MAX];
+			abs_profiles_normalize_server(profiles[i].server, normalized, sizeof(normalized));
+			if (!normalized[0] || strcmp(normalized, expected) != 0) continue;
+			// Its own profile (even an inactive one, even with a rotated token)
+			// owns these credentials. The snapshot is wiped before returning:
+			// only the caller's short-lived copies keep the token bytes.
+			abs_auth_snapshot_t snapshot;
+			if (abs_profiles_snapshot(profiles[i].id, &snapshot)) {
+				bool complete = snapshot.server[0] && snapshot.token[0];
+				if (server && server_size) snprintf(server, server_size, "%s", snapshot.server);
+				if (token && token_size) snprintf(token, token_size, "%s", snapshot.token);
+				abs_profiles_snapshot_wipe(&snapshot);
+				if (complete) return true;
+				break; // owning profile lacks a token: do not fall through to the active one
+			}
+		}
+		return false;
+	}
+	abs_auth_snapshot_t snapshot;
+	memset(&snapshot, 0, sizeof(snapshot));
+	bool from_active = abs_profiles_snapshot_active(&snapshot) &&
+		snapshot.server[0] && snapshot.token[0];
+	if (from_active) {
+		if (server && server_size) snprintf(server, server_size, "%s", snapshot.server);
+		if (token && token_size) snprintf(token, token_size, "%s", snapshot.token);
+	}
+	abs_profiles_snapshot_wipe(&snapshot);
+	if (from_active) return true;
+	// Migration fallback (§11.1): the saved 0.5.0 pair, while the profile store
+	// still provides nothing the active id can authorize with.
+	bool legacy = false;
 	pthread_mutex_lock(&credentials_lock);
 	if (server && server_size) snprintf(server, server_size, "%s", server_url);
 	if (token && token_size) snprintf(token, token_size, "%s", bearer_token);
+	legacy = server_url[0] != '\0' && bearer_token[0] != '\0';
 	pthread_mutex_unlock(&credentials_lock);
+	return legacy;
 }
 
-bool audiobookshelf_configured(void) {
+// What the progress worker waits on (§11.3): any configured profile, or the
+// legacy pair during the migration window. An active but incomplete profile
+// does not count -- there is nothing to authorize a pass with.
+static bool sync_credentials_available(void) {
+	if (abs_profiles_any_configured()) return true;
 	pthread_mutex_lock(&credentials_lock);
-	bool configured = server_url[0] && bearer_token[0];
+	bool legacy = server_url[0] != '\0' && bearer_token[0] != '\0';
 	pthread_mutex_unlock(&credentials_lock);
+	return legacy;
+}
+
+// The multi-profile reading of ABS_SYNC_OTHER_SERVER (§11.4): the manifest's
+// server is covered by no configured profile. With an entirely unconfigured
+// store the comparison keeps its 0.5.0 meaning against the legacy identity.
+static bool bound_server_known(const char *bound_server, const char *legacy_identity) {
+	if (abs_profiles_any_configured()) return abs_profiles_has_server(bound_server);
+	return legacy_identity[0] && strcmp(bound_server, legacy_identity) == 0;
+}
+
+// The server a 0.5.0 manifest without `server=` resolves to (§11.5): the
+// persisted legacy_server, or -- only while no profile store exists at all --
+// the sole configured legacy identity, which in that window IS the original
+// binding. Never the currently active profile: a second profile must not
+// inherit old manifests by happening to be selected.
+static void legacy_manifest_binding(char *out, size_t size) {
+	char legacy[ABS_SERVER_MAX], normalized[ABS_SERVER_MAX];
+	abs_profiles_legacy_server(legacy, sizeof(legacy));
+	abs_profiles_normalize_server(legacy, normalized, sizeof(normalized));
+	snprintf(out, size, "%s", normalized);
+	if (!normalized[0] && abs_profiles_count() == 0) {
+		char identity[ABS_SERVER_MAX];
+		if (request_credentials_copy(NULL, identity, sizeof(identity), NULL, 0))
+			snprintf(out, size, "%s", identity);
+	}
+}
+
+// §11.3: "configured" means a browsable request identity exists -- the active
+// profile's complete server+token, or the legacy pair during the migration
+// window. Sync independently uses sync_credentials_available() (all profiles).
+bool audiobookshelf_configured(void) {
+	char server[ABS_SERVER_MAX], token[ABS_TOKEN_MAX];
+	bool configured = request_credentials_copy(NULL, server, sizeof(server), token, sizeof(token));
+	// The token only ever sat in this scratch copy; wipe it on the way out.
+	memset(token, 0, sizeof(token));
 	return configured;
 }
-const char *audiobookshelf_server(void) { return server_url; }
+// Bounded display copy under the credentials lock (§11.3). The old function
+// lent an unlocked pointer into a buffer another thread could rewrite; callers
+// get an atomic snapshot of the text instead. Browse requests do not go
+// through this -- api_request() resolves its own identity.
+const char *audiobookshelf_server(void) {
+	static char display[ABS_SERVER_MAX];
+	pthread_mutex_lock(&credentials_lock);
+	snprintf(display, sizeof(display), "%s", server_url);
+	pthread_mutex_unlock(&credentials_lock);
+	return display;
+}
 
 void audiobookshelf_set_credentials(const char *server, const char *token) {
 	pthread_mutex_lock(&credentials_lock);
@@ -116,12 +239,6 @@ void audiobookshelf_set_credentials(const char *server, const char *token) {
 }
 
 void audiobookshelf_clear_credentials(void) { audiobookshelf_set_credentials("", ""); }
-
-static void auth_headers(char *out, size_t size) {
-	pthread_mutex_lock(&credentials_lock);
-	snprintf(out, size, "Authorization: Bearer %s\r\n", bearer_token);
-	pthread_mutex_unlock(&credentials_lock);
-}
 
 static void error_from_response(int status, const char *body) {
 	if (status == 401 || status == 403) {
@@ -147,18 +264,28 @@ static void error_from_response(int status, const char *body) {
 	set_error(message);
 }
 
+// One URL join + Bearer + buffered request (§11.3). `expected_server`, when
+// given, is the manifest's bound server: the immutable snapshot comparison of
+// the old global-race check. Credentials always come from
+// request_credentials_copy(), which re-reads the owning profile under the
+// store lock immediately before the request.
 static bool api_request(const char *path, const http_req_t *request, char **body, int *status_out,
 						const char *expected_server) {
 	char url[ABS_URL_MAX];
-	char server[512], token[1024];
-	credentials_copy(server, sizeof(server), token, sizeof(token));
-	if (!server[0] || !token[0] || (expected_server && strcmp(server, expected_server) != 0)) {
+	char server[ABS_SERVER_MAX], token[ABS_TOKEN_MAX];
+	if (!request_credentials_copy(expected_server, server, sizeof(server), token, sizeof(token)) ||
+		(expected_server && strcmp(server, expected_server) != 0)) {
+		memset(token, 0, sizeof(token));
 		set_error("Audiobookshelf settings changed; checkpoint retained.");
 		return false;
 	}
-	if (!path || (size_t)snprintf(url, sizeof(url), "%s%s", server, path) >= sizeof(url)) return false;
-	char headers[1200];
+	if (!path || (size_t)snprintf(url, sizeof(url), "%s%s", server, path) >= sizeof(url)) {
+		memset(token, 0, sizeof(token));
+		return false;
+	}
+	char headers[ABS_TOKEN_MAX + 32];
 	snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", token);
+	memset(token, 0, sizeof(token));
 	http_req_t req = request ? *request : (http_req_t){0};
 	req.extra_headers = headers;
 	req.want_error_body = true;
@@ -329,9 +456,13 @@ static void progress_publish(const char *file, audiobookshelf_sync_status_t stat
 }
 
 static void progress_refresh_status(void) {
-	char file[512], book[512];
-	char server[512];
-	credentials_copy(server, sizeof(server), NULL, 0);
+	// All three carry durable-row strings (watch slot and checkpoint row),
+	// so all three use the durable-row ceiling.
+	char file[SONIX_LINKED_DB_PATH_MAX], book[SONIX_LINKED_DB_PATH_MAX];
+	char server[ABS_SERVER_MAX];
+	// Browsing status answers for the active request identity; the
+	// OTHER_SERVER comparison itself is profile-aware (§11.4).
+	bool identity = request_credentials_copy(NULL, server, sizeof(server), NULL, 0);
 	pthread_mutex_lock(&progress_lock);
 	snprintf(file, sizeof(file), "%s", progress_watch_file);
 	pthread_mutex_unlock(&progress_lock);
@@ -348,7 +479,9 @@ static void progress_refresh_status(void) {
 		snprintf(job.file, sizeof(job.file), "%s", file);
 		char item[ABS_ID_MAX];
 		double current, duration;
-		snprintf(checkpoint.server, sizeof(checkpoint.server), "%s", server);
+		char binding[ABS_SERVER_MAX];
+		legacy_manifest_binding(binding, sizeof(binding));
+		snprintf(checkpoint.server, sizeof(checkpoint.server), "%s", binding);
 		linked = local_progress(&job, item, sizeof(item), &current, &duration, checkpoint.server, sizeof(checkpoint.server), NULL, NULL);
 		if (!linked && last_error[0]) {
 			progress_publish(file, ABS_SYNC_RETRY);
@@ -356,8 +489,8 @@ static void progress_refresh_status(void) {
 		}
 	}
 	audiobookshelf_sync_status_t status = !linked ? ABS_SYNC_LOCAL :
-		!audiobookshelf_configured() ? ABS_SYNC_SETUP :
-		strcmp(checkpoint.server, server) != 0 ? ABS_SYNC_OTHER_SERVER :
+		!identity ? ABS_SYNC_SETUP :
+		!bound_server_known(checkpoint.server, server) ? ABS_SYNC_OTHER_SERVER :
 		!progress_online() ? (checkpoint.synced ? ABS_SYNC_SYNCED_OFFLINE : ABS_SYNC_OFFLINE) :
 		checkpoint.synced ? ABS_SYNC_SYNCED :
 		checkpoint.failed ? ABS_SYNC_RETRY :
@@ -383,7 +516,10 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 			progress_job_t incoming = *job;
 			incoming.seconds = remote.seconds;
 			incoming.finished = remote.finished;
-			char file[512], owner[512], bound[512], ignored[ABS_ID_MAX];
+			// file/owner carry durable-row strings (the watch key and the
+			// checkpoint row) -- same ceiling as everywhere else.
+			char file[SONIX_LINKED_DB_PATH_MAX], owner[SONIX_LINKED_DB_PATH_MAX];
+			char bound[ABS_SERVER_MAX], ignored[ABS_ID_MAX];
 			double seconds = 0, unused, total;
 			snprintf(bound, sizeof(bound), "%s", server);
 			if (!local_progress(&incoming, ignored, sizeof(ignored), &unused, &total, bound, sizeof(bound), file, &seconds) ||
@@ -419,6 +555,10 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 static void *progress_worker(void *unused) {
 	(void)unused;
 	thread_be_background("abs-progress");
+	// Fair round-robin (§11.4): which profile opens each pass rotates, so a
+	// busy first server cannot hold the budget away from quieter ones every
+	// pass.
+	unsigned rotation = 0;
 	for (;;) {
 		// One sleeping worker, no directory walk or decoder work. Pending
 		// uploads are differences from the existing durable local checkpoints.
@@ -447,35 +587,70 @@ static void *progress_worker(void *unused) {
 		if (reconnect) audiobookdb_abs_reconnect();
 		if (force[0]) audiobookdb_abs_retry(force);
 		progress_refresh_status();
-		if (!audiobookshelf_configured() || !progress_online()) continue;
-		char server[512];
-		credentials_copy(server, sizeof(server), NULL, 0);
-		for (int count = 0; count < 8; count++) {
-			audiobookdb_abs_checkpoint_t checkpoint;
-			if (!audiobookdb_abs_next(server, &checkpoint)) break;
-			progress_job_t job = {0};
-			snprintf(job.book, sizeof(job.book), "%s", checkpoint.book);
-			snprintf(job.file, sizeof(job.file), "%s", checkpoint.file);
-			job.seconds = checkpoint.seconds;
-			job.finished = checkpoint.finished;
-			char item[ABS_ID_MAX], bound[512];
-			snprintf(bound, sizeof(bound), "%s", server);
-			double current = 0, duration = 0;
-			bool linked = local_progress(&job, item, sizeof(item), &current, &duration, bound, sizeof(bound), NULL, NULL);
-			bool ok = false, failed = last_error[0] != '\0';
-			int result = 0;
-			if (linked && strcmp(bound, server) == 0 && progress_online()) {
-				progress_publish(checkpoint.file, ABS_SYNC_SENDING);
-				result = reconcile_progress(&checkpoint, &job, item, current, duration, server);
-				ok = result != 0;
-				failed = !ok;
-				if (ok) printf("audiobookshelf: synced progress %.1f / %.1f s\n", current, duration);
-				else fprintf(stderr, "audiobookshelf: progress sync failed; saved checkpoint retained\n");
-			}
-			if (result != 2) audiobookdb_abs_result(&checkpoint, bound, linked || failed, ok, failed);
-			progress_refresh_status();
-			if (failed) break; // one unavailable server must not cause a burst of timeouts
+		// Offline first: a device with no data connection takes no pass at all,
+		// whatever a profile might want (§11.4 step 5 keeps the wake/sleep
+		// semantics; this is only the gate, as before).
+		if (!progress_online() || !sync_credentials_available()) continue;
+		// One pass, profiles strictly serial (§11.4): a fixed global budget of
+		// eight book operations, one profile at a time in rotating order, and
+		// no per-server thread or extra database.
+		abs_auth_snapshot_t passes[ABS_PROFILE_MAX];
+		memset(passes, 0, sizeof(passes));
+		int pass_count = abs_profiles_snapshots_all(passes, ABS_PROFILE_MAX);
+		if (pass_count == 0) {
+			// Migration window (§11.1): the profile store has nothing
+			// configured and the legacy pair is all there is. Sync continues
+			// bound to it exactly as 0.5.0 did until the store wins.
+			char legacy_server[512], legacy_token[1024];
+			request_credentials_copy(NULL, legacy_server, sizeof(legacy_server),
+									 legacy_token, sizeof(legacy_token));
+			snprintf(passes[0].profile_id, sizeof(passes[0].profile_id), "legacy");
+			snprintf(passes[0].server, sizeof(passes[0].server), "%s", legacy_server);
+			snprintf(passes[0].token, sizeof(passes[0].token), "%s", legacy_token);
+			pass_count = 1; // the availability gate above guarantees the pair resolved
 		}
+		int budget = 8;
+		// §11.5: a manifest without `server=` binds to the persisted legacy
+		// server, never to whichever profile's pass happens to find it. The
+		// owning profile's loop picks it up on a later pass through the row's
+		// server column.
+		char legacy_binding[ABS_SERVER_MAX];
+		legacy_manifest_binding(legacy_binding, sizeof(legacy_binding));
+		for (int i = 0; i < pass_count && budget > 0; i++) {
+			const abs_auth_snapshot_t *profile = &passes[(rotation + i) % pass_count];
+			for (; budget > 0; budget--) {
+				audiobookdb_abs_checkpoint_t checkpoint;
+				if (!audiobookdb_abs_next(profile->server, &checkpoint)) break;
+				progress_job_t job = {0};
+				snprintf(job.book, sizeof(job.book), "%s", checkpoint.book);
+				snprintf(job.file, sizeof(job.file), "%s", checkpoint.file);
+				job.seconds = checkpoint.seconds;
+				job.finished = checkpoint.finished;
+				char item[ABS_ID_MAX], bound[ABS_SERVER_MAX];
+				snprintf(bound, sizeof(bound), "%s", legacy_binding);
+				double current = 0, duration = 0;
+				bool linked = local_progress(&job, item, sizeof(item), &current, &duration, bound, sizeof(bound), NULL, NULL);
+				bool ok = false, failed = last_error[0] != '\0';
+				int result = 0;
+				if (linked && strcmp(bound, profile->server) == 0 && progress_online()) {
+					// reconcile_progress() re-resolves the owning profile's
+					// snapshot under the store lock per request (§11.4 step 4);
+					// this comparison only keeps a manifest from drifting.
+					progress_publish(checkpoint.file, ABS_SYNC_SENDING);
+					result = reconcile_progress(&checkpoint, &job, item, current, duration, bound);
+					ok = result != 0;
+					failed = !ok;
+					if (ok) printf("audiobookshelf: synced progress %.1f / %.1f s\n", current, duration);
+					else fprintf(stderr, "audiobookshelf: progress sync failed; saved checkpoint retained\n");
+				}
+				if (result != 2) audiobookdb_abs_result(&checkpoint, bound, linked || failed, ok, failed);
+				progress_refresh_status();
+				if (failed) break; // one unavailable server must not block the next profile (§11.4 step 2)
+			}
+		}
+		// Token bytes live here between requests; nothing retains them.
+		for (int i = 0; i < pass_count; i++) abs_profiles_snapshot_wipe(&passes[i]);
+		rotation++;
 	}
 	return NULL;
 }
@@ -780,6 +955,103 @@ bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out) {
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// Media origin rule (§11.3): relative contentUrl resolves against the request
+// identity; an absolute contentUrl keeps its Bearer only when scheme, host and
+// effective port are identical. Anything else is cross-origin and is rejected
+// for 0.6.0 instead of risking the token on a foreign host. This compares at
+// request time only -- the profile store's own normalization is untouched, so
+// old manifests never rebind (§11.2).
+// ---------------------------------------------------------------------------
+
+// Splits an authority ("host", "host:port", "[v6-literal]:port") into host and
+// explicit port. *port_out is 0 when the URL carries no port; the caller fills
+// the scheme default. Anything else (unbracketed multi-colon authorities,
+// non-numeric ports) fails the comparison: not real ABS output, and a
+// cross-origin rejection is the safe reading.
+static bool media_authority(const char *authority, char *host_out, size_t host_size, int *port_out) {
+	*port_out = 0;
+	size_t len = strlen(authority);
+	if (len == 0) return false;
+	if (authority[0] == '[') {
+		const char *close = memchr(authority, ']', len);
+		if (!close) return false;
+		size_t literal = (size_t)(close - authority) + 1;
+		if (literal >= host_size) return false;
+		memcpy(host_out, authority, literal);
+		host_out[literal] = '\0';
+		if (literal < len) {
+			if (authority[literal] != ':') return false;
+			const char *digits = authority + literal + 1;
+			if (!*digits) return false;
+			for (const char *d = digits; *d; d++) if (!isdigit((unsigned char)*d)) return false;
+			int port = atoi(digits);
+			if (port <= 0 || port > 65535) return false;
+			*port_out = port;
+		}
+		return true;
+	}
+	const char *colon = memchr(authority, ':', len);
+	if (colon) {
+		const char *digits = colon + 1;
+		if (!*digits) return false;
+		for (const char *d = digits; *d; d++) if (!isdigit((unsigned char)*d)) return false;
+		size_t host_len = (size_t)(colon - authority);
+		if (host_len == 0 || host_len >= host_size) return false;
+		memcpy(host_out, authority, host_len);
+		host_out[host_len] = '\0';
+		int port = atoi(digits);
+		if (port <= 0 || port > 65535) return false;
+		*port_out = port;
+		return true;
+	}
+	if (len >= host_size) return false;
+	memcpy(host_out, authority, len + 1);
+	return true;
+}
+
+// Normalized origin of one URL: lowercased scheme and host plus the effective
+// port (explicit or scheme default). False for URLs this rule will not compare.
+static bool media_origin_of(const char *url, char *out, size_t size) {
+	out[0] = '\0';
+	if (!url) return false;
+	const char *separator = strstr(url, "://");
+	if (!separator || separator == url) return false;
+	size_t scheme_len = (size_t)(separator - url);
+	char scheme[16];
+	if (scheme_len >= sizeof(scheme)) return false;
+	memcpy(scheme, url, scheme_len);
+	scheme[scheme_len] = '\0';
+	for (char *p = scheme; *p; p++) *p = (char)tolower((unsigned char)*p);
+	int default_port = 0;
+	if (strcmp(scheme, "http") == 0) default_port = 80;
+	else if (strcmp(scheme, "https") == 0) default_port = 443;
+	else return false;
+	const char *authority = separator + 3;
+	const char *path = strpbrk(authority, "/?#");
+	size_t authority_len = path ? (size_t)(path - authority) : strlen(authority);
+	if (authority_len == 0 || authority_len >= ABS_SERVER_MAX) return false;
+	char authority_text[ABS_SERVER_MAX];
+	memcpy(authority_text, authority, authority_len);
+	authority_text[authority_len] = '\0';
+	char host[ABS_SERVER_MAX];
+	int port = 0;
+	if (!media_authority(authority_text, host, sizeof(host), &port)) return false;
+	// Scheme and host are case-insensitive in URIs; lowercase only the
+	// comparison copy, never any stored identity string.
+	for (char *p = host; *p; p++) *p = (char)tolower((unsigned char)*p);
+	if ((size_t)snprintf(out, size, "%s://%s:%d", scheme, host, port > 0 ? port : default_port) >= size)
+		return false;
+	return true;
+}
+
+static bool media_origin_equal(const char *url, const char *server) {
+	char url_origin[ABS_SERVER_MAX * 2], server_origin[ABS_SERVER_MAX * 2];
+	return media_origin_of(url, url_origin, sizeof(url_origin)) &&
+		media_origin_of(server, server_origin, sizeof(server_origin)) &&
+		strcmp(url_origin, server_origin) == 0;
+}
+
 static bool make_dirs(const char *path) {
 	char copy[1024];
 	if (!path || !path[0] || strlen(path) >= sizeof(copy)) return false;
@@ -864,13 +1136,19 @@ static bool write_description(const char *audio, const char *description) {
 	return true;
 }
 
-static bool download_file(const char *url, const char *destination, int track_no, int track_count,
-						  audiobookshelf_progress_cb cb, void *user) {
+// Streams one file. The Bearer is built from the caller's snapshot token for
+// the resolved identity server (§11.3) -- never from the legacy globals --
+// and http_stream_open_ex still strips it on a cross-origin redirect.
+static bool download_file(const char *url, const char *token, const char *destination, int track_no,
+						  int track_count, audiobookshelf_progress_cb cb, void *user) {
 	struct stat existing;
 	if (stat(destination, &existing) == 0 && existing.st_size > 0) return true;
 
-	char headers[1200];
-	auth_headers(headers, sizeof(headers));
+	char headers[ABS_TOKEN_MAX + 32];
+	headers[0] = '\0';
+	// A bearer-less fetch is not used in 0.6.0 (every ABS origin requires the
+	// token); the guard only keeps a malformed caller from printing "(null)".
+	if (token && token[0]) snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", token);
 	http_stream_t stream;
 	if (!http_stream_open_ex(&stream, url, headers, ABS_TIMEOUT_SECS)) {
 		const char *why = http_last_error();
@@ -983,6 +1261,11 @@ static bool local_file_duration(const char *path, double *seconds) {
 	return *seconds > 0;
 }
 
+// True when the local manifest names this server item AND bound this same
+// server (§11.5): matching item_id alone let server B's copy of one book claim
+// server A's local link. A manifest without `server=` (0.5.0 vintage) resolves
+// to the persisted legacy_server; before any profile store exists it binds to
+// the sole configured identity, exactly as 0.5.0 did, and never to a guess.
 bool audiobookshelf_local_linked(const char *local_book, const char *item_id) {
 	if (!local_book || !local_book[0] || !item_id || !item_id[0]) return false;
 
@@ -1000,17 +1283,30 @@ bool audiobookshelf_local_linked(const char *local_book, const char *item_id) {
 	FILE *f = fopen(manifest, "r");
 	if (!f) return false;
 
-	bool linked = false;
-	char line[ABS_ID_MAX + 16];
+	// Both answers are collected: `server=` is written after `item_id=` in the
+	// manifest, so neither line may stop the scan early.
+	bool id_matched = false;
+	char bound[ABS_SERVER_MAX] = "";
+	char line[ABS_SERVER_MAX + 32];
 	while (fgets(line, sizeof(line), f)) {
-		if (strncmp(line, "item_id=", 8) != 0) continue;
-		char *value = line + 8;
-		value[strcspn(value, "\r\n")] = '\0';
-		linked = strcmp(value, item_id) == 0;
-		break;
+		line[strcspn(line, "\r\n")] = '\0';
+		if (strncmp(line, "item_id=", 8) == 0) {
+			id_matched = strcmp(line + 8, item_id) == 0;
+		} else if (strncmp(line, "server=", 7) == 0 && !bound[0]) {
+			snprintf(bound, sizeof(bound), "%.*s", (int)sizeof(bound) - 1, line + 7);
+		}
 	}
 	fclose(f);
-	return linked;
+	if (!id_matched) return false;
+
+	char resolved[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(bound, resolved, sizeof(resolved));
+	if (!resolved[0]) legacy_manifest_binding(resolved, sizeof(resolved));
+	if (!resolved[0]) return false; // §11.5: no reliable server -> explicit re-link, keep progress pending
+	char identity[ABS_SERVER_MAX], normalized_identity[ABS_SERVER_MAX];
+	if (!request_credentials_copy(NULL, identity, sizeof(identity), NULL, 0) || !identity[0]) return false;
+	abs_profiles_normalize_server(identity, normalized_identity, sizeof(normalized_identity));
+	return strcmp(resolved, normalized_identity) == 0;
 }
 
 bool audiobookshelf_link_local(const audiobookshelf_book_t *book, const char *local_book,
@@ -1022,6 +1318,14 @@ bool audiobookshelf_link_local(const audiobookshelf_book_t *book, const char *lo
 	if (!book || !local_book || !local_book[0] || book->track_count <= 0 ||
 		!file_out || file_size == 0 || book->item.duration <= 0) {
 		set_error("This local book cannot be linked.");
+		return false;
+	}
+	// The manifest must bind the exact server the item was browsed from
+	// (§11.3/§11.5): one identity decides, and nothing reads the legacy
+	// globals directly.
+	char server[ABS_SERVER_MAX];
+	if (!request_credentials_copy(NULL, server, sizeof(server), NULL, 0) || !server[0]) {
+		set_error("Audiobookshelf is not configured.");
 		return false;
 	}
 
@@ -1097,7 +1401,7 @@ bool audiobookshelf_link_local(const audiobookshelf_book_t *book, const char *lo
 		return false;
 	}
 	fprintf(f, "version=1\nitem_id=%s\nserver=%s\nduration=%.3f\nprogress=%.3f\nprogress_updated=%lld\n",
-			book->item.id, server_url, total, book->item.progress, book->progress_updated_ms);
+			book->item.id, server, total, book->item.progress, book->progress_updated_ms);
 	double start = 0;
 	for (int i = 0; i < files.count; i++) {
 		const char *base = strrchr(files.paths[i], '/');
@@ -1144,6 +1448,14 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 		set_error("No SD card is available for the download.");
 		return false;
 	}
+	// One identity for the whole job (§11.3): the book was fetched from this
+	// server, so its contentUrls, manifest and Bearer all belong to the same
+	// snapshot. Resolve it once and never read the legacy globals below.
+	char server[ABS_SERVER_MAX], token[ABS_TOKEN_MAX];
+	if (!request_credentials_copy(NULL, server, sizeof(server), token, sizeof(token)) || !server[0]) {
+		set_error("Audiobookshelf is not configured.");
+		return false;
+	}
 	char author[160], title[220];
 	safe_component(book->item.author[0] ? book->item.author : "Unknown Author", author, sizeof(author));
 	safe_component(book->item.title, title, sizeof(title));
@@ -1154,6 +1466,22 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 		return false;
 	}
 
+	// §11.5: every final destination must be representable by the narrowest
+	// downstream consumer (the durable checkpoint row and the progress watch
+	// slots carry the same strings) before the first byte is written. The gate
+	// covers the folder transitively -- it prefixes every track path.
+	for (int i = 0; i < book->track_count; i++) {
+		char numbered[280];
+		char destination[ABS_LOCAL_PATH_MAX];
+		if (!local_track_name(&book->tracks[i], i, numbered, sizeof(numbered)) ||
+			(size_t)snprintf(destination, sizeof(destination), "%s/%s", folder, numbered) >= sizeof(destination) ||
+			!sonix_linked_path_representable(strlen(destination))) {
+			set_error("The audiobook download path is too long.");
+			memset(token, 0, sizeof(token));
+			return false;
+		}
+	}
+
 	for (int i = 0; i < book->track_count; i++) {
 		const audiobookshelf_track_t *track = &book->tracks[i];
 		char numbered[280];
@@ -1161,6 +1489,7 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 		if (!local_track_name(track, i, numbered, sizeof(numbered)) ||
 			(size_t)snprintf(destination, sizeof(destination), "%s/%s", folder, numbered) >= sizeof(destination)) {
 			set_error("The audiobook download path is too long.");
+			memset(token, 0, sizeof(token));
 			return false;
 		}
 
@@ -1168,9 +1497,18 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 		encode_content_path(track->content_url, encoded, sizeof(encoded));
 		char url[ABS_URL_MAX * 2 + 512];
 		if (strncmp(track->content_url, "http://", 7) == 0 || strncmp(track->content_url, "https://", 8) == 0) {
-			// Schemes need their colon intact. Audiobookshelf normally returns a
-			// relative /s/item path; tolerate an absolute one without treating
-			// its authority as a path segment.
+			// §11.3 media rule: an absolute contentUrl only keeps its Bearer
+			// when scheme, host and effective port match the request identity.
+			// Cross-origin media is rejected before anything is fetched; the
+			// redirect path in http.c still strips Authorization on its own.
+			if (!media_origin_equal(track->content_url, server)) {
+				set_error("The audiobook file is hosted by another server.");
+				memset(token, 0, sizeof(token));
+				return false;
+			}
+			// Schemes need their colon intact. Audiobookshelf normally returns
+			// a relative /s/item path; tolerate an absolute one without
+			// treating its authority as a path segment.
 			const char *path = strstr(track->content_url, "://");
 			path = path ? strchr(path + 3, '/') : NULL;
 			if (path) {
@@ -1182,12 +1520,15 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 				encode_content_path(path, encoded, sizeof(encoded));
 				snprintf(url, sizeof(url), "%s%s", origin, encoded);
 			} else snprintf(url, sizeof(url), "%s", track->content_url);
-		} else if (encoded[0] == '/') snprintf(url, sizeof(url), "%s%s", server_url, encoded);
-		else snprintf(url, sizeof(url), "%s/%s", server_url, encoded);
+		} else if (encoded[0] == '/') snprintf(url, sizeof(url), "%s%s", server, encoded);
+		else snprintf(url, sizeof(url), "%s/%s", server, encoded);
 
-		if (!download_file(url, destination, i + 1, book->track_count, cb, user) ||
+		if (!download_file(url, token, destination, i + 1, book->track_count, cb, user) ||
 			!write_sidecars(destination, book, track, i + 1) ||
-			(i == 0 && !write_description(destination, book->description))) return false;
+			(i == 0 && !write_description(destination, book->description))) {
+			memset(token, 0, sizeof(token));
+			return false;
+		}
 	}
 
 	// Embedded artwork remains the first choice. Audiobookshelf's own cover is
@@ -1197,13 +1538,16 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 	if (book->item.cover[0]) {
 		char encoded[ABS_URL_MAX * 2];
 		encode_content_path(book->item.cover, encoded, sizeof(encoded));
+		// The cover path is always the server's own /api route, so it shares
+		// the request identity's origin by construction.
 		char cover_url[ABS_URL_MAX * 2 + 544];
-		if (encoded[0] == '/') snprintf(cover_url, sizeof(cover_url), "%s%s?format=jpeg", server_url, encoded);
-		else snprintf(cover_url, sizeof(cover_url), "%s/%s?format=jpeg", server_url, encoded);
+		if (encoded[0] == '/') snprintf(cover_url, sizeof(cover_url), "%s%s?format=jpeg", server, encoded);
+		else snprintf(cover_url, sizeof(cover_url), "%s/%s?format=jpeg", server, encoded);
 		char cover_path[ABS_LOCAL_PATH_MAX];
 		if ((size_t)snprintf(cover_path, sizeof(cover_path), "%s/cover.jpg", folder) < sizeof(cover_path))
-			(void)download_file(cover_url, cover_path, 1, 1, NULL, NULL);
+			(void)download_file(cover_url, token, cover_path, 1, 1, NULL, NULL);
 	}
+	memset(token, 0, sizeof(token));
 
 	char manifest[1000], temporary[1020];
 	snprintf(manifest, sizeof(manifest), "%s/.audiobookshelf", folder);
@@ -1211,7 +1555,7 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 	FILE *f = fopen(temporary, "w");
 	if (f) {
 		fprintf(f, "version=1\nitem_id=%s\nserver=%s\nduration=%.3f\nprogress=%.3f\nprogress_updated=%lld\n",
-				book->item.id, server_url, book->item.duration, book->item.progress, book->progress_updated_ms);
+				book->item.id, server, book->item.duration, book->item.progress, book->progress_updated_ms);
 		for (int i = 0; i < book->track_count; i++) {
 			char local_name[280];
 			if (!local_track_name(&book->tracks[i], i, local_name, sizeof(local_name))) continue;
