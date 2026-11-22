@@ -43,3 +43,7 @@ build/
 .host-test/
 /tmp/
 sonix-player/tmp/
+
+# agent scratch (orchestration briefs/specs/validation)
+.specs/
+.karen/
