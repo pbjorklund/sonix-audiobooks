@@ -1,8 +1,24 @@
 # Changelog
 
-All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Jepl4r/sonix-player); upstream changes are not repeated line-by-line here.
+All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
+
+## Sonix Audiobooks 0.5.0 - 2026-11-21
+
+Rebuilt on upstream sonix-player v1.3.1 (commit `5d8bb17`).
+
+> [!IMPORTANT]
+> **Manual Upgrade Required:** Users on 0.4.0 must flash this release from an SD card. Because 0.4.0 images report OS 1.3.0, the OTA system cannot jump directly to 0.5.0.
+
+- **Custom Boot Screen:** Replaced all 12 R1 variants with a new custom boot screen (SonixOS lockup + blue DJ gnome).
+- **Correctness Fixes:**
+  - Effects bypass made non-destructive.
+  - EQ write batching and atomic presets implemented.
+  - Cover-cache updated to full-SHA-256 with a 256-row bound.
+  - Fixed Japanese boundary, password, and lifecycle issues.
+- **Vendored Code Note:** The vendored `stb_image_write.h` contains a known benign signed-shift UB (pre-existing upstream; only the low 24 bits are used), surfaced by sanitizers.
 
 ## Sonix Audiobooks 0.4.0 - 2026-10-17
+
 
 First release of the fork's new line, rebuilt on upstream sonix-player v1.3.0.
 Firmware build identifier: `171020262008`. The 0.x history (0.1.0-0.3.0)

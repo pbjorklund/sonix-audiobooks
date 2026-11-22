@@ -75,4 +75,4 @@ The automation interface is for controlled validation only. It is not a remote c
 
 ## Upstream and licensing
 
-Keep fork-specific commits focused and preserve the GPL-3.0 license and upstream copyright notices. Bug fixes that are not specific to Sonix Audiobooks should be suitable for proposing back to [Jepl4r/sonix-player](https://github.com/Jepl4r/sonix-player).
+Keep fork-specific commits focused and preserve the GPL-3.0 license and upstream copyright notices. Bug fixes that are not specific to Sonix Audiobooks should be suitable for proposing back to [Tartarus6/sonix-player](https://github.com/Tartarus6/sonix-player).

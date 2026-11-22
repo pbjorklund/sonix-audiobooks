@@ -1,5 +1,5 @@
 name: Bug report
-description: A feature that Sonix Player has is not working as it should. Please attach the log.
+description: A feature that Sonix Audiobooks has is not working as it should. Please attach the log.
 title: "[BUG] "
 labels: ["bug"]
 type: Bug
@@ -10,13 +10,13 @@ body:
         > [!IMPORTANT]
         > **Read this before you go on.**
         >
-        > A **bug** is a feature that Sonix Player **has**, but that **does not work** as it should.
+        > A **bug** is a feature that Sonix Audiobooks **has**, but that **does not work** as it should.
         >
-        > If Sonix Player does not do something **at all**, that is **not a bug**: it simply has not been made yet.
+        > If Sonix Audiobooks does not do something **at all**, that is **not a bug**: it simply has not been made yet.
         > Open a **Feature request** instead.
         > This is true even if the stock HiBy firmware does it.
         >
-        > Everything Sonix Player can do is in the **[feature list](https://github.com/Tartarus6/sonix-player/blob/main/FEATURES.md)**.
+        > Everything Sonix Audiobooks can do is in the **[feature list](https://github.com/yetisoldier/sonix-audiobooks/blob/main/FEATURES.md)**.
         > If what you expected is not in that list, **do not open a bug report**.
         >
         > Bug reports about missing features will be closed. Without the log, a problem cannot be looked into.
@@ -29,8 +29,8 @@ body:
         | Bug | Not a bug (feature request) |
         |---|---|
         | Gapless is on, but there is a gap between two tracks of the same album. | The player does not do something that is not in the feature list. |
-        | The library scan stops halfway and some albums are missing. | The stock HiBy firmware does something that Sonix Player does not. |
-        | Sonix Player crashes when you open a playlist. | You would like an existing feature to work in a different way. |
+        | The library scan stops halfway and some albums are missing. | The stock HiBy firmware does something that Sonix Audiobooks does not. |
+        | Sonix Audiobooks crashes when you open a playlist. | You would like an existing feature to work in a different way. |
 
         One problem per report, please. Write in English.
 
@@ -40,11 +40,11 @@ body:
       label: Before you open this report
       description: All boxes must be ticked.
       options:
-        - label: I checked the [feature list](https://github.com/Tartarus6/sonix-player/blob/main/FEATURES.md). What I am reporting is **in the list**, and it does **not** work as described there.
+        - label: I checked the [feature list](https://github.com/yetisoldier/sonix-audiobooks/blob/main/FEATURES.md). What I am reporting is **in the list**, and it does **not** work as described there.
           required: true
-        - label: I am using the **latest** version of Sonix Player, and the problem is still there.
+        - label: I am using the **latest** version of Sonix Audiobooks, and the problem is still there.
           required: true
-        - label: I searched the [open and closed issues](https://github.com/Tartarus6/sonix-player/issues?q=is%3Aissue), and this problem has not been reported yet.
+        - label: I searched the [open and closed issues](https://github.com/yetisoldier/sonix-audiobooks/issues?q=is%3Aissue), and this problem has not been reported yet.
           required: true
         - label: I will attach the log file below. I understand that without it the problem cannot be looked into.
           required: true
@@ -62,7 +62,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Sonix Player version
+      label: Sonix Audiobooks version
       description: You find it in Settings > System > About.
       placeholder: e.g. 1.1.0
     validations:

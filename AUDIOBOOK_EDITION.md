@@ -1,6 +1,6 @@
 # Sonix Audiobooks: Project Notes
 
-Sonix Audiobooks is an audiobook-focused fork of [Jepl4r/sonix-player](https://github.com/Jepl4r/sonix-player) for the original **HiBy R1**.
+Sonix Audiobooks is an audiobook-focused fork of [Tartarus6/sonix-player](https://github.com/Tartarus6/sonix-player) for the original **HiBy R1**.
 
 Since the rebase onto upstream v1.3.0, the audiobook experience the fork
 originally built is upstream's own: upstream 1.2.0 absorbed the fork's

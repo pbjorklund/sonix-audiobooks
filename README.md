@@ -12,7 +12,11 @@ progress that syncs by itself once Wi-Fi is back.
 > do is upstream's own and is in **[FEATURES.md](FEATURES.md)**. What the fork
 > adds is described in **[AUDIOBOOK_EDITION.md](AUDIOBOOK_EDITION.md)**.
 
+## Release 0.5.0
+Rebuilt on upstream sonix-player v1.3.1. This release introduces a custom boot screen (SonixOS lockup + blue DJ gnome) and several correctness fixes, including non-destructive effects bypass, atomic EQ presets, and hardened cover-cache indexing.
+
 ## Quick Start (Installation)
+
 
 1. **Download** `r1.upt` from the **[latest release](https://github.com/yetisoldier/sonix-audiobooks/releases/latest)**.
 2. **Battery Check**: Charge the player **above 30%**.
