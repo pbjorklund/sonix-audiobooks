@@ -1,0 +1,134 @@
+{
+ "id": "bk-full",
+ "media": {
+  "duration": 3000.0,
+  "coverPath": "/api/items/bk-full/cover",
+  "metadata": {
+   "title": "Fixture Full Details Book",
+   "authorName": "Fixture Detail Author",
+   "description": "A deterministically generated book with every optional detail field populated, used by detail-page suites.",
+   "narrator": "Fixture Narrator",
+   "publishedYear": "2026",
+   "publisher": "Fixture Press",
+   "genres": [
+    "Fiction"
+   ],
+   "tags": [
+    "detail-full"
+   ],
+   "series": [
+    {
+     "name": "Fixture Detail Series",
+     "sequence": "1"
+    }
+   ],
+   "seriesName": "Fixture Detail Series"
+  },
+  "tracks": [
+   {
+    "index": 1,
+    "startOffset": 0.0,
+    "duration": 1000.0,
+    "title": "Fixture Part 1",
+    "contentUrl": "/api/items/bk-full/file/69204888147035",
+    "mimeType": "audio/mpeg",
+    "codec": null,
+    "metadata": {
+     "filename": "Fixture Part 1.mp3",
+     "size": 32000000,
+     "mimeType": "audio/mpeg"
+    }
+   },
+   {
+    "index": 2,
+    "startOffset": 1000.0,
+    "duration": 1000.0,
+    "title": "Fixture Part 2",
+    "contentUrl": "/api/items/bk-full/file/182705906803434",
+    "mimeType": "audio/mpeg",
+    "codec": null,
+    "metadata": {
+     "filename": "Fixture Part 2.mp3",
+     "size": 32000000,
+     "mimeType": "audio/mpeg"
+    }
+   },
+   {
+    "index": 3,
+    "startOffset": 2000.0,
+    "duration": 1000.0,
+    "title": "Fixture Part 3",
+    "contentUrl": "/api/items/bk-full/file/209770730591990",
+    "mimeType": "audio/mpeg",
+    "codec": null,
+    "metadata": {
+     "filename": "Fixture Part 3.mp3",
+     "size": 32000000,
+     "mimeType": "audio/mpeg"
+    }
+   }
+  ],
+  "chapters": [
+   {
+    "index": 1,
+    "startOffset": 0.0,
+    "endOffset": 300.0,
+    "title": "Chapter 1"
+   },
+   {
+    "index": 2,
+    "startOffset": 300.0,
+    "endOffset": 600.0,
+    "title": "Chapter 2"
+   },
+   {
+    "index": 3,
+    "startOffset": 600.0,
+    "endOffset": 900.0,
+    "title": "Chapter 3"
+   },
+   {
+    "index": 4,
+    "startOffset": 900.0,
+    "endOffset": 1200.0,
+    "title": "Chapter 4"
+   },
+   {
+    "index": 5,
+    "startOffset": 1200.0,
+    "endOffset": 1500.0,
+    "title": "Chapter 5"
+   },
+   {
+    "index": 6,
+    "startOffset": 1500.0,
+    "endOffset": 1800.0,
+    "title": "Chapter 6"
+   },
+   {
+    "index": 7,
+    "startOffset": 1800.0,
+    "endOffset": 2100.0,
+    "title": "Chapter 7"
+   },
+   {
+    "index": 8,
+    "startOffset": 2100.0,
+    "endOffset": 2400.0,
+    "title": "Chapter 8"
+   },
+   {
+    "index": 9,
+    "startOffset": 2400.0,
+    "endOffset": 2700.0,
+    "title": "Chapter 9"
+   },
+   {
+    "index": 10,
+    "startOffset": 2700.0,
+    "endOffset": 3000.0,
+    "title": "Chapter 10"
+   }
+  ]
+ }
+}

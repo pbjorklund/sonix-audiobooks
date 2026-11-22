@@ -1,0 +1,179 @@
+{
+ "schema": "sonix-abs-fixture-source-1",
+ "alias": "eric-v2.38.0",
+ "normative_abs_server": {
+  "repo": "advplyr/audiobookshelf",
+  "commit": "1430c9fc642d586ff91c8d4cbed20aab2c47e473",
+  "tag": "v2.38.0",
+  "committed_date": "2026-11-17T23:09:20Z",
+  "captured": "2026-11-22 via gh api git/trees + git/blobs"
+ },
+ "derived_source_paths": [
+  {
+   "path": "server/controllers/LibraryController.js",
+   "git_blob_sha1": "ac23b683f6526e3a89eadce62aa265beff2634ed"
+  },
+  {
+   "path": "server/controllers/LibraryItemController.js",
+   "git_blob_sha1": "18b1dc2660dc14f6a45ee48d69c8bf565967977c"
+  },
+  {
+   "path": "server/controllers/MeController.js",
+   "git_blob_sha1": "03841b5cacc76e0c8f78c58b5c6dd59238849fe0"
+  },
+  {
+   "path": "server/controllers/PodcastController.js",
+   "git_blob_sha1": "5eaa2a64a349428fd469f23a96482746eaa4de46"
+  },
+  {
+   "path": "server/controllers/SearchController.js",
+   "git_blob_sha1": "ecd9a41c052a0e284679bc378bc886773e57399a"
+  },
+  {
+   "path": "server/models/Library.js",
+   "git_blob_sha1": "708880aad352417e9391edbcf611dea221527c9a"
+  },
+  {
+   "path": "server/models/LibraryItem.js",
+   "git_blob_sha1": "4876d52e643d9d7f9977e66fcf9fdcb70b1d7b38"
+  },
+  {
+   "path": "server/models/Podcast.js",
+   "git_blob_sha1": "9c222e48a5a669a3ed4e97b11f5468fdd6ef5e65"
+  },
+  {
+   "path": "server/models/PodcastEpisode.js",
+   "git_blob_sha1": "996f55f58e1437bcdd323aa0fb8e23c3b6d56943"
+  },
+  {
+   "path": "server/models/Book.js",
+   "git_blob_sha1": "0446b3d9070917dd48936cb1abe861236ba7704a"
+  },
+  {
+   "path": "server/models/Author.js",
+   "git_blob_sha1": "65561e211a35edff9166a516a44c198274634eb2"
+  },
+  {
+   "path": "server/models/Series.js",
+   "git_blob_sha1": "6ca10a9ba0ca143236c8d8cd9b1133f87235efe5"
+  },
+  {
+   "path": "server/models/MediaProgress.js",
+   "git_blob_sha1": "9c0269a9e939353fc72c5ed2b863b1e933ebcd54"
+  },
+  {
+   "path": "server/objects/files/AudioFile.js",
+   "git_blob_sha1": "c0c425ba32ef9c71a46040b1b60f8075fa2e793e"
+  },
+  {
+   "path": "server/objects/files/AudioTrack.js",
+   "git_blob_sha1": "a27c2a016a0dba7f415d169260d52cdfb0707c81"
+  }
+ ],
+ "scenario_summary": {
+  "libraries": 18,
+  "items": {
+   "lib-detail-1": 6,
+   "lib-list-1": 75,
+   "lib-mix-10": 3,
+   "lib-mix-11": 3,
+   "lib-mix-12": 1,
+   "lib-mix-13": 1,
+   "lib-mix-14": 2,
+   "lib-mix-15": 2,
+   "lib-mix-16": 1,
+   "lib-mix-17": 1,
+   "lib-mix-18": 1,
+   "lib-mix-8": 2,
+   "lib-mix-9": 2,
+   "lib-pod-1": 65,
+   "lib-pod-2": 4,
+   "lib-pod-3": 3,
+   "lib-search-1": 105,
+   "mock-library": 1
+  },
+  "search_result_variants": [
+   0,
+   40,
+   100,
+   101
+  ],
+  "chapter_variants": [
+   0,
+   1,
+   400,
+   401
+  ],
+  "forty_one_episode_show": "pod-41",
+  "oversized_expanded_show": "pod-big",
+  "oversized_min_bytes": 3145728,
+  "two_server_scenario": "credential-a/credential-b share IDs; progress diverges per dataset.progress_seeds"
+ },
+ "generator": {
+  "script": "tools/abs_fixtures_generate.py",
+  "deterministic": true,
+  "note": "No clock, RNG, or set iteration; payload content is identical across aliases; only this source.json differs. Sort/filter expectations are computed with audiobookshelf_mock's own helpers to prevent drift."
+ },
+ "files": [
+  {
+   "path": "scenario/dataset.json",
+   "sha256": "68b9fc0b640004c8e37c37358fc5d278feaca209ea3bd1736ffecf9f1886376e",
+   "bytes": 142165
+  },
+  {
+   "path": "scenario/details/bk-chapters-0.expanded.json",
+   "sha256": "2829fc7f2159580d009022e54e0cb762c3730e3e5593655fa54af162145e70f8",
+   "bytes": 588
+  },
+  {
+   "path": "scenario/details/bk-chapters-1.expanded.json",
+   "sha256": "e571f6aa09201ec14e35d7d44332bca0fb589b20709bb8dc12e2ee95369cbbb6",
+   "bytes": 688
+  },
+  {
+   "path": "scenario/details/bk-chapters-400.expanded.json",
+   "sha256": "22224f61b5d18a77cc4ba93d5042e6d4916dafe8e9d8b35f4a6caf8b245d5e63",
+   "bytes": 44453
+  },
+  {
+   "path": "scenario/details/bk-chapters-401.expanded.json",
+   "sha256": "810f4499d1fb2456b2e8116a5e87148e102ab90497d7b987746e8bafc68572f0",
+   "bytes": 44569
+  },
+  {
+   "path": "scenario/details/bk-full.expanded.json",
+   "sha256": "5837daf609b25bce6a801c52caddb225a048f507c42275d25ffcdf0743ecb704",
+   "bytes": 2706
+  },
+  {
+   "path": "scenario/details/bk-minimal.expanded.json",
+   "sha256": "3dd7f726996e0779000110c1b62bb807ca7c59148682e99a073a887249180341",
+   "bytes": 571
+  },
+  {
+   "path": "scenario/details/mock-book.expanded.json",
+   "sha256": "4a7e80f0306c8d6827f9fa3e346916bbe53b232e46a1c66cfc82c562a7763a83",
+   "bytes": 845
+  },
+  {
+   "path": "scenario/details/pod-41.expanded.json",
+   "sha256": "cf63f86612eebe1a8ecb047fd2c3dcc21ecc75170871f6f57f06e9c1c38f661e",
+   "bytes": 51711
+  },
+  {
+   "path": "scenario/details/pod-big.expanded.json",
+   "sha256": "d138b386fdda23df52fa0f23071f179133ca2f04b53350c48a5c2540664a978f",
+   "bytes": 3232778
+  },
+  {
+   "path": "scenario/libraries.json",
+   "sha256": "3e1a944afc5094ef45d994eeee9c4fa17d72a396d992dd162d8ce1f3cf14cf1f",
+   "bytes": 1731
+  },
+  {
+   "path": "scenario/media/covers/fixture-cover.jpg",
+   "sha256": "cb0fead8a5b2933e57acbfd1832233f6f360f19faa716957368f048667c152a2",
+   "bytes": 161
+  }
+ ]
+}

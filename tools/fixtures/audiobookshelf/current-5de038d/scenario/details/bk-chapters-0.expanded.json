@@ -1,0 +1,28 @@
+{
+ "id": "bk-chapters-0",
+ "media": {
+  "duration": 900.0,
+  "coverPath": "/api/items/bk-chapters-0/cover",
+  "metadata": {
+   "title": "Fixture Zero Chapter Book",
+   "authorName": "Fixture Detail Author"
+  },
+  "tracks": [
+   {
+    "index": 1,
+    "startOffset": 0.0,
+    "duration": 900.0,
+    "title": "Fixture Part 1",
+    "contentUrl": "/api/items/bk-chapters-0/file/158657010424671",
+    "mimeType": "audio/mpeg",
+    "codec": null,
+    "metadata": {
+     "filename": "Fixture Part 1.mp3",
+     "size": 28800000,
+     "mimeType": "audio/mpeg"
+    }
+   }
+  ],
+  "chapters": []
+ }
+}

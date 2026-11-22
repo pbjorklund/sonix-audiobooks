@@ -1,0 +1,1933 @@
+{
+ "id": "pod-41",
+ "media": {
+  "metadata": {
+   "title": "Fixture Forty-One Podcast",
+   "author": "Fixture Podcast Author",
+   "description": "Deterministic expanded payload for Fixture Forty-One Podcast.",
+   "genres": [
+    "Interviews"
+   ]
+  },
+  "coverPath": "/api/items/pod-41/cover",
+  "episodes": [
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-001",
+    "oldEpisodeId": null,
+    "index": 1,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 001",
+    "subtitle": "Deterministic episode 001",
+    "description": "Episode 001 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-001",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700086400000,
+    "addedAt": 1700000001000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "258638762231958",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 001.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 001",
+     "contentUrl": "/api/items/pod-41/file/258638762231958",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 001.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-002",
+    "oldEpisodeId": null,
+    "index": 2,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 002",
+    "subtitle": "Deterministic episode 002",
+    "description": "Episode 002 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-002",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700172800000,
+    "addedAt": 1700000002000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "102477485761467",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 002.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-003",
+    "oldEpisodeId": null,
+    "index": 3,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 003",
+    "subtitle": "Deterministic episode 003",
+    "description": "Episode 003 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-003",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700259200000,
+    "addedAt": 1700000003000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "262082389759389",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 003.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 003",
+     "contentUrl": null,
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 003.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-004",
+    "oldEpisodeId": null,
+    "index": 4,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 004",
+    "subtitle": "Deterministic episode 004",
+    "description": "Episode 004 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-004",
+    "pubDate": null,
+    "publishedAt": null,
+    "addedAt": null,
+    "chapters": [],
+    "audioFile": {
+     "ino": "266578756618351",
+     "mimeType": "audio/mpeg",
+     "duration": 0.0,
+     "metadata": {
+      "filename": "Episode 004.mp3",
+      "size": 0,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 0.0,
+     "title": "Episode 004",
+     "contentUrl": "/api/items/pod-41/file/266578756618351",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 004.mp3",
+      "size": 0,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 0,
+    "duration": 0.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-005",
+    "oldEpisodeId": null,
+    "index": 5,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 005",
+    "subtitle": "Deterministic episode 005",
+    "description": "Episode 005 of Fixture Forty-One Podcast.",
+    "enclosure": {
+     "url": "http://fixture.invalid/enclosure/pod-41/005.mp3",
+     "type": "audio/mpeg",
+     "length": "32000000"
+    },
+    "guid": "fixture-guid-pod-41-005",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700432000000,
+    "addedAt": 1700000005000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "281119821167763",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 005.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 005",
+     "contentUrl": "/api/items/pod-41/file/281119821167763",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 005.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-006",
+    "oldEpisodeId": null,
+    "index": 6,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 006",
+    "subtitle": "Deterministic episode 006",
+    "description": "Episode 006 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-006",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700518400000,
+    "addedAt": 1700000006000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "277681792296830",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 006.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 006",
+     "contentUrl": "/api/items/pod-41/file/277681792296830",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 006.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-007",
+    "oldEpisodeId": null,
+    "index": 7,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 007",
+    "subtitle": "Deterministic episode 007",
+    "description": "Episode 007 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-007",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700604800000,
+    "addedAt": 1700000007000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "139659391357578",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 007.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 007",
+     "contentUrl": "/api/items/pod-41/file/139659391357578",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 007.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-008",
+    "oldEpisodeId": null,
+    "index": 8,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 008",
+    "subtitle": "Deterministic episode 008",
+    "description": "Episode 008 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-008",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700691200000,
+    "addedAt": 1700000008000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "18956880603275",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 008.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 008",
+     "contentUrl": "/api/items/pod-41/file/18956880603275",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 008.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-009",
+    "oldEpisodeId": null,
+    "index": 9,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 009",
+    "subtitle": "Deterministic episode 009",
+    "description": "Episode 009 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-009",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700777600000,
+    "addedAt": 1700000009000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "47137319831811",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 009.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 009",
+     "contentUrl": "/api/items/pod-41/file/47137319831811",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 009.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-010",
+    "oldEpisodeId": null,
+    "index": 10,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 010",
+    "subtitle": "Deterministic episode 010",
+    "description": "Episode 010 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-010",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700864000000,
+    "addedAt": 1700000010000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "116045576211651",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 010.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 010",
+     "contentUrl": "/api/items/pod-41/file/116045576211651",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 010.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-011",
+    "oldEpisodeId": null,
+    "index": 11,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 011",
+    "subtitle": "Deterministic episode 011",
+    "description": "Episode 011 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-011",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1700950400000,
+    "addedAt": 1700000011000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "241117193972826",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 011.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 011",
+     "contentUrl": "/api/items/pod-41/file/241117193972826",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 011.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-012",
+    "oldEpisodeId": null,
+    "index": 12,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 012",
+    "subtitle": "Deterministic episode 012",
+    "description": "Episode 012 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-012",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701036800000,
+    "addedAt": 1700000012000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "145918977010962",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 012.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 012",
+     "contentUrl": "/api/items/pod-41/file/145918977010962",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 012.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-013",
+    "oldEpisodeId": null,
+    "index": 13,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 013",
+    "subtitle": "Deterministic episode 013",
+    "description": "Episode 013 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-013",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701123200000,
+    "addedAt": 1700000013000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "4250443019549",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 013.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 013",
+     "contentUrl": "/api/items/pod-41/file/4250443019549",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 013.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-014",
+    "oldEpisodeId": null,
+    "index": 14,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 014",
+    "subtitle": "Deterministic episode 014",
+    "description": "Episode 014 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-014",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701209600000,
+    "addedAt": 1700000014000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "177880891594785",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 014.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 014",
+     "contentUrl": "/api/items/pod-41/file/177880891594785",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 014.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-015",
+    "oldEpisodeId": null,
+    "index": 15,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 015",
+    "subtitle": "Deterministic episode 015",
+    "description": "Episode 015 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-015",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701296000000,
+    "addedAt": 1700000015000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "99803279558006",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 015.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 015",
+     "contentUrl": "/api/items/pod-41/file/99803279558006",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 015.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-016",
+    "oldEpisodeId": null,
+    "index": 16,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 016",
+    "subtitle": "Deterministic episode 016",
+    "description": "Episode 016 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-016",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701382400000,
+    "addedAt": 1700000016000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "41433551852329",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 016.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 016",
+     "contentUrl": "/api/items/pod-41/file/41433551852329",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 016.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-017",
+    "oldEpisodeId": null,
+    "index": 17,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 017",
+    "subtitle": "Deterministic episode 017",
+    "description": "Episode 017 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-017",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701468800000,
+    "addedAt": 1700000017000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "137212050851951",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 017.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 017",
+     "contentUrl": "/api/items/pod-41/file/137212050851951",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 017.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-018",
+    "oldEpisodeId": null,
+    "index": 18,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 018",
+    "subtitle": "Deterministic episode 018",
+    "description": "Episode 018 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-018",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701555200000,
+    "addedAt": 1700000018000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "65531781901731",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 018.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 018",
+     "contentUrl": "/api/items/pod-41/file/65531781901731",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 018.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-019",
+    "oldEpisodeId": null,
+    "index": 19,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 019",
+    "subtitle": "Deterministic episode 019",
+    "description": "Episode 019 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-019",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701641600000,
+    "addedAt": 1700000019000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "163062478518543",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 019.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 019",
+     "contentUrl": "/api/items/pod-41/file/163062478518543",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 019.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-020",
+    "oldEpisodeId": null,
+    "index": 20,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 020",
+    "subtitle": "Deterministic episode 020",
+    "description": "Episode 020 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-020",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701728000000,
+    "addedAt": 1700000020000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "75006691302049",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 020.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 020",
+     "contentUrl": "/api/items/pod-41/file/75006691302049",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 020.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-021",
+    "oldEpisodeId": null,
+    "index": 21,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 021",
+    "subtitle": "Deterministic episode 021",
+    "description": "Episode 021 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-021",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701814400000,
+    "addedAt": 1700000021000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "181914513347645",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 021.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 021",
+     "contentUrl": "/api/items/pod-41/file/181914513347645",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 021.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-022",
+    "oldEpisodeId": null,
+    "index": 22,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 022",
+    "subtitle": "Deterministic episode 022",
+    "description": "Episode 022 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-022",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701900800000,
+    "addedAt": 1700000022000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "66185127641405",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 022.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 022",
+     "contentUrl": "/api/items/pod-41/file/66185127641405",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 022.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-023",
+    "oldEpisodeId": null,
+    "index": 23,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 023",
+    "subtitle": "Deterministic episode 023",
+    "description": "Episode 023 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-023",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1701987200000,
+    "addedAt": 1700000023000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "110770609395467",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 023.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 023",
+     "contentUrl": "/api/items/pod-41/file/110770609395467",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 023.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-024",
+    "oldEpisodeId": null,
+    "index": 24,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 024",
+    "subtitle": "Deterministic episode 024",
+    "description": "Episode 024 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-024",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702073600000,
+    "addedAt": 1700000024000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "172329801723591",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 024.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 024",
+     "contentUrl": "/api/items/pod-41/file/172329801723591",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 024.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-025",
+    "oldEpisodeId": null,
+    "index": 25,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 025",
+    "subtitle": "Deterministic episode 025",
+    "description": "Episode 025 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-025",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702160000000,
+    "addedAt": 1700000025000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "268313897708813",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 025.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 025",
+     "contentUrl": "/api/items/pod-41/file/268313897708813",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 025.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-026",
+    "oldEpisodeId": null,
+    "index": 26,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 026",
+    "subtitle": "Deterministic episode 026",
+    "description": "Episode 026 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-026",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702246400000,
+    "addedAt": 1700000026000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "44615743730568",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 026.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 026",
+     "contentUrl": "/api/items/pod-41/file/44615743730568",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 026.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-027",
+    "oldEpisodeId": null,
+    "index": 27,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 027",
+    "subtitle": "Deterministic episode 027",
+    "description": "Episode 027 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-027",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702332800000,
+    "addedAt": 1700000027000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "75322747451667",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 027.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 027",
+     "contentUrl": "/api/items/pod-41/file/75322747451667",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 027.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-028",
+    "oldEpisodeId": null,
+    "index": 28,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 028",
+    "subtitle": "Deterministic episode 028",
+    "description": "Episode 028 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-028",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702419200000,
+    "addedAt": 1700000028000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "58389563515221",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 028.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 028",
+     "contentUrl": "/api/items/pod-41/file/58389563515221",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 028.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-029",
+    "oldEpisodeId": null,
+    "index": 29,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 029",
+    "subtitle": "Deterministic episode 029",
+    "description": "Episode 029 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-029",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702505600000,
+    "addedAt": 1700000029000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "88214245128382",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 029.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 029",
+     "contentUrl": "/api/items/pod-41/file/88214245128382",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 029.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-030",
+    "oldEpisodeId": null,
+    "index": 30,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 030",
+    "subtitle": "Deterministic episode 030",
+    "description": "Episode 030 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-030",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702592000000,
+    "addedAt": 1700000030000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "38312200920054",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 030.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 030",
+     "contentUrl": "/api/items/pod-41/file/38312200920054",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 030.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-031",
+    "oldEpisodeId": null,
+    "index": 31,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 031",
+    "subtitle": "Deterministic episode 031",
+    "description": "Episode 031 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-031",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702678400000,
+    "addedAt": 1700000031000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "55689566779666",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 031.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 031",
+     "contentUrl": "/api/items/pod-41/file/55689566779666",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 031.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-032",
+    "oldEpisodeId": null,
+    "index": 32,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 032",
+    "subtitle": "Deterministic episode 032",
+    "description": "Episode 032 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-032",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702764800000,
+    "addedAt": 1700000032000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "112988140861749",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 032.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 032",
+     "contentUrl": "/api/items/pod-41/file/112988140861749",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 032.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-033",
+    "oldEpisodeId": null,
+    "index": 33,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 033",
+    "subtitle": "Deterministic episode 033",
+    "description": "Episode 033 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-033",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702851200000,
+    "addedAt": 1700000033000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "136952851885338",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 033.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 033",
+     "contentUrl": "/api/items/pod-41/file/136952851885338",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 033.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-034",
+    "oldEpisodeId": null,
+    "index": 34,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 034",
+    "subtitle": "Deterministic episode 034",
+    "description": "Episode 034 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-034",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1702937600000,
+    "addedAt": 1700000034000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "205780037116163",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 034.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 034",
+     "contentUrl": "/api/items/pod-41/file/205780037116163",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 034.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-035",
+    "oldEpisodeId": null,
+    "index": 35,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 035",
+    "subtitle": "Deterministic episode 035",
+    "description": "Episode 035 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-035",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1703024000000,
+    "addedAt": 1700000035000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "235593099523236",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 035.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 035",
+     "contentUrl": "/api/items/pod-41/file/235593099523236",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 035.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-036",
+    "oldEpisodeId": null,
+    "index": 36,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 036",
+    "subtitle": "Deterministic episode 036",
+    "description": "Episode 036 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-036",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1703110400000,
+    "addedAt": 1700000036000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "57992269972554",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 036.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 036",
+     "contentUrl": "/api/items/pod-41/file/57992269972554",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 036.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-037",
+    "oldEpisodeId": null,
+    "index": 37,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 037",
+    "subtitle": "Deterministic episode 037",
+    "description": "Episode 037 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-037",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1703196800000,
+    "addedAt": 1700000037000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "205703172037003",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 037.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 037",
+     "contentUrl": "/api/items/pod-41/file/205703172037003",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 037.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-038",
+    "oldEpisodeId": null,
+    "index": 38,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 038",
+    "subtitle": "Deterministic episode 038",
+    "description": "Episode 038 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-038",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1703283200000,
+    "addedAt": 1700000038000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "85154126620465",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 038.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 038",
+     "contentUrl": "/api/items/pod-41/file/85154126620465",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 038.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-039",
+    "oldEpisodeId": null,
+    "index": 39,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 039",
+    "subtitle": "Deterministic episode 039",
+    "description": "Episode 039 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-039",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1703369600000,
+    "addedAt": 1700000039000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "85543555018481",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 039.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 039",
+     "contentUrl": "/api/items/pod-41/file/85543555018481",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 039.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-040",
+    "oldEpisodeId": null,
+    "index": 40,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 040",
+    "subtitle": "Deterministic episode 040",
+    "description": "Episode 040 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-040",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1703456000000,
+    "addedAt": 1700000040000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "153816635996515",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 040.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 040",
+     "contentUrl": "/api/items/pod-41/file/153816635996515",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 040.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   },
+   {
+    "libraryItemId": "pod-41",
+    "podcastId": "pod-41",
+    "id": "pod41-ep-041",
+    "oldEpisodeId": null,
+    "index": 41,
+    "season": null,
+    "episode": null,
+    "episodeType": "full",
+    "title": "Fixture Forty-One Podcast \u2014 Episode 041",
+    "subtitle": "Deterministic episode 041",
+    "description": "Episode 041 of Fixture Forty-One Podcast.",
+    "enclosure": null,
+    "guid": "fixture-guid-pod-41-041",
+    "pubDate": "Tue, 14 Nov 2017 01:00:00 GMT",
+    "publishedAt": 1703542400000,
+    "addedAt": 1700000041000,
+    "chapters": [],
+    "audioFile": {
+     "ino": "229116927747012",
+     "mimeType": "audio/mpeg",
+     "duration": 1800.0,
+     "metadata": {
+      "filename": "Episode 041.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     },
+     "addedAt": 1700000000000,
+     "updatedAt": 1700000000000
+    },
+    "audioTrack": {
+     "index": 1,
+     "startOffset": 0.0,
+     "duration": 1800.0,
+     "title": "Episode 041",
+     "contentUrl": "/api/items/pod-41/file/229116927747012",
+     "mimeType": "audio/mpeg",
+     "codec": null,
+     "metadata": {
+      "filename": "Episode 041.mp3",
+      "size": 57600000,
+      "mimeType": "audio/mpeg"
+     }
+    },
+    "size": 57600000,
+    "duration": 1800.0
+   }
+  ]
+ }
+}

@@ -20,6 +20,16 @@ EXISTING=${SONIX_ABS_EXISTING:-0}
 LOCAL_PROGRESS=${SONIX_ABS_LOCAL_PROGRESS:-0}
 OFFLINE_RESTART=${SONIX_ABS_OFFLINE_RESTART:-0}
 CONFLICTS=${SONIX_ABS_CONFLICTS:-0}
+# §14.6: the smoke accepts SONIX_ABS_FIXTURE; default keeps §14.1 meaning. Fail
+# fast on an unknown alias before building; the mock enforces provenance/hash
+# integrity exactly at serve time.
+export SONIX_ABS_FIXTURE
+SONIX_ABS_FIXTURE="${SONIX_ABS_FIXTURE:-pinned-3563d49}"
+case "$SONIX_ABS_FIXTURE" in
+	pinned-3563d49|current-5de038d|eric-v2.38.0) ;;
+	*) fail "unknown SONIX_ABS_FIXTURE: $SONIX_ABS_FIXTURE" ;;
+esac
+printf 'Audiobookshelf smoke test: fixture %s (mock enforces full commit provenance)\n' "$SONIX_ABS_FIXTURE"
 
 fail() { printf 'Audiobookshelf smoke test: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"; }

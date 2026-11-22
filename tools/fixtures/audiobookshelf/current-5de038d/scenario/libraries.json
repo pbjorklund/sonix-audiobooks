@@ -1,0 +1,94 @@
+{
+ "libraries": [
+  {
+   "id": "mock-library",
+   "name": "Mock Audiobooks",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-search-1",
+   "name": "Fixture Search Range",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-list-1",
+   "name": "Fixture Fiction Shelf",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-pod-1",
+   "name": "Fixture Podcast Rack",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-pod-2",
+   "name": "Fixture Talk Shows",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-pod-3",
+   "name": "Fixture Long Shows",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-detail-1",
+   "name": "Fixture Details Shelf",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-mix-8",
+   "name": "Fixture Mixed Shelf Eight",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-mix-9",
+   "name": "Fixture Mixed Shelf Nine",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-mix-10",
+   "name": "Fixture Mixed Shelf Ten",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-mix-11",
+   "name": "Fixture Mixed Shelf Eleven",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-mix-12",
+   "name": "Fixture Mixed Shelf Twelve",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-mix-13",
+   "name": "Fixture Mixed Shelf Thirteen",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-mix-14",
+   "name": "Fixture Mixed Shelf Fourteen",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-mix-15",
+   "name": "Fixture Mixed Shelf Fifteen",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-mix-16",
+   "name": "Fixture Mixed Shelf Sixteen",
+   "mediaType": "book"
+  },
+  {
+   "id": "lib-mix-17",
+   "name": "Fixture Mixed Shelf Seventeen",
+   "mediaType": "podcast"
+  },
+  {
+   "id": "lib-mix-18",
+   "name": "Fixture Mixed Shelf Eighteen",
+   "mediaType": "book"
+  }
+ ]
+}

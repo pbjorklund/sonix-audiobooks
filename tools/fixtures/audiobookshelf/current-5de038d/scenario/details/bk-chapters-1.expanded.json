@@ -1,0 +1,35 @@
+{
+ "id": "bk-chapters-1",
+ "media": {
+  "duration": 300.0,
+  "coverPath": "/api/items/bk-chapters-1/cover",
+  "metadata": {
+   "title": "Fixture One Chapter Book",
+   "authorName": "Fixture Detail Author"
+  },
+  "tracks": [
+   {
+    "index": 1,
+    "startOffset": 0.0,
+    "duration": 300.0,
+    "title": "Fixture Part 1",
+    "contentUrl": "/api/items/bk-chapters-1/file/110809211271110",
+    "mimeType": "audio/mpeg",
+    "codec": null,
+    "metadata": {
+     "filename": "Fixture Part 1.mp3",
+     "size": 9600000,
+     "mimeType": "audio/mpeg"
+    }
+   }
+  ],
+  "chapters": [
+   {
+    "index": 1,
+    "startOffset": 0.0,
+    "endOffset": 300.0,
+    "title": "Chapter 1"
+   }
+  ]
+ }
+}

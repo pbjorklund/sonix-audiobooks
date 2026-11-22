@@ -1,0 +1,43 @@
+{
+ "id": "mock-book",
+ "media": {
+  "duration": 20,
+  "coverPath": "/fixture/cover.jpg",
+  "metadata": {
+   "title": "The Mock Journey",
+   "authorName": "Test Author",
+   "description": "A downloaded fixture used to prove resume import.",
+   "seriesName": "Fixture Series",
+   "series": [
+    {
+     "name": "Fixture Series",
+     "sequence": "2"
+    }
+   ]
+  },
+  "tracks": [
+   {
+    "index": 1,
+    "startOffset": 0,
+    "duration": 10,
+    "title": "Part One",
+    "contentUrl": "/api/items/mock-book/file/1",
+    "mimeType": "audio/mpeg",
+    "metadata": {
+     "filename": "Part One.mp3"
+    }
+   },
+   {
+    "index": 2,
+    "startOffset": 10,
+    "duration": 10,
+    "title": "Part Two",
+    "contentUrl": "/api/items/mock-book/file/2",
+    "mimeType": "audio/mpeg",
+    "metadata": {
+     "filename": "Part Two.mp3"
+    }
+   }
+  ]
+ }
+}

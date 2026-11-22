@@ -1,0 +1,6977 @@
+{
+ "schema": "sonix-abs-fixture-scenario-1",
+ "two_server_scenario": {
+  "identical_ids": true,
+  "credentials": [
+   "credential-a",
+   "credential-b"
+  ],
+  "note": "Both credentials authenticate against the same fixture URLs and see identical library/item/show/episode IDs, filterdata, corpora, and bytes; only per-item progress diverges per the seeds above. Token values are supplied at mock start time and are never stored in these fixtures."
+ },
+ "virtual_detail": "Items without a checked-in expanded detail file are expanded at request time by the mock from the dataset row: books get numTracks virtual tracks with ino=stable_ino(item_id, k) and chapters=[]; podcast shows get numEpisodes virtual episodes where every 11th episode has publishedAt=null (unknown date coverage). The derivation is deterministic in the item id and ordinal.",
+ "detail_index": {
+  "bk-full": "scenario/details/bk-full.expanded.json",
+  "bk-minimal": "scenario/details/bk-minimal.expanded.json",
+  "bk-chapters-0": "scenario/details/bk-chapters-0.expanded.json",
+  "bk-chapters-1": "scenario/details/bk-chapters-1.expanded.json",
+  "bk-chapters-400": "scenario/details/bk-chapters-400.expanded.json",
+  "bk-chapters-401": "scenario/details/bk-chapters-401.expanded.json",
+  "pod-41": "scenario/details/pod-41.expanded.json",
+  "pod-big": "scenario/details/pod-big.expanded.json",
+  "mock-book": "scenario/details/mock-book.expanded.json"
+ },
+ "items": {
+  "mock-library": [
+   {
+    "id": "mock-book",
+    "kind": "book",
+    "title": "The Mock Journey",
+    "author_name": "Test Author",
+    "author_ids": [
+     "author-1"
+    ],
+    "series": [
+     {
+      "id": "series-1",
+      "name": "Fixture Series",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "tag-legacy"
+    ],
+    "genre_ids": [
+     "genre-legacy"
+    ],
+    "added_at": 1700000000000,
+    "duration": 20.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/fixture/cover.jpg"
+   }
+  ],
+  "lib-search-1": [
+   {
+    "id": "sc-001",
+    "kind": "book",
+    "title": "Fixture Search Item 001",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000001000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-001/cover"
+   },
+   {
+    "id": "sc-002",
+    "kind": "book",
+    "title": "Fixture Search Item 002",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000002000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-002/cover"
+   },
+   {
+    "id": "sc-003",
+    "kind": "book",
+    "title": "Fixture Search Item 003",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000003000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-003/cover"
+   },
+   {
+    "id": "sc-004",
+    "kind": "book",
+    "title": "Fixture Search Item 004",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000004000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-004/cover"
+   },
+   {
+    "id": "sc-005",
+    "kind": "book",
+    "title": "Fixture Search Item 005",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000005000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-005/cover"
+   },
+   {
+    "id": "sc-006",
+    "kind": "book",
+    "title": "Fixture Search Item 006",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000006000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-006/cover"
+   },
+   {
+    "id": "sc-007",
+    "kind": "book",
+    "title": "Fixture Search Item 007",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000007000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-007/cover"
+   },
+   {
+    "id": "sc-008",
+    "kind": "book",
+    "title": "Fixture Search Item 008",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000008000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-008/cover"
+   },
+   {
+    "id": "sc-009",
+    "kind": "book",
+    "title": "Fixture Search Item 009",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000009000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-009/cover"
+   },
+   {
+    "id": "sc-010",
+    "kind": "book",
+    "title": "Fixture Search Item 010",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000010000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-010/cover"
+   },
+   {
+    "id": "sc-011",
+    "kind": "book",
+    "title": "Fixture Search Item 011",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000011000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-011/cover"
+   },
+   {
+    "id": "sc-012",
+    "kind": "book",
+    "title": "Fixture Search Item 012",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000012000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-012/cover"
+   },
+   {
+    "id": "sc-013",
+    "kind": "book",
+    "title": "Fixture Search Item 013",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000013000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-013/cover"
+   },
+   {
+    "id": "sc-014",
+    "kind": "book",
+    "title": "Fixture Search Item 014",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000014000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-014/cover"
+   },
+   {
+    "id": "sc-015",
+    "kind": "book",
+    "title": "Fixture Search Item 015",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000015000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-015/cover"
+   },
+   {
+    "id": "sc-016",
+    "kind": "book",
+    "title": "Fixture Search Item 016",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000016000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-016/cover"
+   },
+   {
+    "id": "sc-017",
+    "kind": "book",
+    "title": "Fixture Search Item 017",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000017000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-017/cover"
+   },
+   {
+    "id": "sc-018",
+    "kind": "book",
+    "title": "Fixture Search Item 018",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000018000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-018/cover"
+   },
+   {
+    "id": "sc-019",
+    "kind": "book",
+    "title": "Fixture Search Item 019",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000019000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-019/cover"
+   },
+   {
+    "id": "sc-020",
+    "kind": "book",
+    "title": "Fixture Search Item 020",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000020000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-020/cover"
+   },
+   {
+    "id": "sc-021",
+    "kind": "book",
+    "title": "Fixture Search Item 021",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000021000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-021/cover"
+   },
+   {
+    "id": "sc-022",
+    "kind": "book",
+    "title": "Fixture Search Item 022",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000022000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-022/cover"
+   },
+   {
+    "id": "sc-023",
+    "kind": "book",
+    "title": "Fixture Search Item 023",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000023000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-023/cover"
+   },
+   {
+    "id": "sc-024",
+    "kind": "book",
+    "title": "Fixture Search Item 024",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000024000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-024/cover"
+   },
+   {
+    "id": "sc-025",
+    "kind": "book",
+    "title": "Fixture Search Item 025",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000025000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-025/cover"
+   },
+   {
+    "id": "sc-026",
+    "kind": "book",
+    "title": "Fixture Search Item 026",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000026000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-026/cover"
+   },
+   {
+    "id": "sc-027",
+    "kind": "book",
+    "title": "Fixture Search Item 027",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000027000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-027/cover"
+   },
+   {
+    "id": "sc-028",
+    "kind": "book",
+    "title": "Fixture Search Item 028",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000028000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-028/cover"
+   },
+   {
+    "id": "sc-029",
+    "kind": "book",
+    "title": "Fixture Search Item 029",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000029000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-029/cover"
+   },
+   {
+    "id": "sc-030",
+    "kind": "book",
+    "title": "Fixture Search Item 030",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000030000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-030/cover"
+   },
+   {
+    "id": "sc-031",
+    "kind": "book",
+    "title": "Fixture Search Item 031",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000031000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-031/cover"
+   },
+   {
+    "id": "sc-032",
+    "kind": "book",
+    "title": "Fixture Search Item 032",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000032000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-032/cover"
+   },
+   {
+    "id": "sc-033",
+    "kind": "book",
+    "title": "Fixture Search Item 033",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000033000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-033/cover"
+   },
+   {
+    "id": "sc-034",
+    "kind": "book",
+    "title": "Fixture Search Item 034",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000034000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-034/cover"
+   },
+   {
+    "id": "sc-035",
+    "kind": "book",
+    "title": "Fixture Search Item 035",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000035000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-035/cover"
+   },
+   {
+    "id": "sc-036",
+    "kind": "book",
+    "title": "Fixture Search Item 036",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000036000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-036/cover"
+   },
+   {
+    "id": "sc-037",
+    "kind": "book",
+    "title": "Fixture Search Item 037",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000037000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-037/cover"
+   },
+   {
+    "id": "sc-038",
+    "kind": "book",
+    "title": "Fixture Search Item 038",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000038000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-038/cover"
+   },
+   {
+    "id": "sc-039",
+    "kind": "book",
+    "title": "Fixture Search Item 039",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000039000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-039/cover"
+   },
+   {
+    "id": "sc-040",
+    "kind": "book",
+    "title": "Fixture Search Item 040",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000040000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-040/cover"
+   },
+   {
+    "id": "sc-041",
+    "kind": "book",
+    "title": "Fixture Search Item 041",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000041000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-041/cover"
+   },
+   {
+    "id": "sc-042",
+    "kind": "book",
+    "title": "Fixture Search Item 042",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000042000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-042/cover"
+   },
+   {
+    "id": "sc-043",
+    "kind": "book",
+    "title": "Fixture Search Item 043",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000043000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-043/cover"
+   },
+   {
+    "id": "sc-044",
+    "kind": "book",
+    "title": "Fixture Search Item 044",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000044000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-044/cover"
+   },
+   {
+    "id": "sc-045",
+    "kind": "book",
+    "title": "Fixture Search Item 045",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000045000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-045/cover"
+   },
+   {
+    "id": "sc-046",
+    "kind": "book",
+    "title": "Fixture Search Item 046",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000046000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-046/cover"
+   },
+   {
+    "id": "sc-047",
+    "kind": "book",
+    "title": "Fixture Search Item 047",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000047000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-047/cover"
+   },
+   {
+    "id": "sc-048",
+    "kind": "book",
+    "title": "Fixture Search Item 048",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000048000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-048/cover"
+   },
+   {
+    "id": "sc-049",
+    "kind": "book",
+    "title": "Fixture Search Item 049",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000049000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-049/cover"
+   },
+   {
+    "id": "sc-050",
+    "kind": "book",
+    "title": "Fixture Search Item 050",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000050000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-050/cover"
+   },
+   {
+    "id": "sc-051",
+    "kind": "book",
+    "title": "Fixture Search Item 051",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000051000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-051/cover"
+   },
+   {
+    "id": "sc-052",
+    "kind": "book",
+    "title": "Fixture Search Item 052",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000052000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-052/cover"
+   },
+   {
+    "id": "sc-053",
+    "kind": "book",
+    "title": "Fixture Search Item 053",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000053000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-053/cover"
+   },
+   {
+    "id": "sc-054",
+    "kind": "book",
+    "title": "Fixture Search Item 054",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000054000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-054/cover"
+   },
+   {
+    "id": "sc-055",
+    "kind": "book",
+    "title": "Fixture Search Item 055",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000055000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-055/cover"
+   },
+   {
+    "id": "sc-056",
+    "kind": "book",
+    "title": "Fixture Search Item 056",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000056000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-056/cover"
+   },
+   {
+    "id": "sc-057",
+    "kind": "book",
+    "title": "Fixture Search Item 057",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000057000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-057/cover"
+   },
+   {
+    "id": "sc-058",
+    "kind": "book",
+    "title": "Fixture Search Item 058",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000058000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-058/cover"
+   },
+   {
+    "id": "sc-059",
+    "kind": "book",
+    "title": "Fixture Search Item 059",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000059000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-059/cover"
+   },
+   {
+    "id": "sc-060",
+    "kind": "book",
+    "title": "Fixture Search Item 060",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000060000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-060/cover"
+   },
+   {
+    "id": "sc-061",
+    "kind": "book",
+    "title": "Fixture Search Item 061",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000061000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-061/cover"
+   },
+   {
+    "id": "sc-062",
+    "kind": "book",
+    "title": "Fixture Search Item 062",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000062000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-062/cover"
+   },
+   {
+    "id": "sc-063",
+    "kind": "book",
+    "title": "Fixture Search Item 063",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000063000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-063/cover"
+   },
+   {
+    "id": "sc-064",
+    "kind": "book",
+    "title": "Fixture Search Item 064",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000064000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-064/cover"
+   },
+   {
+    "id": "sc-065",
+    "kind": "book",
+    "title": "Fixture Search Item 065",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000065000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-065/cover"
+   },
+   {
+    "id": "sc-066",
+    "kind": "book",
+    "title": "Fixture Search Item 066",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000066000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-066/cover"
+   },
+   {
+    "id": "sc-067",
+    "kind": "book",
+    "title": "Fixture Search Item 067",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000067000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-067/cover"
+   },
+   {
+    "id": "sc-068",
+    "kind": "book",
+    "title": "Fixture Search Item 068",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000068000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-068/cover"
+   },
+   {
+    "id": "sc-069",
+    "kind": "book",
+    "title": "Fixture Search Item 069",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000069000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-069/cover"
+   },
+   {
+    "id": "sc-070",
+    "kind": "book",
+    "title": "Fixture Search Item 070",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000070000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-070/cover"
+   },
+   {
+    "id": "sc-071",
+    "kind": "book",
+    "title": "Fixture Search Item 071",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000071000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-071/cover"
+   },
+   {
+    "id": "sc-072",
+    "kind": "book",
+    "title": "Fixture Search Item 072",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000072000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-072/cover"
+   },
+   {
+    "id": "sc-073",
+    "kind": "book",
+    "title": "Fixture Search Item 073",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000073000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-073/cover"
+   },
+   {
+    "id": "sc-074",
+    "kind": "book",
+    "title": "Fixture Search Item 074",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000074000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-074/cover"
+   },
+   {
+    "id": "sc-075",
+    "kind": "book",
+    "title": "Fixture Search Item 075",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000075000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-075/cover"
+   },
+   {
+    "id": "sc-076",
+    "kind": "book",
+    "title": "Fixture Search Item 076",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000076000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-076/cover"
+   },
+   {
+    "id": "sc-077",
+    "kind": "book",
+    "title": "Fixture Search Item 077",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000077000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-077/cover"
+   },
+   {
+    "id": "sc-078",
+    "kind": "book",
+    "title": "Fixture Search Item 078",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000078000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-078/cover"
+   },
+   {
+    "id": "sc-079",
+    "kind": "book",
+    "title": "Fixture Search Item 079",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000079000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-079/cover"
+   },
+   {
+    "id": "sc-080",
+    "kind": "book",
+    "title": "Fixture Search Item 080",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000080000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-080/cover"
+   },
+   {
+    "id": "sc-081",
+    "kind": "book",
+    "title": "Fixture Search Item 081",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000081000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-081/cover"
+   },
+   {
+    "id": "sc-082",
+    "kind": "book",
+    "title": "Fixture Search Item 082",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000082000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-082/cover"
+   },
+   {
+    "id": "sc-083",
+    "kind": "book",
+    "title": "Fixture Search Item 083",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000083000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-083/cover"
+   },
+   {
+    "id": "sc-084",
+    "kind": "book",
+    "title": "Fixture Search Item 084",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000084000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-084/cover"
+   },
+   {
+    "id": "sc-085",
+    "kind": "book",
+    "title": "Fixture Search Item 085",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000085000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-085/cover"
+   },
+   {
+    "id": "sc-086",
+    "kind": "book",
+    "title": "Fixture Search Item 086",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000086000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-086/cover"
+   },
+   {
+    "id": "sc-087",
+    "kind": "book",
+    "title": "Fixture Search Item 087",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000087000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-087/cover"
+   },
+   {
+    "id": "sc-088",
+    "kind": "book",
+    "title": "Fixture Search Item 088",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000088000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-088/cover"
+   },
+   {
+    "id": "sc-089",
+    "kind": "book",
+    "title": "Fixture Search Item 089",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000089000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-089/cover"
+   },
+   {
+    "id": "sc-090",
+    "kind": "book",
+    "title": "Fixture Search Item 090",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000090000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-090/cover"
+   },
+   {
+    "id": "sc-091",
+    "kind": "book",
+    "title": "Fixture Search Item 091",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000091000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-091/cover"
+   },
+   {
+    "id": "sc-092",
+    "kind": "book",
+    "title": "Fixture Search Item 092",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000092000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-092/cover"
+   },
+   {
+    "id": "sc-093",
+    "kind": "book",
+    "title": "Fixture Search Item 093",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000093000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-093/cover"
+   },
+   {
+    "id": "sc-094",
+    "kind": "book",
+    "title": "Fixture Search Item 094",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000094000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-094/cover"
+   },
+   {
+    "id": "sc-095",
+    "kind": "book",
+    "title": "Fixture Search Item 095",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000095000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-095/cover"
+   },
+   {
+    "id": "sc-096",
+    "kind": "book",
+    "title": "Fixture Search Item 096",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000096000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-096/cover"
+   },
+   {
+    "id": "sc-097",
+    "kind": "book",
+    "title": "Fixture Search Item 097",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000097000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-097/cover"
+   },
+   {
+    "id": "sc-098",
+    "kind": "book",
+    "title": "Fixture Search Item 098",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000098000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-098/cover"
+   },
+   {
+    "id": "sc-099",
+    "kind": "book",
+    "title": "Fixture Search Item 099",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000099000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-099/cover"
+   },
+   {
+    "id": "sc-100",
+    "kind": "book",
+    "title": "Fixture Search Item 100",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000100000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-100/cover"
+   },
+   {
+    "id": "sc-101",
+    "kind": "book",
+    "title": "Fixture Search Item 101",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000101000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-101/cover"
+   },
+   {
+    "id": "sc-102",
+    "kind": "book",
+    "title": "Fixture Search Item 102",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000102000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-102/cover"
+   },
+   {
+    "id": "sc-103",
+    "kind": "book",
+    "title": "Fixture Search Item 103",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000103000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-103/cover"
+   },
+   {
+    "id": "sc-104",
+    "kind": "book",
+    "title": "Fixture Search Item 104",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000104000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-104/cover"
+   },
+   {
+    "id": "sc-105",
+    "kind": "book",
+    "title": "Fixture Search Item 105",
+    "author_name": "Fixture Search Author",
+    "author_ids": [
+     "author-sr"
+    ],
+    "series": [],
+    "tag_ids": [
+     "tag-search"
+    ],
+    "genre_ids": [
+     "genre-search"
+    ],
+    "added_at": 1700000105000,
+    "duration": 600.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/sc-105/cover"
+   }
+  ],
+  "lib-list-1": [
+   {
+    "id": "pg-bk-001",
+    "kind": "book",
+    "title": "Fixture Paginated Book 001",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000001000,
+    "duration": 310.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-001/cover"
+   },
+   {
+    "id": "pg-bk-002",
+    "kind": "book",
+    "title": "Fixture Paginated Book 002",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000002000,
+    "duration": 320.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-002/cover"
+   },
+   {
+    "id": "pg-bk-003",
+    "kind": "book",
+    "title": "Fixture Paginated Book 003",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000003000,
+    "duration": 330.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-003/cover"
+   },
+   {
+    "id": "pg-bk-004",
+    "kind": "book",
+    "title": "Fixture Paginated Book 004",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000004000,
+    "duration": 340.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-004/cover"
+   },
+   {
+    "id": "pg-bk-005",
+    "kind": "book",
+    "title": "Fixture Paginated Book 005",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000005000,
+    "duration": 350.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-005/cover"
+   },
+   {
+    "id": "pg-bk-006",
+    "kind": "book",
+    "title": "Fixture Paginated Book 006",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000006000,
+    "duration": 360.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-006/cover"
+   },
+   {
+    "id": "pg-bk-007",
+    "kind": "book",
+    "title": "Fixture Paginated Book 007",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000007000,
+    "duration": 300.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-007/cover"
+   },
+   {
+    "id": "pg-bk-008",
+    "kind": "book",
+    "title": "Fixture Paginated Book 008",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000008000,
+    "duration": 310.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-008/cover"
+   },
+   {
+    "id": "pg-bk-009",
+    "kind": "book",
+    "title": "Fixture Paginated Book 009",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000009000,
+    "duration": 320.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-009/cover"
+   },
+   {
+    "id": "pg-bk-010",
+    "kind": "book",
+    "title": "Fixture Paginated Book 010",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000010000,
+    "duration": 330.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-010/cover"
+   },
+   {
+    "id": "pg-bk-011",
+    "kind": "book",
+    "title": "Fixture Paginated Book 011",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000011000,
+    "duration": 340.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-011/cover"
+   },
+   {
+    "id": "pg-bk-012",
+    "kind": "book",
+    "title": "Fixture Paginated Book 012",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000012000,
+    "duration": 350.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-012/cover"
+   },
+   {
+    "id": "pg-bk-013",
+    "kind": "book",
+    "title": "Fixture Paginated Book 013",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000013000,
+    "duration": 360.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-013/cover"
+   },
+   {
+    "id": "pg-bk-014",
+    "kind": "book",
+    "title": "Fixture Paginated Book 014",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000014000,
+    "duration": 300.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-014/cover"
+   },
+   {
+    "id": "pg-bk-015",
+    "kind": "book",
+    "title": "Fixture Paginated Book 015",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000015000,
+    "duration": 310.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-015/cover"
+   },
+   {
+    "id": "pg-bk-016",
+    "kind": "book",
+    "title": "Fixture Paginated Book 016",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000016000,
+    "duration": 320.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-016/cover"
+   },
+   {
+    "id": "pg-bk-017",
+    "kind": "book",
+    "title": "Fixture Paginated Book 017",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000017000,
+    "duration": 330.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-017/cover"
+   },
+   {
+    "id": "pg-bk-018",
+    "kind": "book",
+    "title": "Fixture Paginated Book 018",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000018000,
+    "duration": 340.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-018/cover"
+   },
+   {
+    "id": "pg-bk-019",
+    "kind": "book",
+    "title": "Fixture Paginated Book 019",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000019000,
+    "duration": 350.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-019/cover"
+   },
+   {
+    "id": "pg-bk-020",
+    "kind": "book",
+    "title": "Fixture Paginated Book 020",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000020000,
+    "duration": 360.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-020/cover"
+   },
+   {
+    "id": "pg-bk-021",
+    "kind": "book",
+    "title": "Fixture Paginated Book 021",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000021000,
+    "duration": 300.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-021/cover"
+   },
+   {
+    "id": "pg-bk-022",
+    "kind": "book",
+    "title": "Fixture Paginated Book 022",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000022000,
+    "duration": 310.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-022/cover"
+   },
+   {
+    "id": "pg-bk-023",
+    "kind": "book",
+    "title": "Fixture Paginated Book 023",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000023000,
+    "duration": 320.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-023/cover"
+   },
+   {
+    "id": "pg-bk-024",
+    "kind": "book",
+    "title": "Fixture Paginated Book 024",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000024000,
+    "duration": 330.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-024/cover"
+   },
+   {
+    "id": "pg-bk-025",
+    "kind": "book",
+    "title": "Fixture Paginated Book 025",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000025000,
+    "duration": 340.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-025/cover"
+   },
+   {
+    "id": "pg-bk-026",
+    "kind": "book",
+    "title": "Fixture Paginated Book 026",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000026000,
+    "duration": 350.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-026/cover"
+   },
+   {
+    "id": "pg-bk-027",
+    "kind": "book",
+    "title": "Fixture Paginated Book 027",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000027000,
+    "duration": 360.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-027/cover"
+   },
+   {
+    "id": "pg-bk-028",
+    "kind": "book",
+    "title": "Fixture Paginated Book 028",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000028000,
+    "duration": 300.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-028/cover"
+   },
+   {
+    "id": "pg-bk-029",
+    "kind": "book",
+    "title": "Fixture Paginated Book 029",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000029000,
+    "duration": 310.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-029/cover"
+   },
+   {
+    "id": "pg-bk-030",
+    "kind": "book",
+    "title": "Fixture Paginated Book 030",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000030000,
+    "duration": 320.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-030/cover"
+   },
+   {
+    "id": "pg-bk-031",
+    "kind": "book",
+    "title": "Fixture Paginated Book 031",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000031000,
+    "duration": 330.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-031/cover"
+   },
+   {
+    "id": "pg-bk-032",
+    "kind": "book",
+    "title": "Fixture Paginated Book 032",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000032000,
+    "duration": 340.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-032/cover"
+   },
+   {
+    "id": "pg-bk-033",
+    "kind": "book",
+    "title": "Fixture Paginated Book 033",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000033000,
+    "duration": 350.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-033/cover"
+   },
+   {
+    "id": "pg-bk-034",
+    "kind": "book",
+    "title": "Fixture Paginated Book 034",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000034000,
+    "duration": 360.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-034/cover"
+   },
+   {
+    "id": "pg-bk-035",
+    "kind": "book",
+    "title": "Fixture Paginated Book 035",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000035000,
+    "duration": 300.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-035/cover"
+   },
+   {
+    "id": "pg-bk-036",
+    "kind": "book",
+    "title": "Fixture Paginated Book 036",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000036000,
+    "duration": 310.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-036/cover"
+   },
+   {
+    "id": "pg-bk-037",
+    "kind": "book",
+    "title": "Fixture Paginated Book 037",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000037000,
+    "duration": 320.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-037/cover"
+   },
+   {
+    "id": "pg-bk-038",
+    "kind": "book",
+    "title": "Fixture Paginated Book 038",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000038000,
+    "duration": 330.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-038/cover"
+   },
+   {
+    "id": "pg-bk-039",
+    "kind": "book",
+    "title": "Fixture Paginated Book 039",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000039000,
+    "duration": 340.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-039/cover"
+   },
+   {
+    "id": "pg-bk-040",
+    "kind": "book",
+    "title": "Fixture Paginated Book 040",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-1"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000040000,
+    "duration": 350.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-040/cover"
+   },
+   {
+    "id": "pg-bk-041",
+    "kind": "book",
+    "title": "Fixture Paginated Book 041",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000041000,
+    "duration": 360.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-041/cover"
+   },
+   {
+    "id": "pg-bk-042",
+    "kind": "book",
+    "title": "Fixture Paginated Book 042",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000042000,
+    "duration": 300.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-042/cover"
+   },
+   {
+    "id": "pg-bk-043",
+    "kind": "book",
+    "title": "Fixture Paginated Book 043",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000043000,
+    "duration": 310.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-043/cover"
+   },
+   {
+    "id": "pg-bk-044",
+    "kind": "book",
+    "title": "Fixture Paginated Book 044",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000044000,
+    "duration": 320.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-044/cover"
+   },
+   {
+    "id": "pg-bk-045",
+    "kind": "book",
+    "title": "Fixture Paginated Book 045",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000045000,
+    "duration": 330.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-045/cover"
+   },
+   {
+    "id": "pg-bk-046",
+    "kind": "book",
+    "title": "Fixture Paginated Book 046",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000046000,
+    "duration": 340.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-046/cover"
+   },
+   {
+    "id": "pg-bk-047",
+    "kind": "book",
+    "title": "Fixture Paginated Book 047",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000047000,
+    "duration": 350.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-047/cover"
+   },
+   {
+    "id": "pg-bk-048",
+    "kind": "book",
+    "title": "Fixture Paginated Book 048",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000048000,
+    "duration": 360.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-048/cover"
+   },
+   {
+    "id": "pg-bk-049",
+    "kind": "book",
+    "title": "Fixture Paginated Book 049",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000049000,
+    "duration": 300.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-049/cover"
+   },
+   {
+    "id": "pg-bk-050",
+    "kind": "book",
+    "title": "Fixture Paginated Book 050",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000050000,
+    "duration": 310.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-050/cover"
+   },
+   {
+    "id": "pg-bk-051",
+    "kind": "book",
+    "title": "Fixture Paginated Book 051",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000051000,
+    "duration": 320.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-051/cover"
+   },
+   {
+    "id": "pg-bk-052",
+    "kind": "book",
+    "title": "Fixture Paginated Book 052",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000052000,
+    "duration": 330.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-052/cover"
+   },
+   {
+    "id": "pg-bk-053",
+    "kind": "book",
+    "title": "Fixture Paginated Book 053",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000053000,
+    "duration": 340.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-053/cover"
+   },
+   {
+    "id": "pg-bk-054",
+    "kind": "book",
+    "title": "Fixture Paginated Book 054",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000054000,
+    "duration": 350.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-054/cover"
+   },
+   {
+    "id": "pg-bk-055",
+    "kind": "book",
+    "title": "Fixture Paginated Book 055",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000055000,
+    "duration": 360.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-055/cover"
+   },
+   {
+    "id": "pg-bk-056",
+    "kind": "book",
+    "title": "Fixture Paginated Book 056",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000056000,
+    "duration": 300.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-056/cover"
+   },
+   {
+    "id": "pg-bk-057",
+    "kind": "book",
+    "title": "Fixture Paginated Book 057",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000057000,
+    "duration": 310.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-057/cover"
+   },
+   {
+    "id": "pg-bk-058",
+    "kind": "book",
+    "title": "Fixture Paginated Book 058",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000058000,
+    "duration": 320.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-058/cover"
+   },
+   {
+    "id": "pg-bk-059",
+    "kind": "book",
+    "title": "Fixture Paginated Book 059",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000059000,
+    "duration": 330.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-059/cover"
+   },
+   {
+    "id": "pg-bk-060",
+    "kind": "book",
+    "title": "Fixture Paginated Book 060",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000060000,
+    "duration": 340.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-060/cover"
+   },
+   {
+    "id": "pg-bk-061",
+    "kind": "book",
+    "title": "Fixture Paginated Book 061",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000061000,
+    "duration": 350.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-061/cover"
+   },
+   {
+    "id": "pg-bk-062",
+    "kind": "book",
+    "title": "Fixture Paginated Book 062",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000062000,
+    "duration": 360.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-062/cover"
+   },
+   {
+    "id": "pg-bk-063",
+    "kind": "book",
+    "title": "Fixture Paginated Book 063",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000063000,
+    "duration": 300.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-063/cover"
+   },
+   {
+    "id": "pg-bk-064",
+    "kind": "book",
+    "title": "Fixture Paginated Book 064",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000064000,
+    "duration": 310.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-064/cover"
+   },
+   {
+    "id": "pg-bk-065",
+    "kind": "book",
+    "title": "Fixture Paginated Book 065",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000065000,
+    "duration": 320.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-065/cover"
+   },
+   {
+    "id": "pg-bk-066",
+    "kind": "book",
+    "title": "Fixture Paginated Book 066",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000066000,
+    "duration": 330.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-066/cover"
+   },
+   {
+    "id": "pg-bk-067",
+    "kind": "book",
+    "title": "Fixture Paginated Book 067",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000067000,
+    "duration": 340.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-067/cover"
+   },
+   {
+    "id": "pg-bk-068",
+    "kind": "book",
+    "title": "Fixture Paginated Book 068",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000068000,
+    "duration": 350.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-068/cover"
+   },
+   {
+    "id": "pg-bk-069",
+    "kind": "book",
+    "title": "Fixture Paginated Book 069",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000069000,
+    "duration": 360.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-069/cover"
+   },
+   {
+    "id": "pg-bk-070",
+    "kind": "book",
+    "title": "Fixture Paginated Book 070",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000070000,
+    "duration": 300.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-070/cover"
+   },
+   {
+    "id": "pg-bk-071",
+    "kind": "book",
+    "title": "Fixture Paginated Book 071",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-1"
+    ],
+    "added_at": 1700000071000,
+    "duration": 310.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-071/cover"
+   },
+   {
+    "id": "pg-bk-072",
+    "kind": "book",
+    "title": "Fixture Paginated Book 072",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000072000,
+    "duration": 320.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-072/cover"
+   },
+   {
+    "id": "pg-bk-073",
+    "kind": "book",
+    "title": "Fixture Paginated Book 073",
+    "author_name": "Fixture Author One",
+    "author_ids": [
+     "author-fa-1"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000073000,
+    "duration": 330.0,
+    "num_tracks": 2,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-073/cover"
+   },
+   {
+    "id": "pg-bk-074",
+    "kind": "book",
+    "title": "Fixture Paginated Book 074",
+    "author_name": "Fixture Author Two",
+    "author_ids": [
+     "author-fa-2"
+    ],
+    "series": [
+     {
+      "id": "series-fa-2",
+      "name": "Fixture Series Two",
+      "sequence": "2"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000074000,
+    "duration": 340.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-074/cover"
+   },
+   {
+    "id": "pg-bk-075",
+    "kind": "book",
+    "title": "Fixture Paginated Book 075",
+    "author_name": "Fixture Author Three",
+    "author_ids": [
+     "author-fa-3"
+    ],
+    "series": [
+     {
+      "id": "series-fa-1",
+      "name": "Fixture Series One",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-fa-2"
+    ],
+    "genre_ids": [
+     "ge-fa-2"
+    ],
+    "added_at": 1700000075000,
+    "duration": 350.0,
+    "num_tracks": 4,
+    "num_episodes": 0,
+    "cover_path": "/api/items/pg-bk-075/cover"
+   }
+  ],
+  "lib-pod-1": [
+   {
+    "id": "pod-rack-001",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 001",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 13,
+    "cover_path": "/api/items/pod-rack-001/cover"
+   },
+   {
+    "id": "pod-rack-002",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 002",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000002000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 14,
+    "cover_path": "/api/items/pod-rack-002/cover"
+   },
+   {
+    "id": "pod-rack-003",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 003",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000003000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 15,
+    "cover_path": "/api/items/pod-rack-003/cover"
+   },
+   {
+    "id": "pod-rack-004",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 004",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000004000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 16,
+    "cover_path": "/api/items/pod-rack-004/cover"
+   },
+   {
+    "id": "pod-rack-005",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 005",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000005000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 17,
+    "cover_path": "/api/items/pod-rack-005/cover"
+   },
+   {
+    "id": "pod-rack-006",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 006",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000006000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 18,
+    "cover_path": "/api/items/pod-rack-006/cover"
+   },
+   {
+    "id": "pod-rack-007",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 007",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000007000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 19,
+    "cover_path": "/api/items/pod-rack-007/cover"
+   },
+   {
+    "id": "pod-rack-008",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 008",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000008000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 20,
+    "cover_path": "/api/items/pod-rack-008/cover"
+   },
+   {
+    "id": "pod-rack-009",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 009",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000009000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 21,
+    "cover_path": "/api/items/pod-rack-009/cover"
+   },
+   {
+    "id": "pod-rack-010",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 010",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000010000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 22,
+    "cover_path": "/api/items/pod-rack-010/cover"
+   },
+   {
+    "id": "pod-rack-011",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 011",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000011000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 23,
+    "cover_path": "/api/items/pod-rack-011/cover"
+   },
+   {
+    "id": "pod-rack-012",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 012",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000012000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 24,
+    "cover_path": "/api/items/pod-rack-012/cover"
+   },
+   {
+    "id": "pod-rack-013",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 013",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000013000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 25,
+    "cover_path": "/api/items/pod-rack-013/cover"
+   },
+   {
+    "id": "pod-rack-014",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 014",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000014000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 26,
+    "cover_path": "/api/items/pod-rack-014/cover"
+   },
+   {
+    "id": "pod-rack-015",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 015",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000015000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 27,
+    "cover_path": "/api/items/pod-rack-015/cover"
+   },
+   {
+    "id": "pod-rack-016",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 016",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000016000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 28,
+    "cover_path": "/api/items/pod-rack-016/cover"
+   },
+   {
+    "id": "pod-rack-017",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 017",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000017000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 29,
+    "cover_path": "/api/items/pod-rack-017/cover"
+   },
+   {
+    "id": "pod-rack-018",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 018",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000018000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 30,
+    "cover_path": "/api/items/pod-rack-018/cover"
+   },
+   {
+    "id": "pod-rack-019",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 019",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000019000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 31,
+    "cover_path": "/api/items/pod-rack-019/cover"
+   },
+   {
+    "id": "pod-rack-020",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 020",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000020000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 32,
+    "cover_path": "/api/items/pod-rack-020/cover"
+   },
+   {
+    "id": "pod-rack-021",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 021",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000021000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 33,
+    "cover_path": "/api/items/pod-rack-021/cover"
+   },
+   {
+    "id": "pod-rack-022",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 022",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000022000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 34,
+    "cover_path": "/api/items/pod-rack-022/cover"
+   },
+   {
+    "id": "pod-rack-023",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 023",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000023000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 35,
+    "cover_path": "/api/items/pod-rack-023/cover"
+   },
+   {
+    "id": "pod-rack-024",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 024",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000024000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 36,
+    "cover_path": "/api/items/pod-rack-024/cover"
+   },
+   {
+    "id": "pod-rack-025",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 025",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000025000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 37,
+    "cover_path": "/api/items/pod-rack-025/cover"
+   },
+   {
+    "id": "pod-rack-026",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 026",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000026000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 12,
+    "cover_path": "/api/items/pod-rack-026/cover"
+   },
+   {
+    "id": "pod-rack-027",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 027",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000027000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 13,
+    "cover_path": "/api/items/pod-rack-027/cover"
+   },
+   {
+    "id": "pod-rack-028",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 028",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000028000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 14,
+    "cover_path": "/api/items/pod-rack-028/cover"
+   },
+   {
+    "id": "pod-rack-029",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 029",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000029000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 15,
+    "cover_path": "/api/items/pod-rack-029/cover"
+   },
+   {
+    "id": "pod-rack-030",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 030",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000030000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 16,
+    "cover_path": "/api/items/pod-rack-030/cover"
+   },
+   {
+    "id": "pod-rack-031",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 031",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000031000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 17,
+    "cover_path": "/api/items/pod-rack-031/cover"
+   },
+   {
+    "id": "pod-rack-032",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 032",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000032000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 18,
+    "cover_path": "/api/items/pod-rack-032/cover"
+   },
+   {
+    "id": "pod-rack-033",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 033",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000033000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 19,
+    "cover_path": "/api/items/pod-rack-033/cover"
+   },
+   {
+    "id": "pod-rack-034",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 034",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000034000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 20,
+    "cover_path": "/api/items/pod-rack-034/cover"
+   },
+   {
+    "id": "pod-rack-035",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 035",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000035000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 21,
+    "cover_path": "/api/items/pod-rack-035/cover"
+   },
+   {
+    "id": "pod-rack-036",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 036",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000036000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 22,
+    "cover_path": "/api/items/pod-rack-036/cover"
+   },
+   {
+    "id": "pod-rack-037",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 037",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000037000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 23,
+    "cover_path": "/api/items/pod-rack-037/cover"
+   },
+   {
+    "id": "pod-rack-038",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 038",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000038000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 24,
+    "cover_path": "/api/items/pod-rack-038/cover"
+   },
+   {
+    "id": "pod-rack-039",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 039",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000039000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 25,
+    "cover_path": "/api/items/pod-rack-039/cover"
+   },
+   {
+    "id": "pod-rack-040",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 040",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000040000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 26,
+    "cover_path": "/api/items/pod-rack-040/cover"
+   },
+   {
+    "id": "pod-rack-041",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 041",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000041000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 27,
+    "cover_path": "/api/items/pod-rack-041/cover"
+   },
+   {
+    "id": "pod-rack-042",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 042",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000042000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 28,
+    "cover_path": "/api/items/pod-rack-042/cover"
+   },
+   {
+    "id": "pod-rack-043",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 043",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000043000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 29,
+    "cover_path": "/api/items/pod-rack-043/cover"
+   },
+   {
+    "id": "pod-rack-044",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 044",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000044000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 30,
+    "cover_path": "/api/items/pod-rack-044/cover"
+   },
+   {
+    "id": "pod-rack-045",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 045",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000045000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 31,
+    "cover_path": "/api/items/pod-rack-045/cover"
+   },
+   {
+    "id": "pod-rack-046",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 046",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000046000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 32,
+    "cover_path": "/api/items/pod-rack-046/cover"
+   },
+   {
+    "id": "pod-rack-047",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 047",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000047000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 33,
+    "cover_path": "/api/items/pod-rack-047/cover"
+   },
+   {
+    "id": "pod-rack-048",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 048",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000048000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 34,
+    "cover_path": "/api/items/pod-rack-048/cover"
+   },
+   {
+    "id": "pod-rack-049",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 049",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000049000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 35,
+    "cover_path": "/api/items/pod-rack-049/cover"
+   },
+   {
+    "id": "pod-rack-050",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 050",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000050000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 36,
+    "cover_path": "/api/items/pod-rack-050/cover"
+   },
+   {
+    "id": "pod-rack-051",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 051",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000051000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 37,
+    "cover_path": "/api/items/pod-rack-051/cover"
+   },
+   {
+    "id": "pod-rack-052",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 052",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000052000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 12,
+    "cover_path": "/api/items/pod-rack-052/cover"
+   },
+   {
+    "id": "pod-rack-053",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 053",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000053000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 13,
+    "cover_path": "/api/items/pod-rack-053/cover"
+   },
+   {
+    "id": "pod-rack-054",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 054",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000054000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 14,
+    "cover_path": "/api/items/pod-rack-054/cover"
+   },
+   {
+    "id": "pod-rack-055",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 055",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000055000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 15,
+    "cover_path": "/api/items/pod-rack-055/cover"
+   },
+   {
+    "id": "pod-rack-056",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 056",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000056000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 16,
+    "cover_path": "/api/items/pod-rack-056/cover"
+   },
+   {
+    "id": "pod-rack-057",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 057",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000057000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 17,
+    "cover_path": "/api/items/pod-rack-057/cover"
+   },
+   {
+    "id": "pod-rack-058",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 058",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000058000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 18,
+    "cover_path": "/api/items/pod-rack-058/cover"
+   },
+   {
+    "id": "pod-rack-059",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 059",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000059000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 19,
+    "cover_path": "/api/items/pod-rack-059/cover"
+   },
+   {
+    "id": "pod-rack-060",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 060",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000060000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 20,
+    "cover_path": "/api/items/pod-rack-060/cover"
+   },
+   {
+    "id": "pod-rack-061",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 061",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000061000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 21,
+    "cover_path": "/api/items/pod-rack-061/cover"
+   },
+   {
+    "id": "pod-rack-062",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 062",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000062000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 22,
+    "cover_path": "/api/items/pod-rack-062/cover"
+   },
+   {
+    "id": "pod-rack-063",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 063",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000063000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 23,
+    "cover_path": "/api/items/pod-rack-063/cover"
+   },
+   {
+    "id": "pod-rack-064",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 064",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000064000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 24,
+    "cover_path": "/api/items/pod-rack-064/cover"
+   },
+   {
+    "id": "pod-rack-065",
+    "kind": "podcast",
+    "title": "Fixture Rack Podcast 065",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000065000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 25,
+    "cover_path": "/api/items/pod-rack-065/cover"
+   }
+  ],
+  "lib-pod-2": [
+   {
+    "id": "pod-41",
+    "kind": "podcast",
+    "title": "Fixture Forty-One Podcast",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-1"
+    ],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 41,
+    "cover_path": "/api/items/pod-41/cover"
+   },
+   {
+    "id": "pod-talk-1",
+    "kind": "podcast",
+    "title": "Fixture Talk Show One",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000002000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 8,
+    "cover_path": "/api/items/pod-talk-1/cover"
+   },
+   {
+    "id": "pod-talk-2",
+    "kind": "podcast",
+    "title": "Fixture Talk Show Two",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000003000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 5,
+    "cover_path": "/api/items/pod-talk-2/cover"
+   },
+   {
+    "id": "pod-talk-3",
+    "kind": "podcast",
+    "title": "Fixture Talk Show Three",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000004000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 6,
+    "cover_path": "/api/items/pod-talk-3/cover"
+   }
+  ],
+  "lib-pod-3": [
+   {
+    "id": "pod-big",
+    "kind": "podcast",
+    "title": "Fixture Long Show",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [
+     "ta-pod-2"
+    ],
+    "genre_ids": [
+     "ge-pod-2"
+    ],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 120,
+    "cover_path": "/api/items/pod-big/cover"
+   },
+   {
+    "id": "pod-long-1",
+    "kind": "podcast",
+    "title": "Fixture Long Show One",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000002000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 30,
+    "cover_path": "/api/items/pod-long-1/cover"
+   },
+   {
+    "id": "pod-long-2",
+    "kind": "podcast",
+    "title": "Fixture Long Show Two",
+    "author_name": "Fixture Podcast Author",
+    "author_ids": [],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "ge-pod-1"
+    ],
+    "added_at": 1700000003000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 34,
+    "cover_path": "/api/items/pod-long-2/cover"
+   }
+  ],
+  "lib-detail-1": [
+   {
+    "id": "bk-full",
+    "kind": "book",
+    "title": "Fixture Full Details Book",
+    "author_name": "Fixture Detail Author",
+    "author_ids": [
+     "author-detail"
+    ],
+    "series": [
+     {
+      "id": "series-detail",
+      "name": "Fixture Detail Series",
+      "sequence": "1"
+     }
+    ],
+    "tag_ids": [
+     "ta-detail"
+    ],
+    "genre_ids": [
+     "ge-detail"
+    ],
+    "added_at": 1700000001000,
+    "duration": 1500.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/bk-full/cover"
+   },
+   {
+    "id": "bk-minimal",
+    "kind": "book",
+    "title": "Fixture Minimal Book",
+    "author_name": "Fixture Detail Author",
+    "author_ids": [
+     "author-detail"
+    ],
+    "series": [],
+    "tag_ids": [
+     "ta-detail"
+    ],
+    "genre_ids": [
+     "ge-detail"
+    ],
+    "added_at": 1700000002000,
+    "duration": 1500.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/bk-minimal/cover"
+   },
+   {
+    "id": "bk-chapters-0",
+    "kind": "book",
+    "title": "Fixture Zero Chapter Book",
+    "author_name": "Fixture Detail Author",
+    "author_ids": [
+     "author-detail"
+    ],
+    "series": [
+     {
+      "id": "series-detail",
+      "name": "Fixture Detail Series",
+      "sequence": "3"
+     }
+    ],
+    "tag_ids": [
+     "ta-detail"
+    ],
+    "genre_ids": [
+     "ge-detail"
+    ],
+    "added_at": 1700000003000,
+    "duration": 0.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/bk-chapters-0/cover"
+   },
+   {
+    "id": "bk-chapters-1",
+    "kind": "book",
+    "title": "Fixture One Chapter Book",
+    "author_name": "Fixture Detail Author",
+    "author_ids": [
+     "author-detail"
+    ],
+    "series": [
+     {
+      "id": "series-detail",
+      "name": "Fixture Detail Series",
+      "sequence": "4"
+     }
+    ],
+    "tag_ids": [
+     "ta-detail"
+    ],
+    "genre_ids": [
+     "ge-detail"
+    ],
+    "added_at": 1700000004000,
+    "duration": 300.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/bk-chapters-1/cover"
+   },
+   {
+    "id": "bk-chapters-400",
+    "kind": "book",
+    "title": "Fixture Four Hundred Chapter Book",
+    "author_name": "Fixture Detail Author",
+    "author_ids": [
+     "author-detail"
+    ],
+    "series": [
+     {
+      "id": "series-detail",
+      "name": "Fixture Detail Series",
+      "sequence": "5"
+     }
+    ],
+    "tag_ids": [
+     "ta-detail"
+    ],
+    "genre_ids": [
+     "ge-detail"
+    ],
+    "added_at": 1700000005000,
+    "duration": 120000.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/bk-chapters-400/cover"
+   },
+   {
+    "id": "bk-chapters-401",
+    "kind": "book",
+    "title": "Fixture Four Hundred One Chapter Book",
+    "author_name": "Fixture Detail Author",
+    "author_ids": [
+     "author-detail"
+    ],
+    "series": [
+     {
+      "id": "series-detail",
+      "name": "Fixture Detail Series",
+      "sequence": "6"
+     }
+    ],
+    "tag_ids": [
+     "ta-detail"
+    ],
+    "genre_ids": [
+     "ge-detail"
+    ],
+    "added_at": 1700000006000,
+    "duration": 120300.0,
+    "num_tracks": 3,
+    "num_episodes": 0,
+    "cover_path": "/api/items/bk-chapters-401/cover"
+   }
+  ],
+  "lib-mix-8": [
+   {
+    "id": "lib-mix-8-bk-1",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Eight Book 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-8"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000001000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-8-bk-1/cover"
+   },
+   {
+    "id": "lib-mix-8-bk-2",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Eight Book 2",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-8"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000002000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-8-bk-2/cover"
+   }
+  ],
+  "lib-mix-9": [
+   {
+    "id": "lib-mix-9-pod-1",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Nine Podcast 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-9"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 10,
+    "cover_path": "/api/items/lib-mix-9-pod-1/cover"
+   },
+   {
+    "id": "lib-mix-9-pod-2",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Nine Podcast 2",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-9"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000002000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 11,
+    "cover_path": "/api/items/lib-mix-9-pod-2/cover"
+   }
+  ],
+  "lib-mix-10": [
+   {
+    "id": "lib-mix-10-bk-1",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Ten Book 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-10"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000001000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-10-bk-1/cover"
+   },
+   {
+    "id": "lib-mix-10-bk-2",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Ten Book 2",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-10"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000002000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-10-bk-2/cover"
+   },
+   {
+    "id": "lib-mix-10-bk-3",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Ten Book 3",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-10"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000003000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-10-bk-3/cover"
+   }
+  ],
+  "lib-mix-11": [
+   {
+    "id": "lib-mix-11-pod-1",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Eleven Podcast 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-11"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 10,
+    "cover_path": "/api/items/lib-mix-11-pod-1/cover"
+   },
+   {
+    "id": "lib-mix-11-pod-2",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Eleven Podcast 2",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-11"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000002000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 11,
+    "cover_path": "/api/items/lib-mix-11-pod-2/cover"
+   },
+   {
+    "id": "lib-mix-11-pod-3",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Eleven Podcast 3",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-11"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000003000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 12,
+    "cover_path": "/api/items/lib-mix-11-pod-3/cover"
+   }
+  ],
+  "lib-mix-12": [
+   {
+    "id": "lib-mix-12-bk-1",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Twelve Book 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-12"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000001000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-12-bk-1/cover"
+   }
+  ],
+  "lib-mix-13": [
+   {
+    "id": "lib-mix-13-pod-1",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Thirteen Podcast 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-13"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 10,
+    "cover_path": "/api/items/lib-mix-13-pod-1/cover"
+   }
+  ],
+  "lib-mix-14": [
+   {
+    "id": "lib-mix-14-bk-1",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Fourteen Book 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-14"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000001000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-14-bk-1/cover"
+   },
+   {
+    "id": "lib-mix-14-bk-2",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Fourteen Book 2",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-14"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000002000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-14-bk-2/cover"
+   }
+  ],
+  "lib-mix-15": [
+   {
+    "id": "lib-mix-15-pod-1",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Fifteen Podcast 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-15"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 10,
+    "cover_path": "/api/items/lib-mix-15-pod-1/cover"
+   },
+   {
+    "id": "lib-mix-15-pod-2",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Fifteen Podcast 2",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-15"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000002000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 11,
+    "cover_path": "/api/items/lib-mix-15-pod-2/cover"
+   }
+  ],
+  "lib-mix-16": [
+   {
+    "id": "lib-mix-16-bk-1",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Sixteen Book 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-16"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000001000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-16-bk-1/cover"
+   }
+  ],
+  "lib-mix-17": [
+   {
+    "id": "lib-mix-17-pod-1",
+    "kind": "podcast",
+    "title": "Fixture Mixed Shelf Seventeen Podcast 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-17"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [],
+    "added_at": 1700000001000,
+    "duration": 0.0,
+    "num_tracks": 0,
+    "num_episodes": 10,
+    "cover_path": "/api/items/lib-mix-17-pod-1/cover"
+   }
+  ],
+  "lib-mix-18": [
+   {
+    "id": "lib-mix-18-bk-1",
+    "kind": "book",
+    "title": "Fixture Mixed Shelf Eighteen Book 1",
+    "author_name": "Fixture Mixed Author",
+    "author_ids": [
+     "author-lib-mix-18"
+    ],
+    "series": [],
+    "tag_ids": [],
+    "genre_ids": [
+     "genre-mixed"
+    ],
+    "added_at": 1700000001000,
+    "duration": 240.0,
+    "num_tracks": 1,
+    "num_episodes": 0,
+    "cover_path": "/api/items/lib-mix-18-bk-1/cover"
+   }
+  ]
+ },
+ "filterdata": {
+  "mock-library": {
+   "authors": [
+    {
+     "id": "author-1",
+     "name": "Test Author"
+    }
+   ],
+   "series": [
+    {
+     "id": "series-1",
+     "name": "Fixture Series"
+    }
+   ]
+  },
+  "lib-search-1": {
+   "authors": [
+    {
+     "id": "author-sr",
+     "name": "Fixture Search Author"
+    }
+   ],
+   "series": []
+  },
+  "lib-list-1": {
+   "authors": [
+    {
+     "id": "author-fa-1",
+     "name": "Fixture Author One"
+    },
+    {
+     "id": "author-fa-2",
+     "name": "Fixture Author Two"
+    },
+    {
+     "id": "author-fa-3",
+     "name": "Fixture Author Three"
+    }
+   ],
+   "series": [
+    {
+     "id": "series-fa-1",
+     "name": "Fixture Series One"
+    },
+    {
+     "id": "series-fa-2",
+     "name": "Fixture Series Two"
+    }
+   ],
+   "tags": [
+    {
+     "id": "ta-fa-1",
+     "name": "Fixture Tag Alpha"
+    },
+    {
+     "id": "ta-fa-2",
+     "name": "Fixture Tag Beta"
+    }
+   ],
+   "genres": [
+    {
+     "id": "ge-fa-1",
+     "name": "Fiction"
+    },
+    {
+     "id": "ge-fa-2",
+     "name": "Nonfiction"
+    }
+   ]
+  },
+  "lib-pod-1": {
+   "authors": [],
+   "series": [],
+   "tags": [
+    {
+     "id": "ta-pod-1",
+     "name": "Interviews"
+    },
+    {
+     "id": "ta-pod-2",
+     "name": "News"
+    }
+   ],
+   "genres": [
+    {
+     "id": "ge-pod-1",
+     "name": "Comedy"
+    },
+    {
+     "id": "ge-pod-2",
+     "name": "History"
+    }
+   ]
+  },
+  "lib-detail-1": {
+   "authors": [
+    {
+     "id": "author-detail",
+     "name": "Fixture Detail Author"
+    }
+   ],
+   "series": [
+    {
+     "id": "series-detail",
+     "name": "Fixture Detail Series"
+    }
+   ]
+  },
+  "lib-mix-8": {
+   "authors": [
+    {
+     "id": "author-lib-mix-8",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-9": {
+   "authors": [
+    {
+     "id": "author-lib-mix-9",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-10": {
+   "authors": [
+    {
+     "id": "author-lib-mix-10",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-11": {
+   "authors": [
+    {
+     "id": "author-lib-mix-11",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-12": {
+   "authors": [
+    {
+     "id": "author-lib-mix-12",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-13": {
+   "authors": [
+    {
+     "id": "author-lib-mix-13",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-14": {
+   "authors": [
+    {
+     "id": "author-lib-mix-14",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-15": {
+   "authors": [
+    {
+     "id": "author-lib-mix-15",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-16": {
+   "authors": [
+    {
+     "id": "author-lib-mix-16",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-17": {
+   "authors": [
+    {
+     "id": "author-lib-mix-17",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  },
+  "lib-mix-18": {
+   "authors": [
+    {
+     "id": "author-lib-mix-18",
+     "name": "Fixture Mixed Author"
+    }
+   ]
+  }
+ },
+ "search_corpora": {
+  "mock-library": {
+   "response": "legacy-book-only",
+   "legacy_rule": "legacy-substring",
+   "match_target": "the mock journey",
+   "keys": {
+    "m": [
+     "mock-book"
+    ]
+   }
+  },
+  "lib-search-1": {
+   "response": "canonical",
+   "keys": {
+    "zero": [],
+    "fourty": [
+     "sc-001",
+     "sc-002",
+     "sc-003",
+     "sc-004",
+     "sc-005",
+     "sc-006",
+     "sc-007",
+     "sc-008",
+     "sc-009",
+     "sc-010",
+     "sc-011",
+     "sc-012",
+     "sc-013",
+     "sc-014",
+     "sc-015",
+     "sc-016",
+     "sc-017",
+     "sc-018",
+     "sc-019",
+     "sc-020",
+     "sc-021",
+     "sc-022",
+     "sc-023",
+     "sc-024",
+     "sc-025",
+     "sc-026",
+     "sc-027",
+     "sc-028",
+     "sc-029",
+     "sc-030",
+     "sc-031",
+     "sc-032",
+     "sc-033",
+     "sc-034",
+     "sc-035",
+     "sc-036",
+     "sc-037",
+     "sc-038",
+     "sc-039",
+     "sc-040"
+    ],
+    "hundred": [
+     "sc-001",
+     "sc-002",
+     "sc-003",
+     "sc-004",
+     "sc-005",
+     "sc-006",
+     "sc-007",
+     "sc-008",
+     "sc-009",
+     "sc-010",
+     "sc-011",
+     "sc-012",
+     "sc-013",
+     "sc-014",
+     "sc-015",
+     "sc-016",
+     "sc-017",
+     "sc-018",
+     "sc-019",
+     "sc-020",
+     "sc-021",
+     "sc-022",
+     "sc-023",
+     "sc-024",
+     "sc-025",
+     "sc-026",
+     "sc-027",
+     "sc-028",
+     "sc-029",
+     "sc-030",
+     "sc-031",
+     "sc-032",
+     "sc-033",
+     "sc-034",
+     "sc-035",
+     "sc-036",
+     "sc-037",
+     "sc-038",
+     "sc-039",
+     "sc-040",
+     "sc-041",
+     "sc-042",
+     "sc-043",
+     "sc-044",
+     "sc-045",
+     "sc-046",
+     "sc-047",
+     "sc-048",
+     "sc-049",
+     "sc-050",
+     "sc-051",
+     "sc-052",
+     "sc-053",
+     "sc-054",
+     "sc-055",
+     "sc-056",
+     "sc-057",
+     "sc-058",
+     "sc-059",
+     "sc-060",
+     "sc-061",
+     "sc-062",
+     "sc-063",
+     "sc-064",
+     "sc-065",
+     "sc-066",
+     "sc-067",
+     "sc-068",
+     "sc-069",
+     "sc-070",
+     "sc-071",
+     "sc-072",
+     "sc-073",
+     "sc-074",
+     "sc-075",
+     "sc-076",
+     "sc-077",
+     "sc-078",
+     "sc-079",
+     "sc-080",
+     "sc-081",
+     "sc-082",
+     "sc-083",
+     "sc-084",
+     "sc-085",
+     "sc-086",
+     "sc-087",
+     "sc-088",
+     "sc-089",
+     "sc-090",
+     "sc-091",
+     "sc-092",
+     "sc-093",
+     "sc-094",
+     "sc-095",
+     "sc-096",
+     "sc-097",
+     "sc-098",
+     "sc-099",
+     "sc-100"
+    ],
+    "overflow": [
+     "sc-001",
+     "sc-002",
+     "sc-003",
+     "sc-004",
+     "sc-005",
+     "sc-006",
+     "sc-007",
+     "sc-008",
+     "sc-009",
+     "sc-010",
+     "sc-011",
+     "sc-012",
+     "sc-013",
+     "sc-014",
+     "sc-015",
+     "sc-016",
+     "sc-017",
+     "sc-018",
+     "sc-019",
+     "sc-020",
+     "sc-021",
+     "sc-022",
+     "sc-023",
+     "sc-024",
+     "sc-025",
+     "sc-026",
+     "sc-027",
+     "sc-028",
+     "sc-029",
+     "sc-030",
+     "sc-031",
+     "sc-032",
+     "sc-033",
+     "sc-034",
+     "sc-035",
+     "sc-036",
+     "sc-037",
+     "sc-038",
+     "sc-039",
+     "sc-040",
+     "sc-041",
+     "sc-042",
+     "sc-043",
+     "sc-044",
+     "sc-045",
+     "sc-046",
+     "sc-047",
+     "sc-048",
+     "sc-049",
+     "sc-050",
+     "sc-051",
+     "sc-052",
+     "sc-053",
+     "sc-054",
+     "sc-055",
+     "sc-056",
+     "sc-057",
+     "sc-058",
+     "sc-059",
+     "sc-060",
+     "sc-061",
+     "sc-062",
+     "sc-063",
+     "sc-064",
+     "sc-065",
+     "sc-066",
+     "sc-067",
+     "sc-068",
+     "sc-069",
+     "sc-070",
+     "sc-071",
+     "sc-072",
+     "sc-073",
+     "sc-074",
+     "sc-075",
+     "sc-076",
+     "sc-077",
+     "sc-078",
+     "sc-079",
+     "sc-080",
+     "sc-081",
+     "sc-082",
+     "sc-083",
+     "sc-084",
+     "sc-085",
+     "sc-086",
+     "sc-087",
+     "sc-088",
+     "sc-089",
+     "sc-090",
+     "sc-091",
+     "sc-092",
+     "sc-093",
+     "sc-094",
+     "sc-095",
+     "sc-096",
+     "sc-097",
+     "sc-098",
+     "sc-099",
+     "sc-100",
+     "sc-101"
+    ]
+   }
+  },
+  "lib-pod-1": {
+   "response": "canonical",
+   "keys": {
+    "pod": [
+     "pod-rack-001",
+     "pod-rack-002",
+     "pod-rack-003",
+     "pod-rack-004",
+     "pod-rack-005",
+     "pod-rack-006"
+    ],
+    "fresh": []
+   }
+  },
+  "lib-pod-2": {
+   "response": "canonical",
+   "keys": {
+    "twoshows": [
+     "pod-41",
+     "pod-talk-1"
+    ]
+   }
+  }
+ },
+ "progress_seeds": {
+  "mock-book": {
+   "credential-a": {
+    "currentTime": 13.0,
+    "isFinished": false,
+    "lastUpdate": 1700000000000
+   },
+   "credential-b": {
+    "currentTime": 17.5,
+    "isFinished": false,
+    "lastUpdate": 1700000001999
+   }
+  },
+  "pg-bk-001": {
+   "credential-a": {
+    "currentTime": 45.0,
+    "duration": 810.0,
+    "isFinished": false,
+    "lastUpdate": 1700000002000
+   },
+   "credential-b": {
+    "__status__": 404
+   }
+  },
+  "bk-full": {
+   "credential-a": {
+    "currentTime": 3.0,
+    "duration": 3000.0,
+    "isFinished": false,
+    "lastUpdate": 1700000003000
+   },
+   "credential-b": {
+    "currentTime": 2997.0,
+    "duration": 3000.0,
+    "isFinished": false,
+    "lastUpdate": 1700000003001
+   }
+  },
+  "bk-chapters-400": {
+   "credential-a": {
+    "__status__": 404
+   },
+   "credential-b": {
+    "currentTime": 60000.0,
+    "duration": 120000.0,
+    "isFinished": false,
+    "lastUpdate": 1700000004000
+   }
+  },
+  "pod-41/pod41-ep-001": {
+   "credential-a": {
+    "currentTime": 123.5,
+    "duration": 1200.0,
+    "isFinished": false,
+    "lastUpdate": 1700000005000
+   },
+   "credential-b": {
+    "currentTime": 1200.0,
+    "duration": 1200.0,
+    "isFinished": true,
+    "lastUpdate": 1700000005001
+   }
+  },
+  "pod-41/pod41-ep-002": {
+   "credential-a": {
+    "__status__": 404
+   },
+   "credential-b": {
+    "currentTime": 47.0,
+    "duration": 1200.0,
+    "isFinished": false,
+    "lastUpdate": 1700000006000
+   }
+  },
+  "pod-big/podbig-ep-010": {
+   "credential-a": {
+    "currentTime": 5.0,
+    "duration": 1800.0,
+    "isFinished": false,
+    "lastUpdate": 1700000007000
+   },
+   "credential-b": {
+    "__status__": 404
+   }
+  }
+ },
+ "expected": {
+  "libraries": {
+   "count": 18,
+   "book_libraries": 10,
+   "podcast_libraries": 8,
+   "first_library": "mock-library",
+   "note": "Array order is served order; the legacy first entry is preserved for \u00a714.1."
+  },
+  "pagination": {
+   "default_limit": 40,
+   "lib-list-1": {
+    "total": 75,
+    "limit": 40,
+    "pages": 2,
+    "page0_first": "pg-bk-001",
+    "page0_last": "pg-bk-040",
+    "page1_first": "pg-bk-041",
+    "page1_last": "pg-bk-075"
+   },
+   "lib-pod-1": {
+    "total": 65,
+    "limit": 40,
+    "pages": 2,
+    "page0_first": "pod-rack-001",
+    "page0_last": "pod-rack-040",
+    "page1_first": "pod-rack-041",
+    "page1_last": "pod-rack-065"
+   }
+  },
+  "sorts": {
+   "inputs": [
+    "media.metadata.title",
+    "media.metadata.author",
+    "addedAt",
+    "media.duration",
+    "media.numTracks",
+    "sequence"
+   ],
+   "expected": {
+    "media.metadata.title|desc=0": {
+     "first": "pg-bk-001",
+     "last": "pg-bk-075"
+    },
+    "media.metadata.title|desc=1": {
+     "first": "pg-bk-075",
+     "last": "pg-bk-001"
+    },
+    "media.metadata.author|desc=0": {
+     "first": "pg-bk-001",
+     "last": "pg-bk-074"
+    },
+    "media.metadata.author|desc=1": {
+     "first": "pg-bk-074",
+     "last": "pg-bk-001"
+    },
+    "addedAt|desc=0": {
+     "first": "pg-bk-001",
+     "last": "pg-bk-075"
+    },
+    "addedAt|desc=1": {
+     "first": "pg-bk-075",
+     "last": "pg-bk-001"
+    },
+    "media.duration|desc=0": {
+     "first": "pg-bk-007",
+     "last": "pg-bk-069"
+    },
+    "media.duration|desc=1": {
+     "first": "pg-bk-069",
+     "last": "pg-bk-007"
+    },
+    "media.numTracks|desc=0": {
+     "first": "pg-bk-004",
+     "last": "pg-bk-075"
+    },
+    "media.numTracks|desc=1": {
+     "first": "pg-bk-075",
+     "last": "pg-bk-004"
+    },
+    "sequence|filter=series-fa-1|desc=0": {
+     "first": "pg-bk-001",
+     "last": "pg-bk-075"
+    }
+   }
+  },
+  "filters": {
+   "groups": [
+    "authors",
+    "series",
+    "tags",
+    "genres"
+   ],
+   "expected": {
+    "authors.author-fa-1": {
+     "count": 25,
+     "first": "pg-bk-001",
+     "last": "pg-bk-073"
+    },
+    "authors.author-fa-2": {
+     "count": 25,
+     "first": "pg-bk-002",
+     "last": "pg-bk-074"
+    },
+    "authors.author-fa-3": {
+     "count": 25,
+     "first": "pg-bk-003",
+     "last": "pg-bk-075"
+    },
+    "series.series-fa-1": {
+     "count": 38,
+     "first": "pg-bk-001",
+     "last": "pg-bk-075"
+    },
+    "series.series-fa-2": {
+     "count": 37,
+     "first": "pg-bk-002",
+     "last": "pg-bk-074"
+    },
+    "tags.ta-fa-1": {
+     "count": 40,
+     "first": "pg-bk-001",
+     "last": "pg-bk-040"
+    },
+    "tags.ta-fa-2": {
+     "count": 35,
+     "first": "pg-bk-041",
+     "last": "pg-bk-075"
+    },
+    "genres.ge-fa-1": {
+     "count": 15,
+     "first": "pg-bk-001",
+     "last": "pg-bk-071"
+    },
+    "genres.ge-fa-2": {
+     "count": 60,
+     "first": "pg-bk-002",
+     "last": "pg-bk-075"
+    }
+   }
+  },
+  "search": {
+   "result_count_variants": {
+    "zero": 0,
+    "fourty": 40,
+    "hundred": 100,
+    "overflow": 101
+   },
+   "expected": {
+    "mock-library|q=m": {
+     "match_count": 1,
+     "first": "mock-book"
+    },
+    "lib-search-1|q=fourty": {
+     "match_count": 40,
+     "first": "sc-001"
+    },
+    "lib-search-1|q=hundred": {
+     "match_count": 100,
+     "first": "sc-001"
+    },
+    "lib-search-1|q=overflow": {
+     "match_count": 101,
+     "first": "sc-001"
+    },
+    "lib-search-1|q=zero": {
+     "match_count": 0,
+     "first": null
+    },
+    "lib-pod-1|q=fresh": {
+     "match_count": 0,
+     "first": null
+    },
+    "lib-pod-1|q=pod": {
+     "match_count": 6,
+     "first": "pod-rack-001"
+    },
+    "lib-pod-2|q=twoshows": {
+     "match_count": 2,
+     "first": "pod-41"
+    },
+    "limit_semantics": {
+     "note": "served = min(match_count, requested limit); a query that requests limit=101 on q=overflow sees all 101 matches, limit=40 shows the honest 40-result cap",
+     "overflow_at_limit_40": 40,
+     "overflow_at_limit_100": 100,
+     "overflow_at_limit_101": 101
+    }
+   }
+  },
+  "episodes": {
+   "pod-41": {
+    "episode_count": 41,
+    "audio_track_variant": "pod41-ep-001",
+    "fallback_no_audio_track": "pod41-ep-002",
+    "fallback_null_content_url": "pod41-ep-003",
+    "unknown_metadata_variant": "pod41-ep-004",
+    "enclosure_variant": "pod41-ep-005"
+   },
+   "pod-big": {
+    "episode_count": 120,
+    "min_expanded_bytes": 3145728
+   }
+  },
+  "chapters": {
+   "bk-chapters-0": 0,
+   "bk-chapters-1": 1,
+   "bk-chapters-400": 400,
+   "bk-chapters-401": 401
+  },
+  "book_details_optional_fields": {
+   "with_optional": "bk-full",
+   "without_optional": "bk-minimal"
+  },
+  "progress_divergence": {
+   "mock-book": {
+    "credential-a": 13.0,
+    "credential-b": 17.5
+   },
+   "pg-bk-001": {
+    "credential-a": 45.0,
+    "credential-b": 404
+   },
+   "pod-41/pod41-ep-001": {
+    "credential-a": 123.5,
+    "credential-b": "finished"
+   },
+   "pod-big/podb-ep-010": {
+    "credential-a": 5.0,
+    "credential-b": 404
+   }
+  }
+ }
+}
