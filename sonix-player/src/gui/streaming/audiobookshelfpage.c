@@ -1,4 +1,5 @@
 #include "audiobookshelfpage.h"
+#include "audiobookshelfprofiles.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -24,6 +25,7 @@
 #include "src/system/library/audiobookdb.h"
 #include "src/system/net/wifi.h"
 #include "src/system/playback/audiobook.h"
+#include "src/system/streaming/abs_profiles.h"
 #include "src/system/streaming/audiobookshelf.h"
 
 #include <ctype.h>
@@ -51,6 +53,8 @@ static view_t view;
 static char library_id[ABS_ID_MAX];
 static char library_name[ABS_NAME_MAX];
 static int item_page;
+static int selected_item = -1;
+static char selected_local_book[1280];
 
 static audiobookshelf_library_t libraries[ABS_LIBRARY_MAX];
 static int library_count;
@@ -62,6 +66,7 @@ static int group_count, group_page;
 static bool group_series;
 static char item_filter[200], group_name[ABS_NAME_MAX];
 static void draw_groups(void);
+static void draw_libraries(void);
 
 typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_ITEMS, JOB_SEARCH, JOB_GROUPS, JOB_DOWNLOAD, JOB_LINK } job_kind_t;
 typedef struct {
@@ -72,6 +77,7 @@ typedef struct {
 	char filter[200];
 	int page;
 } job_t;
+static void run_loading(const job_t *job);
 
 static pthread_mutex_t job_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t job_cond = PTHREAD_COND_INITIALIZER;
@@ -135,6 +141,72 @@ static void open_setup_cb(lv_event_t *e) {
 	switch_screen(setup_screen);
 }
 
+// The profile picker's add-a-server row: the same setup screen the top row
+// used before the picker existed. Its conversion into the profile Add/Edit
+// editor (§11.6) is a later piece; saving here still routes through the
+// committed legacy-config path.
+static void picker_setup_cb(void *user) {
+	(void)user;
+	open_setup_cb(NULL);
+}
+
+// A profile was selected in the picker and the store has already persisted it.
+// §11.4: the switch clears remote list/detail state and loads the new active
+// profile's libraries; queue jobs and manifests are untouched, and the next
+// browse request resolves its credentials against the newly active profile.
+// In-flight results that land after the clear are overwritten on return:
+// page_loaded_cb re-runs the libraries request whenever the page reopens.
+static void profile_selected_cb(void *user) {
+	(void)user;
+	view = VIEW_LIBRARIES;
+	library_count = 0;
+	item_count = item_total = 0;
+	item_page = 0;
+	free(groups);
+	groups = NULL;
+	group_count = group_page = 0;
+	group_series = false;
+	library_id[0] = library_name[0] = search_query[0] = '\0';
+	item_filter[0] = group_name[0] = '\0';
+	selected_item = -1;
+	selected_local_book[0] = '\0';
+
+	draw_libraries();
+	if (!audiobookshelf_configured() || !wifi_connected()) return;
+	job_t job = {.kind = JOB_LIBRARIES};
+	run_loading(&job);
+}
+
+static void open_profiles_cb(lv_event_t *e) {
+	(void)e;
+	// No busy guard, as with setup: switching profile during an in-flight
+	// download is safe by design (§11.4 -- a switch does not touch queue jobs,
+	// and every request resolves its own credentials).
+	switch_screen(audiobookshelfprofiles_screen());
+}
+
+// Active profile display for the ABS page's top row: name, falling back to
+// the normalized server for a nameless profile. Tokens are dropped as the
+// list copies come out of the store.
+static void top_row_label(char *out, size_t size) {
+	char active_id[ABS_PROFILE_ID_MAX];
+	if (!abs_profiles_active(active_id, sizeof(active_id))) {
+		// No active profile: the legacy (0.5.0 / migration-window) display.
+		const char *server = audiobookshelf_server();
+		snprintf(out, size, "%s", server[0] ? server : tr("audiobookshelf_not_configured"));
+		return;
+	}
+	abs_profile_t profiles[ABS_PROFILE_MAX];
+	int count = abs_profiles_list(profiles, ABS_PROFILE_MAX);
+	for (int i = 0; i < count; i++) {
+		if (strcmp(profiles[i].id, active_id) != 0) continue;
+		memset(profiles[i].token, 0, sizeof(profiles[i].token));
+		snprintf(out, size, "%s", profiles[i].name[0] ? profiles[i].name : profiles[i].server);
+		return;
+	}
+	snprintf(out, size, "%s", audiobookshelf_server());
+}
+
 static void submit(const job_t *job) {
 	pthread_mutex_lock(&job_lock);
 	if (!busy) {
@@ -164,9 +236,6 @@ static void library_clicked_cb(lv_event_t *e) {
 	snprintf(job.id, sizeof(job.id), "%s", library_id);
 	run_loading(&job);
 }
-
-static int selected_item = -1;
-static char selected_local_book[1280];
 
 static void normalized_name(const char *input, char *out, size_t size) {
 	size_t written = 0;
@@ -357,11 +426,17 @@ static void draw_libraries(void) {
 	lv_label_set_text(page_title, tr("audiobookshelf"));
 	lv_obj_clean(content);
 
+	// §11.4: the current profile is the page's top row and opens the picker.
+	// While no profile is active (0.5.0 store, migration window) the row keeps
+	// its old meaning -- the legacy server display, opening setup directly.
+	char label[ABS_SERVER_MAX];
+	bool have_active = abs_profiles_active(NULL, 0);
 	lv_obj_t *server_value = NULL;
-	settingsrow_add(content, "audiobookshelf_server", &server_value, open_setup_cb, NULL);
+	settingsrow_add(content, have_active ? "audiobookshelf_profile" : "audiobookshelf_server",
+					&server_value, have_active ? open_profiles_cb : open_setup_cb, NULL);
+	top_row_label(label, sizeof(label));
 	if (server_value) {
-		lv_label_set_text(server_value,
-						  audiobookshelf_server()[0] ? audiobookshelf_server() : tr("audiobookshelf_not_configured"));
+		lv_label_set_text(server_value, label);
 		lv_label_set_long_mode(server_value, LV_LABEL_LONG_DOT);
 		lv_obj_set_width(server_value, lv_pct(52));
 		lv_obj_set_height(server_value, lv_font_get_line_height(&font_ui_20));
@@ -878,6 +953,12 @@ void audiobookshelfpage_init(gui_config_t *cfg) {
 	content = settingsrow_page(audiobookshelf_screen, cfg, "audiobookshelf");
 	page_title = settingsrow_page_title(audiobookshelf_screen);
 	build_setup();
+	audiobookshelfprofiles_delegate_t profiles_delegate = {
+		.on_selected = profile_selected_cb,
+		.on_setup = picker_setup_cb,
+		.user = NULL,
+	};
+	audiobookshelfprofiles_init(cfg, &profiles_delegate);
 	search_screen = lv_obj_create(NULL);
 	lv_obj_add_style(search_screen, &theme_style_screen, 0);
 	settingsrow_title(search_screen, config, "search");
