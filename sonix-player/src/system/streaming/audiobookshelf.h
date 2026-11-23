@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // The download queue's media surface (§8.2/§8.5) is declared against the
 // queue's types: the ops receive jobs, file rows and plans, never tokens.
@@ -112,6 +113,60 @@ typedef struct {
 	audiobookshelf_track_t tracks[ABS_TRACK_MAX];
 	int track_count;
 } audiobookshelf_book_t;
+
+// ---------------------------------------------------------------------------
+// The book-detail display model (§9.3): a small projection of one expanded
+// item, deliberately separate from audiobookshelf_book_t. Display and
+// download have different lifetimes and memory needs (ADR-3): the detail
+// never carries the 256 inline download tracks -- the queue refetches
+// media.tracks under its own auth snapshot -- and its chapters are exact
+// heap allocations shown with an explicit overflow row past 400.
+//
+//   narrator           media.metadata.narratorName (the v2.3x `narrator`
+//                      wire name the checked-in fixtures record is read as a
+//                      fallback); the row hides when empty (§9.1)
+//   series_part        the first series' `sequence` VERBATIM (§9.1: "1.5"
+//                      survives; never an integer cast)
+//   description        descriptionPlain preferred, else the raw description
+//                      cleaned through the shared description helper: no
+//                      LVGL markup, no raw publisher HTML, 8 KiB cap
+//   chapters           media.chapters[] only (§9.1: never inferred from
+//                      tracks); sorted by (start,id) for display -- this is
+//                      the display projection and stays clear of the local
+//                      playback chapter parsing
+//   chapters_overflow  true when the server's chapter list was truncated at
+//                      the cap, or its numChapters counts more than it sent
+// ---------------------------------------------------------------------------
+#define ABS_DETAIL_DESCRIPTION_MAX 8192
+#define ABS_DETAIL_CHAPTER_MAX 400
+
+typedef struct {
+	int64_t id;
+	double start, end;
+	char title[192];
+} abs_detail_chapter_t;
+
+typedef struct {
+	audiobookshelf_item_t item; // no inline tracks in this wrapper (§9.3)
+	char narrator[ABS_NAME_MAX];
+	char series_part[32];
+	char description[ABS_DETAIL_DESCRIPTION_MAX + 1];
+	abs_detail_chapter_t *chapters; // exact heap allocation, <= 400
+	int chapter_count;
+	bool chapters_overflow;
+} audiobookshelf_detail_t;
+
+// Fetches one item's expanded detail (GET /api/items/{id}?expanded=1&include=
+// progress,authors -- the same request audiobookshelf_book() sends) into a
+// CALLER-OWNED heap object; the worker owns it until an immutable GUI
+// generation accepts it, and cancelled/stale completions free it (§9.3).
+// NULL on any failure with audiobookshelf_last_error() set. Like
+// audiobookshelf_book(), this buffers a large JSON body and belongs on a
+// worker thread; it holds abs_catalog_lock for the duration (§8.3).
+audiobookshelf_detail_t *audiobookshelf_detail(const char *item_id);
+
+// Releases the chapters and the object. NULL is allowed.
+void audiobookshelf_detail_free(audiobookshelf_detail_t *detail);
 
 // Reads the saved server address and bearer token. Call after config_init().
 void audiobookshelf_init(void);

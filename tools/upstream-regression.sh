@@ -19,7 +19,7 @@ cat >"$WORK/miniz_tinfl.c" <<'EOF'
 EOF
 gcc "${FLAGS[@]}" -Isrc/system/image/miniz -c "$WORK/miniz_tinfl.c" -o "$WORK/miniz_tinfl.o"
 gcc "${FLAGS[@]}" "$ROOT/tools/metadata-probe.c" \
-    src/system/library/metadata.c src/system/library/oggtags.c src/system/library/cue.c \
+    src/system/library/description.c src/system/library/metadata.c src/system/library/oggtags.c src/system/library/cue.c \
     src/system/core/utils.c src/system/core/config.c \
     src/system/decode/{decode,mp4,wavpackdec,apedec,sndfile,stb_vorbis}.c \
     "$WORK/miniz_tinfl.o" \

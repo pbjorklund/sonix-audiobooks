@@ -88,6 +88,34 @@ fi
 grep -q 'audiobookshelfqueue_open' "$PAGE" || fail_s "the page never opens the queue"
 grep -q 'audiobookdb_scan_start' "$PAGE" || fail_s "no per-job-completion follow-up scan in the page (§8.5 line 587)"
 
+# §9.2 (M4 WS3): the tapped row opens the detail; the whole-catalog local
+# scan is the worker's job, never the click handler's. The detail screen
+# itself holds no HTTP/SQLite and no queue commands; its actions run through
+# the page's delegate, and the model is released on unload.
+DETAILGUI="$PLAYER/src/gui/streaming/audiobookshelfdetail.c"
+[[ -f "$DETAILGUI" ]] || fail_s "audiobookshelfdetail.c is missing (§9.4)"
+if grep -qE 'http_|sqlite3_|abs_download_|audiobookdb_|audiobookshelf_book\(|unique_local_match' "$DETAILGUI"; then
+	fail_s "the detail screen reached into HTTP/SQLite/engine internals (§9.2)"
+fi
+# The row tap opens the detail and runs no catalog scan itself: the first
+# lines after the handler hold the open call, and no unique_local_match
+# anywhere below the handler's line is left in it (the scan moved to JOB_DETAIL).
+ICLICK_LINE=$(grep -n 'static void item_click_cb' "$PAGE" | tail -1 | cut -d: -f1)
+[[ -n "$ICLICK_LINE" ]] || fail_s "item_click_cb moved: the §9.2 assertions need re-anchoring"
+sed -n "$((ICLICK_LINE)),$((ICLICK_LINE + 30))p" "$PAGE" | grep -q 'unique_local_match' &&
+	fail_s "the row tap still runs the whole-catalog local match on the LVGL thread (§9.2)"
+sed -n "$((ICLICK_LINE)),$((ICLICK_LINE + 30))p" "$PAGE" | grep -q 'audiobookshelfdetail_open' ||
+	fail_s "the row tap no longer opens the detail (§9.2)"
+grep -q 'JOB_DETAIL' "$PAGE" || fail_s "the page has no JOB_DETAIL (§9.2)"
+grep -q 'audiobookshelfdetail_receive' "$PAGE" || fail_s "the worker never hands the model to the detail screen"
+grep -q 'audiobookshelf_detail_free(done.payload)' "$PAGE" ||
+	fail_s "a stale detail completion is not freed in the GUI consumer (§9.3)"
+for key in audiobookshelf_detail audiobookshelf_detail_loading audiobookshelf_detail_failed \
+	audiobookshelf_detail_summary audiobookshelf_detail_chapters audiobookshelf_detail_queue \
+	audiobookshelf_detail_play_local audiobookshelf_detail_chapters_overflow; do
+	grep -q "^$key = " "$INIFILE" || fail_s "English.ini lost detail key $key"
+done
+
 # ------------------------------------------------------------- environment --
 for command in ffmpeg make python3 scrot sqlite3 Xvfb xdotool; do need "$command"; done
 [[ "$ROOT" != *' '* ]] || fail "the checkout path contains spaces"
@@ -159,9 +187,52 @@ enter_abs_libraries() {
 	sleep 1                             # the fetch published -> draw_libraries
 }
 reopen_abs_libraries() {
-	click 43 88 0.8                     # (queue screen ->) the ABS page
-	click 43 88 0.8                     # the ABS page -> Streaming
+	# The walk is one screen longer than the §8.5 shape: the §9.2 detail sits
+	# between the queue and the ABS page. The page's own back-guard turns one
+	# chevron into the in-page books->libraries step once the detail-return
+	# redraw landed the books view (§9.2), so the walk's chevron count is the
+	# call site's knowledge: a session that never opened a detail (P1) needs
+	# three chevrons to reach Streaming, every later one needs four.
+	local chevrons=${1:-4}
+	local i
+	for ((i = 0; i < chevrons; i++)); do
+		click 43 88 0.8
+	done
 	enter_abs_libraries
+}
+# §9.2 item activation: the tap opens the detail; the §11.5 decision tree
+# (the whole-catalog local match) runs in the worker behind it, and the
+# "Queue download" action enqueues. The detail's action rows sit at the
+# bottom of the page (below the description, §9.2's sketch order), so the
+# flow scrolls to the last view before tapping the primary action.
+detail_fetches() {
+	grep -c 'GET /api/items/.*expanded=1&include=progress,authors ' "$REQUESTS" 2>/dev/null || true
+}
+scroll_actions_visible() {
+	# Three whole-screen drags up pin the page at the bottom, where the
+	# primary action row is the second-to-last row: (240, 672) in a 480x800
+	# window. The long drag is never a click.
+	for ((r = 0; r < 3; r++)); do
+		xdotool mousemove --window "$WINDOW" 300 700 mousedown 1
+		for y in 620 540 460 380; do
+			xdotool mousemove --window "$WINDOW" 300 "$y"
+			sleep 0.05
+		done
+		xdotool mouseup 1
+		sleep 0.4
+	done
+}
+open_book_detail_and_queue() {
+	local base
+	base=$(detail_fetches)
+	click 240 277 1.1                   # the book row -> the §9.2 detail
+	for ((i = 0; i < 100; i++)); do
+		[[ "$(detail_fetches)" -gt "$base" ]] && break
+		sleep 0.1
+	done
+	[[ "$(detail_fetches)" -gt "$base" ]] || fail "the detail fetch never landed"
+	scroll_actions_visible
+	click 240 622 0.4                   # the primary action (Queue download)
 }
 
 # The queue database is the durable intent; the UI assertions below read it,
@@ -244,10 +315,9 @@ shot "$WORK/queue-empty.png"
 count_is 0 || fail "the queue started non-empty"
 
 # ------------- P1: enqueue via begin_download -> the row appears --------
-click 43 88 1                       # queue -> the ABS page (the library view persists under it)
+reopen_abs_libraries 2              # the fresh session: queue -> the ABS page -> Streaming
 click 236 417 1.2                   # Mock Audiobooks
-click 240 277 1.1                   # The Mock Journey
-click 330 475 0.3                   # confirm Download (-> begin_download -> the queue screen)
+open_book_detail_and_queue          # the book -> detail -> Queue download -> the queue screen
 wait_for "begin_download to enqueue a job" 40 count_is 1
 wait_for "the worker to take the job" 110 is_state 1 DOWNLOADING
 sleep 2                             # mid file 2 (the throttled one)
@@ -287,8 +357,7 @@ shot "$WORK/queue-after-remove.png"
 # ------------- P4: fresh enqueue -> DONE -> follow-up scan -> import ----
 reopen_abs_libraries                # from the emptied queue back to the library view
 click 236 417 1.2                   # Mock Audiobooks
-click 240 277 1.1
-click 330 475 0.3
+open_book_detail_and_queue
 wait_for "durable queue DONE" 400 is_state 1 DONE
 wait_for "the acknowledgement commit" 100 ack_committed
 shot "$WORK/queue-done-row.png"
@@ -314,8 +383,7 @@ wait_for "the imported 3.0 s checkpoint" 30 resume_30s
 # tap dedupes instead of queueing a second copy (§8.1).
 reopen_abs_libraries
 click 236 527 1.3                   # Fixture Search Range
-click 240 277 1.1                   # first fixture title
-click 330 475 0.3                   # confirm Download
+open_book_detail_and_queue          # first fixture title -> detail -> Queue download
 wait_for "the wrong-length row to park" 100 is_state 2 WAITING_NETWORK
 shot "$WORK/queue-waiting-row.png"
 # Re-tap the same book: re-entering the ABS page re-runs its load job, which
@@ -323,8 +391,7 @@ shot "$WORK/queue-waiting-row.png"
 # dedupe walk goes explicitly through the library view again.
 reopen_abs_libraries
 click 236 527 1.2                   # Fixture Search Range
-click 240 277 1.1                   # the same book again
-click 330 475 0.3                   # confirm Download again (dedupe path)
+open_book_detail_and_queue          # the same book again (dedupe path)
 sleep 1
 [[ "$(job_count)" == "2" ]] || fail "a duplicate enqueue of an unfinished row created a second copy (§8.1 dedup): $(sql 'SELECT id,state,title FROM DOWNLOAD_JOB;')"
 is_state 2 WAITING_NETWORK || fail "the deduped row changed state: $(state_at 2)"

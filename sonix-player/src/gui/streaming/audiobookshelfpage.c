@@ -1,4 +1,5 @@
 #include "audiobookshelfpage.h"
+#include "audiobookshelfdetail.h"
 #include "audiobookshelfprofiles.h"
 
 #include <pthread.h>
@@ -13,7 +14,6 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/library/audiobooks.h"
 #include "src/gui/nowplaying/player.h"
-#include "src/gui/shell/confirm.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/shell/popover.h"
@@ -120,7 +120,7 @@ static void open_filter_kind_cb(lv_event_t *e);
 static void request_group_kind(abs_browse_filter_t kind);
 static void library_clicked_cb(lv_event_t *e);
 
-typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_BROWSE, JOB_SEARCH, JOB_GROUPS, JOB_LINK } job_kind_t;
+typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_BROWSE, JOB_SEARCH, JOB_GROUPS, JOB_LINK, JOB_DETAIL } job_kind_t;
 typedef struct {
 	job_kind_t kind;
 	uint32_t generation; // browse generation at submit time (§11.4)
@@ -129,6 +129,15 @@ typedef struct {
 	char text[ABS_NAME_MAX];   // JOB_SEARCH text
 	abs_browse_filter_t group; // JOB_GROUPS kind
 	char path[1280];
+	// §9.2: JOB_DETAIL carries the tapped item's identity as a copy -- the
+	// active profile id (empty in the §11.1 migration window), the library
+	// the tap came from, and the row's display title. The worker never
+	// reads the page's statics and never holds a browse-page index; the
+	// display seed the detail screen paints while loading lives in the
+	// detail module (open() copies it there).
+	char profile_id[ABS_PROFILE_ID_MAX];
+	char library_id[ABS_ID_MAX];
+	char title[ABS_NAME_MAX];
 } job_t;
 static void run_loading(const job_t *job);
 
@@ -154,6 +163,12 @@ typedef struct {
 	bool ok;
 	uint32_t generation;
 	char error[256];
+	// §9.2 JOB_DETAIL handoff: the worker-owned detail model travels once,
+	// worker → GUI-thread consume, and dies on both discard paths (stale
+	// here, screen-left in the detail module). Other jobs never set it.
+	audiobookshelf_detail_t *payload;
+	abs_detail_local_t local;
+	char local_path[1280];
 } job_result_t;
 static job_result_t result;
 
@@ -234,6 +249,9 @@ static void clear_browse_state(void) {
 	filter_title[0] = '\0';
 	selected_id[0] = selected_title[0] = '\0';
 	selected_local_book[0] = '\0';
+	// §9.2: the open detail belongs to the browsing session that opened it --
+	// its identity and any accepted model go with it.
+	audiobookshelfdetail_forget();
 	pthread_mutex_unlock(&job_lock);
 }
 
@@ -709,13 +727,83 @@ static void begin_link(void *user) {
 	run_loading(&job);
 }
 
-// A row of the book list was tapped. The decision tree covers every state a
-// unique local match can be in (§11.5): already linked to this server item ->
-// resume the local copy at its checkpoint; bound to ANOTHER server -> the
-// explicit "download anyway from this server" choice, which never rewrites
-// the other server's manifest (its copy stays its own; the new download lands
-// in this server's own abs-<hash> directory); unbound, or bound to this
-// server with a different item id -> the explicit re-link question, as before.
+// ---------------------------------------------------------------------------
+// The §9.2 detail flow. The tapped row's decision tree (the whole-catalog
+// local match and its three outcomes) moved off the LVGL thread into
+// JOB_DETAIL: the page here only copies the identity and opens the detail
+// screen; the worker fetches the expanded model, then scans the catalog on
+// the fresh item, and the immutable generation check hands both over.
+// ---------------------------------------------------------------------------
+
+// Back from the detail redraws the books view the tap left: the retained
+// page IS the last request's generation (§10.2), so the same library, query,
+// sort/filter and page come back without a request, and the scroll offset
+// rides with the redraw.
+static bool detail_return;
+static int detail_scroll_y;
+
+// The detail screen's refill: the single submission path for JOB_DETAIL
+// (first open and every re-entry without a model). Skipping while busy is
+// safe -- a fetch already in flight for this open posts its completion.
+static void detail_request_cb(void *user) {
+	(void)user;
+	pthread_mutex_lock(&job_lock);
+	bool in_flight = busy;
+	pthread_mutex_unlock(&job_lock);
+	if (in_flight) return;
+	if (!audiobookshelf_configured()) {
+		// §9.2: metadata failure leaves Back available and shows a sanitized
+		// error -- these two states are the pre-fetch shapes of that rule.
+		audiobookshelfdetail_receive_t fail = {.detail = NULL, .error = tr("audiobookshelf_not_configured")};
+		audiobookshelfdetail_receive(&fail);
+		return;
+	}
+	if (!wifi_connected()) {
+		audiobookshelfdetail_receive_t fail = {.detail = NULL, .error = tr("enable_wi_fi_first")};
+		audiobookshelfdetail_receive(&fail);
+		return;
+	}
+	job_t job = {.kind = JOB_DETAIL};
+	if (!audiobookshelfdetail_identity(job.profile_id, sizeof(job.profile_id),
+									   job.library_id, sizeof(job.library_id),
+									   job.id, sizeof(job.id),
+									   job.title, sizeof(job.title)))
+		return;
+	run_loading(&job);
+}
+
+// The detail screen's three actions, all owned by this page: the identity
+// they need is in this file's statics, refreshed by the worker's completion.
+static void detail_action_play(void *user) {
+	(void)user;
+	if (busy || !selected_local_book[0]) return;
+	// Resume the linked copy at its saved checkpoint, wherever that is:
+	// audiobooks_play_at() writes the point through as where the book stands
+	// (the same shape item_click_cb used to run on the LVGL thread).
+	char resume_file[512];
+	double resume_seconds = 0;
+	if (audiobook_resume_point(selected_local_book, resume_file, sizeof(resume_file), &resume_seconds))
+		audiobooks_play_at(selected_local_book, resume_file, resume_seconds);
+}
+
+static void detail_action_link(void *user) {
+	(void)user;
+	begin_link(NULL);
+}
+
+static void detail_action_queue(void *user) {
+	(void)user;
+	// §9.2: the queue gets item identity only. The detail model was never
+	// the queue's to use -- the enqueue below carries strings and scalars,
+	// and the detail's object dies with the screen unload that this open of
+	// the queue screen causes.
+	begin_download(NULL);
+}
+
+// A row of the book list was tapped: copy the identity values out of the
+// owned page, then open the detail. The §11.5 decision tree this used to
+// run synchronously on the LVGL thread (a walk of the whole catalog with
+// per-row tag reads) now runs in the worker after the metadata fetch (§9.2).
 static void item_click_cb(void *user, int index, lv_obj_t *row) {
 	(void)user;
 	(void)row;
@@ -723,35 +811,20 @@ static void item_click_cb(void *user, int index, lv_obj_t *row) {
 	snprintf(selected_id, sizeof(selected_id), "%s", page_items[index].id);
 	snprintf(selected_title, sizeof(selected_title), "%s", page_items[index].title);
 	selected_local_book[0] = '\0';
-	// The identity seed for the confirm's download action (§8.1 line 693):
-	// values copied out of the owned page, never an index into it.
+	// The identity seed for the detail's actions (§8.1 line 693): values
+	// copied out of the owned page, never an index into it.
 	selected_progress = page_items[index].progress;
 	selected_finished = page_items[index].finished;
 	selected_duration = page_items[index].duration;
-	char message[ABS_NAME_MAX + 128];
-	if (unique_local_match(&page_items[index], selected_local_book, sizeof(selected_local_book))) {
-		if (audiobookshelf_local_linked(selected_local_book, selected_id)) {
-			// Resume the linked copy at its saved checkpoint, wherever that is:
-			// audiobooks_play_at() writes the point through as where the book
-			// stands (upstream's play_book() does the same through
-			// audiobook_resume_point()).
-			char resume_file[512];
-			double resume_seconds = 0;
-			if (audiobook_resume_point(selected_local_book, resume_file, sizeof(resume_file), &resume_seconds))
-				audiobooks_play_at(selected_local_book, resume_file, resume_seconds);
-			return;
-		}
-		if (audiobookshelf_local_owned_elsewhere(selected_local_book)) {
-			snprintf(message, sizeof(message), tr("audiobookshelf_download_anyway_question"), selected_title);
-			confirm_show("audiobookshelf_download", message, "download", begin_download, NULL);
-			return;
-		}
-		snprintf(message, sizeof(message), tr("audiobookshelf_link_question"), selected_title);
-		confirm_show("audiobookshelf_link", message, "link", begin_link, NULL);
-		return;
-	}
-	snprintf(message, sizeof(message), tr("audiobookshelf_download_question"), selected_title);
-	confirm_show("audiobookshelf_download", message, "download", begin_download, NULL);
+	// §9.2: back from the detail restores this exact books view, scroll
+	// included -- captured before the screen switch takes it away.
+	detail_return = true;
+	detail_scroll_y = (int)lv_obj_get_scroll_y(content);
+	char active_profile[ABS_PROFILE_ID_MAX] = "";
+	char active_library[ABS_ID_MAX] = "";
+	abs_profiles_active(active_profile, sizeof(active_profile));
+	snprintf(active_library, sizeof(active_library), "%s", library_id);
+	audiobookshelfdetail_open(active_profile, active_library, selected_id, selected_title);
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,6 +1251,7 @@ static void job_done_async(void *user) {
 	bool more, stale;
 	pthread_mutex_lock(&job_lock);
 	done = result; // published by the worker under this lock (§11.4)
+	result.payload = NULL; // the payload is consumed HERE, on the GUI thread
 	more = have_pending; // a queued job follows: keep the busy state up for it
 	busy = more;
 	stale = done.generation != browse_generation;
@@ -1191,9 +1265,23 @@ static void job_done_async(void *user) {
 	// link is different: its confirm belonged to it, and the book it linked
 	// belongs to its own server whatever is now active -- the completion toast
 	// runs even when stale (its resume import happened in the worker).
-	if (stale && done.kind != JOB_LINK) return;
+	// §9.3: a stale detail's model dies right here either way.
+	if (stale && done.kind != JOB_LINK) {
+		audiobookshelf_detail_free(done.payload);
+		return;
+	}
 
 	if (!done.ok) {
+		if (done.kind == JOB_DETAIL) {
+			// §9.2: a network/metadata failure paints the detail screen's
+			// own error state -- Back stays available, no modal over it.
+			audiobookshelfdetail_receive_t fail = {
+				.detail = NULL,
+				.error = done.error[0] ? done.error : tr("audiobookshelf_detail_failed"),
+			};
+			audiobookshelfdetail_receive(&fail);
+			return;
+		}
 		gui_notify_popup(done.error[0] ? done.error : tr("audiobookshelf_request_failed"));
 		return;
 	}
@@ -1220,6 +1308,21 @@ static void job_done_async(void *user) {
 	case JOB_LINK:
 		toast_success("audiobookshelf_linked");
 		break;
+	case JOB_DETAIL: {
+		// §9.3: the model's ownership moves here, once, on the GUI thread.
+		// The detail module keeps it only while its screen stays loaded; the
+		// page records the worker's local-match outcome for its actions
+		// (Play/Link/Queue) when it was accepted.
+		audiobookshelfdetail_receive_t deliver = {
+			.detail = done.payload,
+			.local = done.local,
+			.local_path = done.local_path,
+		};
+		if (audiobookshelfdetail_receive(&deliver)) {
+			snprintf(selected_local_book, sizeof(selected_local_book), "%s", done.local_path);
+		}
+		break;
+	}
 	default:
 		break;
 	}
@@ -1328,6 +1431,46 @@ static void *worker_main(void *user) {
 					done.ok = true;
 				}
 			}
+		} else if (job.kind == JOB_DETAIL) {
+			// §9.2: metadata fetch first, then the whole-catalog local scan,
+			// both here on the worker (the scan used to run synchronously in
+			// item_click_cb on the LVGL thread). The model is worker-owned
+			// until the GUI thread's generation check consumes it.
+			audiobookshelf_detail_t *detail = NULL;
+			// The §9.2 identity copy carries the profile the tap happened
+			// under; if the active profile changed before this job ran, the
+			// request would resolve a different server for the same item id
+			// -- refuse instead of showing another server's copy. (A profile
+			// switch also bumps the generation, so normally this guard is a
+			// second net, not the only one. The §11.1 migration window's
+			// empty profile id skips it.)
+			char tap_profile[ABS_PROFILE_ID_MAX] = "";
+			abs_profiles_active(tap_profile, sizeof(tap_profile));
+			if (job.profile_id[0] && strcmp(tap_profile, job.profile_id) != 0) {
+				snprintf(done.error, sizeof(done.error), "%s",
+						 "The Audiobookshelf session changed before the details loaded.");
+			} else {
+				detail = audiobookshelf_detail(job.id);
+			}
+			if (detail) {
+				// The §11.5 local states, on the FRESH expanded item (its
+				// title/author/tracks are the server's current ones): a
+				// same-server linked copy plays, an other-server one never
+				// links or plays, everything else links or downloads.
+				char local[1280] = "";
+				if (unique_local_match(&detail->item, local, sizeof(local))) {
+					if (audiobookshelf_local_linked(local, detail->item.id)) {
+						done.local = ABS_DETAIL_LOCAL_PLAY;
+					} else if (audiobookshelf_local_owned_elsewhere(local)) {
+						done.local = ABS_DETAIL_LOCAL_OTHER_SERVER;
+					} else {
+						done.local = ABS_DETAIL_LOCAL_LINK;
+					}
+					snprintf(done.local_path, sizeof(done.local_path), "%s", local);
+				}
+				done.payload = detail;
+				done.ok = true;
+			}
 		} else if (job.kind == JOB_LINK) {
 			audiobookshelf_book_t *book = calloc(1, sizeof(*book));
 			if (!book) snprintf(done.error, sizeof(done.error), "%s", tr("out_of_memory"));
@@ -1398,6 +1541,16 @@ static void start_worker(void) {
 static void page_loaded_cb(lv_event_t *e) {
 	(void)e;
 	if (returning_from_search) { returning_from_search = false; return; }
+	if (detail_return && page_items && page_count > 0) {
+		// §9.2: back from the detail restores the same library, query,
+		// sort/filter and page -- the retained page is that request's
+		// generation, so this redraw needs no request -- and the scroll
+		// offset captured when the tap left.
+		detail_return = false;
+		draw_books();
+		lv_obj_scroll_to_y(content, detail_scroll_y, LV_ANIM_OFF);
+		return;
+	}
 	if (!audiobookshelf_configured() || !wifi_connected()) {
 		draw_libraries();
 		return;
@@ -1434,6 +1587,22 @@ void audiobookshelfpage_init(gui_config_t *cfg) {
 	// engine boundary is abs_download.h only — armed at boot in main.c, before
 	// any page exists.
 	audiobookshelfqueue_init(cfg);
+	// §9.2: the detail screen, also built with the page. The three actions
+	// are this page's (they act on the tapped identity this file holds), and
+	// the fetch is this page's worker (JOB_DETAIL) through the refill hook:
+	// the detail screen's LOADED event is the single submission path.
+	static const audiobookshelfdetail_delegate_t detail_actions = {
+		.on_play = detail_action_play,
+		.on_link = detail_action_link,
+		.on_queue = detail_action_queue,
+		.user = NULL,
+	};
+	audiobookshelfdetail_init(cfg, &detail_actions);
+	// The screen's LOADED event is the single JOB_DETAIL submission path
+	// (first open and every re-entry without a model): the hook builds the
+	// job from the module's identity copy and runs it through the worker.
+	static const audiobookshelfdetail_refill_t detail_refill = {.request = detail_request_cb, .user = NULL};
+	audiobookshelfdetail_set_refill(&detail_refill);
 	audiobookshelf_screen = lv_obj_create(NULL);
 	content = settingsrow_page(audiobookshelf_screen, cfg, "audiobookshelf");
 	page_title = settingsrow_page_title(audiobookshelf_screen);

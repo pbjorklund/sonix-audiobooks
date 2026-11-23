@@ -60,7 +60,7 @@ SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
 	# audiobook.c/audio.c carry the progress worker's local-progress writer
 	# (the §8.2 step 6 reconcile gate is proven live through it); offline,
 	# nothing references the player-side writer and the sections drop out.
-	src/system/library/metadata.c src/system/library/oggtags.c src/system/library/cue.c
+	src/system/library/description.c src/system/library/metadata.c src/system/library/oggtags.c src/system/library/cue.c
 	src/system/library/id3chap.c src/system/library/vorbischap.c src/system/library/mp4flac.c
 	src/system/library/folderorder.c src/system/playback/playlist.c
 	src/system/playback/audiobook.c src/system/audio/audio.c

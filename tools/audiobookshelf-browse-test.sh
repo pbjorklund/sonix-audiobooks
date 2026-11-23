@@ -62,6 +62,7 @@ gcc "${COMPILE_FLAGS[@]}" -c src/system/net/http.c -o "$WORK/http_full.o"
 objcopy --keep-global-symbol=http_url_encode "$WORK/http_full.o" "$WORK/http_url.o"
 gcc "${COMPILE_FLAGS[@]}" "$ROOT/tools/audiobookshelf-browse-test.c" \
 	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c \
+	src/system/library/description.c \
 	src/system/core/config.c src/system/core/json.c \
 	"${LINK_FLAGS[@]}" "$WORK/http_url.o" -o "$WORK/browse-test"
 "$WORK/browse-test" "$UNIT_WORK"
@@ -90,6 +91,7 @@ for ALIAS in $ALIASES; do
 	# The live binary uses the real http stack (no stub; -DABS_BROWSE_TEST_LIVE).
 	gcc "${COMPILE_FLAGS[@]}" -DABS_BROWSE_TEST_LIVE "$ROOT/tools/audiobookshelf-browse-test.c" \
 		src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c \
+		src/system/library/description.c \
 		src/system/core/config.c src/system/core/json.c src/system/net/http.c \
 		src/system/net/tls.c "${LINK_FLAGS[@]}" -o "$WORK/browse-live"
 	SONIX_AUDIOBOOKSHELF_SERVER="http://127.0.0.1:$PORT" SONIX_AUDIOBOOKSHELF_TOKEN="sonix-browse-$ALIAS" \

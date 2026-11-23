@@ -1,6 +1,7 @@
 #include "metadata.h"
 
 #include "src/system/library/cue.h"
+#include "src/system/library/description.h"
 #include "src/system/decode/decode.h"
 #include "src/system/decode/mp4.h"
 #include "src/system/decode/apedec.h"
@@ -204,37 +205,18 @@ static void lyrics_offer(const char *text, size_t len) {
 // summary. Of equal ranks the first wins.
 // ---------------------------------------------------------------------------
 
-#define DESCRIPTION_MAX_BYTES (8u * 1024u)
+#define DESCRIPTION_MAX_BYTES DESCRIPTION_TEXT_MAX
 
 static __thread bool description_wanted;
 static __thread char *description_found;
 static __thread int description_found_rank;
 
-// The HTML tags that end a paragraph or a line: <p>, </p>, <br>, <li>, <div>.
-static bool description_tag_breaks(const char *tag, size_t len) {
-	while (len && isspace((unsigned char)*tag)) {
-		tag++;
-		len--;
-	}
-	if (len && *tag == '/') {
-		tag++;
-		len--;
-	}
-	if (len >= 1 && tolower((unsigned char)tag[0]) == 'p' && (len == 1 || !isalpha((unsigned char)tag[1]))) {
-		return true;
-	}
-	if (len >= 2 && tolower((unsigned char)tag[0]) == 'b' && tolower((unsigned char)tag[1]) == 'r') {
-		return true;
-	}
-	if (len >= 2 && tolower((unsigned char)tag[0]) == 'l' && tolower((unsigned char)tag[1]) == 'i') {
-		return true;
-	}
-	return len >= 3 && strncasecmp(tag, "div", 3) == 0;
-}
-
 // Kept as plain text: publishers paste the store page's HTML into the tag, so
 // the markup is dropped, the common entities are turned back into their
-// characters, and runs of blank lines become one line break.
+// characters, and runs of blank lines become one line break. That byte-level
+// policy is the pure helper in description.c, shared with the Audiobookshelf
+// detail parser (§9.4) -- here only the candidate ranks and the thread-local
+// ownership of the winner remain.
 static void description_offer(const char *text, size_t len, int rank) {
 	if (!description_wanted || !text || len == 0 || (description_found && rank <= description_found_rank)) {
 		return;
@@ -246,60 +228,10 @@ static void description_offer(const char *text, size_t len, int rank) {
 	if (!plain) {
 		return;
 	}
-
-	static const struct {
-		const char *entity;
-		char value;
-	} ENTITIES[] = {
-		{"&amp;", '&'}, {"&quot;", '"'}, {"&#39;", '\''}, {"&apos;", '\''}, {"&lt;", '<'}, {"&gt;", '>'}, {"&nbsp;", ' '},
-	};
-
-	size_t written = 0;
-	for (size_t i = 0; i < len && text[i];) {
-		if (text[i] == '<') {
-			const char *end = memchr(text + i + 1, '>', len - i - 1);
-			if (end) {
-				if (description_tag_breaks(text + i + 1, (size_t)(end - text - i - 1)) && written && plain[written - 1] != '\n') {
-					plain[written++] = '\n';
-				}
-				i = (size_t)(end - text) + 1;
-				continue;
-			}
-		}
-		bool entity = false;
-		for (size_t e = 0; e < sizeof(ENTITIES) / sizeof(ENTITIES[0]); e++) {
-			size_t n = strlen(ENTITIES[e].entity);
-			if (n <= len - i && memcmp(text + i, ENTITIES[e].entity, n) == 0) {
-				plain[written++] = ENTITIES[e].value;
-				i += n;
-				entity = true;
-				break;
-			}
-		}
-		if (entity) {
-			continue;
-		}
-		char c = text[i++];
-		if (c == '\r') {
-			c = '\n';
-		}
-		if (c == '\n' && (!written || plain[written - 1] == '\n')) {
-			continue;
-		}
-		if (c == '\t') {
-			c = ' ';
-		}
-		if (c == ' ' && (!written || plain[written - 1] == '\n')) {
-			continue;
-		}
-		plain[written++] = c;
-	}
-	while (written && isspace((unsigned char)plain[written - 1])) {
-		written--;
-	}
-	plain[written] = '\0';
-
-	if (!written) {
+	// The cleanup never grows the text, so a capacity that covers the input
+	// never truncates: this is behavior-identical to the loop this helper
+	// was extracted from.
+	if (!description_from_html(text, len, plain, len + 1)) {
 		free(plain);
 		return;
 	}

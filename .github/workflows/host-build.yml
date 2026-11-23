@@ -51,6 +51,9 @@ jobs:
       - name: Run the browse query and search-contract tests (§10.3)
         working-directory: ${{ github.workspace }}
         run: bash tools/audiobookshelf-browse-test.sh
+      - name: Run the book-detail model/parser and description-policy tests (§9.1–§9.4)
+        working-directory: ${{ github.workspace }}
+        run: bash tools/audiobookshelf-detail-test.sh
       - name: Run the download-queue foundation tests (§8.1–8.2)
         working-directory: ${{ github.workspace }}
         run: bash tools/audiobookshelf-queue-test.sh

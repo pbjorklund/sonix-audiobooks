@@ -89,6 +89,33 @@ click() {
 	sleep "${3:-0.6}"
 }
 
+# §9.2 (M4 WS3): a row tap opens the book-detail screen now. Its §9.2 sketch
+# order puts the primary action below the description, so the smoke scrolls
+# the detail to its bottom (long drags are scroll gestures, never clicks)
+# before tapping the primary action at its fixed bottom position.
+detail_requests() {
+	grep -c 'GET /api/items/.*expanded=1&include=progress,authors ' "$WORK/progress.requests" 2>/dev/null || true
+}
+open_book_detail() {
+	local base
+	base=$(detail_requests)
+	click 240 277 1.2      # the title row -> the detail
+	for ((i = 0; i < 100; i++)); do
+		[[ "$(detail_requests)" -gt "$base" ]] && break
+		sleep 0.1
+	done
+	[[ "$(detail_requests)" -gt "$base" ]] || fail "the detail fetch never landed"
+	for ((r = 0; r < 3; r++)); do
+		xdotool mousemove --window "$WINDOW" 300 700 mousedown 1
+		for y in 620 540 460 380; do
+			xdotool mousemove --window "$WINDOW" 300 "$y"
+			sleep 0.05
+		done
+		xdotool mouseup 1
+		sleep 0.4
+	done
+}
+
 for command in ffmpeg make python3 scrot sqlite3 Xvfb xdotool; do need "$command"; done
 [[ "$ROOT" != *' '* ]] || fail "the checkout path contains spaces"
 case "$WORK" in "$ROOT"/build/*) rm -rf -- "$WORK" ;; *) fail "unsafe output directory: $WORK" ;; esac
@@ -219,9 +246,16 @@ grep -q 'filter=authors.YXV0aG9yLTE' "$WORK/progress.requests" || fail "author f
 grep -q 'sort=sequence.*filter=series.c2VyaWVzLTE' "$WORK/progress.requests" || fail "series order/filter missing"
 click 43 88 1         # search results -> libraries
 click 280 419 2       # reopen full library (one row below the new Downloads row)
-click 240 277 1       # first title below toolbar
 scrot "$WORK/action-confirm.png"
-click 330 475 1       # confirm download or local link
+# §9.2: the tap opens the book detail now; the primary action (Link existing
+# for the pre-linked local copy, Queue download otherwise) sits at the
+# detail's bottom, below the description.
+open_book_detail
+if [[ "$EXISTING" == 1 ]]; then
+	click 240 622 1   # Link existing copy (the §11.5 link job)
+else
+	click 240 622 1   # Queue download (§8.5 line 587; the queue screen opens)
+fi
 
 # §8.5 line 597: the 0.6.0 download path is the queue: the confirm enqueues
 # (§8.5 line 587, begin_download) and the old modal's synchronous completion
@@ -249,8 +283,11 @@ if [[ "$EXISTING" == 1 ]]; then
 	if [[ "$LOCAL_PROGRESS" == 1 ]]; then
 		wait_for "uploaded existing local progress" 400 progress_uploaded
 	fi
-	sleep 2                # let the success toast release the title row
-	click 240 277 2        # the linked server title must now play locally
+	sleep 2                # let the success toast release the row
+	click 43 88 1          # the detail -> the ABS page (the §9.2 back-return redraws the books view)
+	sleep 1                # let the link completion's toast clear
+	open_book_detail       # the linked server title once more: now the detail offers local Play
+	click 240 622 1        # Play local copy
 	if [[ "$LOCAL_PROGRESS" == 1 ]]; then
 		wait_for "linked local playback" 100 grep -q "play requested.*Local Chapter One.mp3.*from 7" "$WORK/player.log"
 	else
@@ -274,22 +311,16 @@ if [[ "$EXISTING" == 1 ]]; then
 	exit 0
 fi
 
-# Walk out to the Home grid. Re-entering the ABS page re-runs its load job,
-# which redraws the library view, so the chain is: pop the queue screen, wait
-# for the load's libraries fetch, then two chevrons (the guard passes at the
-# library view; the next two pop Streaming and Home).
+# Walk out to the Home grid. The §9.2 chain is one screen longer: the queue
+# pops to the DETAIL (its §9.2 reload re-fetches the model), the detail pops
+# to the ABS page where the back-return redraws the books view with no
+# request, and the page's own back-guard turns the next chevron into the
+# in-page libraries step; the two after that pop Streaming and Home.
 sleep 2                # let the success toast release the back button
-libs_before=$(grep -c "GET /api/libraries " "$WORK/progress.requests" 2>/dev/null || true)
-click 43 88 2          # the queue screen -> the ABS page (line 597: the confirm opened the queue)
-grep_libraries_now() {
-	local n
-	n=$(grep -c "GET /api/libraries " "$WORK/progress.requests" 2>/dev/null) || true
-	[[ "$n" =~ ^[0-9]+$ ]] || n=0
-	[[ "$n" -gt "$libs_before" ]]
-}
-wait_for "the ABS page's library view after the queue" 60 grep_libraries_now
-sleep 1                # the fetch published -> draw_libraries
-click 43 88 2          # Audiobookshelf -> Streaming (the guard passes at the library view)
+click 43 88 2          # the queue screen -> the detail
+click 43 88 2          # the detail -> the ABS page (the back-return redraw, no request)
+click 43 88 2          # the books view -> the page's libraries view (the guard)
+click 43 88 2          # the libraries view -> Streaming
 click 43 88 2          # Streaming -> Home
 click 356 406 1        # Home -> Audiobooks (upstream 1.3.0 home layout)
 click 125 232 1        # Audiobooks -> Library

@@ -21,6 +21,7 @@
 #include "src/system/core/utils.h"
 #include "src/system/decode/decode.h"
 #include "src/system/library/audiobookdb.h"
+#include "src/system/library/description.h"
 #include "src/system/playback/audiobook.h"
 #include "src/system/net/http.h"
 #include "src/system/net/wifi.h"
@@ -1632,6 +1633,158 @@ bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out) {
 	pthread_mutex_unlock(&abs_catalog_lock);
 	free(body);
 	return fetched;
+}
+
+// ---------------------------------------------------------------------------
+// The §9.3 detail model (spec workstream 3, wave 1). One expanded item into
+// the small display projection: narrator, description (descriptionPlain
+// preferred, else the shared cleanup of the raw publisher HTML), series name
+// plus STRING sequence, and the display-only chapter list. The download
+// tracks are deliberately left out: display and download have different
+// lifetimes (ADR-3), and the queue refetches media.tracks under its own auth
+// snapshot, so a stale, large track list never rides along with a detail
+// view.
+// ---------------------------------------------------------------------------
+
+static int abs_detail_chapter_cmp(const void *a, const void *b) {
+	const abs_detail_chapter_t *ca = a, *cb = b;
+	if (ca->start < cb->start) return -1;
+	if (ca->start > cb->start) return 1;
+	if (ca->id < cb->id) return -1;
+	if (ca->id > cb->id) return 1;
+	return 0;
+}
+
+// One chapter's §9.1 fields. Servers of the v2.3x line the checked-in
+// fixtures pin record `index`/`startOffset`/`endOffset`; the modern names
+// (`id`, `start`, `end`) parse first and the recorded names are the
+// fallback. Returns false only for the §9.1 invalid-time shape (end before
+// start), which the caller shows as an untimed title.
+static bool abs_parse_detail_chapter(const json_doc_t *doc, int object, abs_detail_chapter_t *ch) {
+	memset(ch, 0, sizeof(*ch));
+	int tok = json_get(doc, object, "id");
+	if (tok >= 0) ch->id = json_llong(doc, tok, 0);
+	else ch->id = json_obj_llong(doc, object, "index", 0);
+	tok = json_get(doc, object, "start");
+	if (tok >= 0) ch->start = json_double(doc, tok, 0);
+	else ch->start = json_double(doc, json_get(doc, object, "startOffset"), 0);
+	tok = json_get(doc, object, "end");
+	if (tok >= 0) ch->end = json_double(doc, tok, 0);
+	else ch->end = json_double(doc, json_get(doc, object, "endOffset"), 0);
+	json_obj_str(doc, object, "title", ch->title, sizeof(ch->title));
+	// A chapter is a slice of a finite recording: a server that claims an
+	// infinite end sends its own metadata bug, not a value to format.
+	if (!isfinite(ch->start)) ch->start = 0;
+	if (!isfinite(ch->end)) ch->end = 0;
+	if (ch->end < ch->start) return false; // §9.1: untimed title, not an ordered pair
+	return true;
+}
+
+static bool abs_parse_detail(const char *body, audiobookshelf_detail_t *out) {
+	json_doc_t doc;
+	if (!json_parse(body, &doc)) {
+		set_error("Audiobookshelf returned invalid book details.");
+		return false;
+	}
+	int root = json_root(&doc);
+	read_item(&doc, root, &out->item);
+	int media = json_get(&doc, root, "media");
+	int metadata = json_get(&doc, media, "metadata");
+	// Narrator (§9.1: narratorName). Hide the row when absent; the v2.3x
+	// wire name (what every checked-in fixture records) is the fallback.
+	json_obj_str(&doc, metadata, "narratorName", out->narrator, sizeof(out->narrator));
+	if (!out->narrator[0]) json_obj_str(&doc, metadata, "narrator", out->narrator, sizeof(out->narrator));
+	// Description (§9.1): prefer descriptionPlain; otherwise clean the raw
+	// description with the same policy as local descriptions. The helper
+	// bounds the output, so an 8 KiB input cap mirrors metadata.c's own.
+	char raw_plain[DESCRIPTION_TEXT_MAX + 1] = "";
+	char raw_html[DESCRIPTION_TEXT_MAX + 1] = "";
+	json_obj_str(&doc, metadata, "descriptionPlain", raw_plain, sizeof(raw_plain));
+	json_obj_str(&doc, metadata, "description", raw_html, sizeof(raw_html));
+	description_pick(raw_plain[0] ? raw_plain : NULL, raw_html[0] ? raw_html : NULL,
+					 out->description, sizeof(out->description));
+	// The series position arrives as a string on the wire ("1.5" is a real
+	// value, §9.1): copied verbatim, never cast through an integer.
+	first_series(&doc, metadata, out->item.series, sizeof(out->item.series),
+				 out->series_part, sizeof(out->series_part));
+
+	// Chapters (§9.1): media.chapters[] is the source; numChapters only
+	// feeds the overflow presentation. media.numChapters on a server whose
+	// list is shorter is honest overflow evidence in its own right.
+	int chapters = json_get(&doc, media, "chapters");
+	int seen = json_len(&doc, chapters);
+	long long num_chapters = json_obj_llong(&doc, media, "numChapters", 0);
+	int kept = seen < ABS_DETAIL_CHAPTER_MAX ? seen : ABS_DETAIL_CHAPTER_MAX;
+	out->chapters_overflow = seen > ABS_DETAIL_CHAPTER_MAX || num_chapters > seen;
+	if (kept > 0) {
+		// Exact allocation for the kept range (§9.5): 400 × 216 B, never
+		// the ABS_TRACK_MAX-sized inline arrays the download model carries.
+		out->chapters = calloc((size_t)kept, sizeof(*out->chapters));
+		if (!out->chapters) {
+			json_free(&doc);
+			set_error("Not enough memory for the chapter list.");
+			return false;
+		}
+	}
+	for (int i = 0; i < kept; i++) {
+		int object = json_at(&doc, chapters, i);
+		abs_detail_chapter_t *ch = &out->chapters[i];
+		if (!abs_parse_detail_chapter(&doc, object, ch)) {
+			// §9.1: end before start is shown as an untimed title (start and
+			// end zeroed, the title kept) rather than a row that lies about
+			// its position. It never touches the local playback chapter
+			// parsing, which reads indexed files independently.
+			ch->start = 0;
+			ch->end = 0;
+		}
+	}
+	out->chapter_count = kept;
+	// Sort by (start,id) for the DISPLAY projection only (§9.1); the wire
+	// order the server sent is not trusted to be sorted.
+	if (kept > 1) qsort(out->chapters, (size_t)kept, sizeof(*out->chapters), abs_detail_chapter_cmp);
+	json_free(&doc);
+	return true;
+}
+
+audiobookshelf_detail_t *audiobookshelf_detail(const char *item_id) {
+	if (!item_id || !item_id[0]) {
+		set_error("No Audiobookshelf item was selected.");
+		return NULL;
+	}
+	audiobookshelf_detail_t *detail = calloc(1, sizeof(*detail));
+	if (!detail) {
+		set_error("Not enough memory for the detail model.");
+		return NULL;
+	}
+	char id[ABS_ID_MAX * 3];
+	http_url_encode(item_id, id, sizeof(id));
+	char path[384];
+	snprintf(path, sizeof(path), "/api/items/%s?expanded=1&include=progress,authors", id);
+	// §8.3: the same one-large-body-at-a-time discipline as the queue's
+	// identity fetch; the model itself is worker-owned until the GUI
+	// generation accepts it (§9.3).
+	pthread_mutex_lock(&abs_catalog_lock);
+	char *body = NULL;
+	bool fetched = api_request(path, NULL, &body, NULL, NULL);
+	if (fetched) {
+		fetched = abs_parse_detail(body, detail);
+	}
+	pthread_mutex_unlock(&abs_catalog_lock);
+	free(body);
+	if (!fetched) {
+		audiobookshelf_detail_free(detail);
+		return NULL;
+	}
+	return detail;
+}
+
+void audiobookshelf_detail_free(audiobookshelf_detail_t *detail) {
+	if (!detail) return;
+	free(detail->chapters);
+	// Zero before release: the model holds no credentials, but the release
+	// contract matches the queue's book snapshot (wipe, then free).
+	memset(detail, 0, sizeof(*detail));
+	free(detail);
 }
 
 // ---------------------------------------------------------------------------

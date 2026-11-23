@@ -85,6 +85,35 @@ dialog_buttons() {
 	printf '%s %s\n' "$pair" "$cpair"
 }
 
+# §9.2 (M4 WS3): a row tap opens the book-detail screen. The §9.1 expanded
+# fetch is the arrival anchor (each mock logs to <progress-file>.requests,
+# one per server), and the primary action sits at the bottom of the detail —
+# three whole-screen drags up pin it there (long drags are scroll gestures,
+# never clicks), then the action row taps at (240, 622) in-window.
+detail_requests() {
+	grep -c 'GET /api/items/.*expanded=1&include=progress,authors ' "$1" 2>/dev/null || true
+}
+open_book_detail() { # $1 = the active server's <progress-file>.requests
+	local log=$1
+	local base
+	base=$(detail_requests "$log")
+	click 240 277 0.3      # the title row -> the detail
+	for ((i = 0; i < 100; i++)); do
+		[[ "$(detail_requests "$log")" -gt "$base" ]] && break
+		sleep 0.1
+	done
+	[[ "$(detail_requests "$log")" -gt "$base" ]] || fail "the detail fetch never landed"
+	for ((r = 0; r < 3; r++)); do
+		xdotool mousemove --window "$WINDOW" 300 700 mousedown 1
+		for y in 620 540 460 380; do
+			xdotool mousemove --window "$WINDOW" 300 "$y"
+			sleep 0.05
+		done
+		xdotool mouseup 1
+		sleep 0.4
+	done
+}
+
 	start_player() { # $1 = run label; stdout/stderr land in $WORK/$1.stdout
 	local name=$1
 	(
@@ -225,16 +254,15 @@ start_player player-a
 
 click 356 160 1       # Home -> Streaming
 click 124 704 2       # Streaming -> Audiobookshelf (bottom-left tile)
-click 280 305 2       # library
+click 280 419 2       # library (one row below the Downloads row)
 click 390 180 2       # Filter toolbar (§10.2: authors live under Filter now)
 click 240 200 2       # Authors kind
 click 240 200 2       # Test Author
 click 43 88 1         # author books -> authors
 click 43 88 2         # authors -> filter kinds
 click 240 200 2       # All books (clear the filter; first title then sits at y=277)
-click 240 277 0.2     # first title: The Mock Journey (no local copy -> download dialog)
-read -r OKX OKY CX CY <<<"$(dialog_buttons "$WORK/player-a.log")"
-click "$OKX" "$OKY" 0.3   # confirm download
+open_book_detail "$WORK/progress-a.requests"  # the §9.2 detail (§9.1 fetch is the anchor)
+click 240 622 0.3     # the detail's primary action: Queue download
 wait_for "part one on card (A)" 900 test -s "$ABS_A/001 - Part One.mp3"
 wait_for "part two on card (A)" 300 test -s "$ABS_A/002 - Part Two.mp3"
 wait_for "resume import (A)" 900 part_a_imported
@@ -258,20 +286,23 @@ wait_for "phase-B local row" 100 abs_row_indexed
 # instead; no "play requested" line may reference the A directory at all.
 click 356 160 1       # Home -> Streaming
 click 124 704 2       # Streaming -> Audiobookshelf
-click 280 305 2       # library
+click 280 419 2       # library (one row below the Downloads row)
 click 390 180 2       # Filter toolbar (§10.2: authors live under Filter now)
 click 240 200 2       # Authors kind
 click 240 200 2       # Test Author
 click 43 88 1         # author books -> authors
 click 43 88 2         # authors -> filter kinds
 click 240 200 2       # All books (clear the filter; first title then sits at y=277)
-click 240 277 0.2     # first title -- download-anyway question (another server's bound copy), not playback
-read -r OKX OKY CX CY <<<"$(dialog_buttons "$WORK/player-b.log")"
+# §9.2: server B's tap opens the detail (§9.4's open_book_detail runs the
+# tap and anchors on the §9.1 fetch). Nothing is tapped afterwards: whatever
+# the detail would offer (the worker's local match sees A's manifest and
+# offers a download from this server, never a link), this phase proves NO
+# action was taken against A's copy by not acting at all.
+open_book_detail "$WORK/progress-b.requests"
+sleep 0.5
 if grep -q "play requested.*Audiobookshelf/abs-$HASH_A/" "$WORK/player-b.log"; then
 	fail "server B silently opened the local server-A copy (wrong-server local link)"
 fi
-click "$CX" "$CY" 0.4 # decline the explicit re-link
-sleep 0.5
 assert_manifest_bound_server "$ABS_A/.audiobookshelf" "$URL_A"
 
 # Remove the local rows so the item has no unique local match: the only way
@@ -283,10 +314,11 @@ sqlite3 "$DB" "DELETE FROM AUDIOBOOK_TABLE WHERE path='$ABS_A';"
 sqlite3 "$DB" "DELETE FROM AUDIOBOOK_PARTS WHERE book='$ABS_A';"
 sqlite3 "$DB" "DELETE FROM AUDIOBOOK_ABS_SYNC WHERE book='$ABS_A';"
 
-sleep 1               # let the dialog settle
-click 240 277 0.2     # first title again -- download dialog this time
-read -r OKX OKY CX CY <<<"$(dialog_buttons "$WORK/player-b.log")"
-click "$OKX" "$OKY" 0.3   # confirm download from server B
+sleep 1               # let the surgery settle
+click 43 88 1         # the Phase-B detail -> the ABS page (the §9.2 back-return)
+sleep 1               # let the redraw finish
+open_book_detail "$WORK/progress-b.requests"  # first title again (a fresh §9.1 fetch)
+click 240 622 0.3     # the detail's primary action: Queue download from server B
 wait_for "part one on card (B)" 900 test -s "$ABS_B/001 - Part One.mp3"
 wait_for "part two on card (B)" 300 test -s "$ABS_B/002 - Part Two.mp3"
 wait_for "resume import (B)" 900 part_b_imported
