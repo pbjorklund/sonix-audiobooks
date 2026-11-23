@@ -54,6 +54,11 @@ jobs:
       - name: Run the download-queue foundation tests (§8.1–8.2)
         working-directory: ${{ github.workspace }}
         run: bash tools/audiobookshelf-queue-test.sh
+      - name: Run the download-queue GUI smoke (§8.5 lines 579/587/594)
+        working-directory: ${{ github.workspace }}
+        env:
+          SONIX_SMOKE_SKIP_BUILD: 1
+        run: tools/audiobookshelf-queueui-smoke.sh
       - name: Upload audiobook smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -67,4 +72,11 @@ jobs:
         with:
           name: audiobookshelf-host-smoke
           path: build/audiobookshelf-host-smoke
+          if-no-files-found: ignore
+      - name: Upload the download-queue GUI smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audiobookshelf-queueui-smoke
+          path: build/audiobookshelf-queueui
           if-no-files-found: ignore

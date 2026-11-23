@@ -1184,6 +1184,50 @@ static void test_capacity_dedup(void) {
 // 4. State machine and commands (§8.1)
 // ---------------------------------------------------------------------------
 
+// §8.1 Remove of a PAUSED mid-file job (line 466): the row and the job-owned
+// .part go, completed audio stays. The committed remove resolved .part paths
+// from DOWNLOAD_FILE records AFTER deleting them -- every .part outlived its
+// row (caught live by the GUI queue smoke on a paused Remove); this section
+// pins the record-first order at engine level.
+static void test_remove_paused_part(void) {
+	printf("remove deletes the paused job's .part... ");
+	const char *root = mkcard("remove-part");
+	fake_reset();
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "init failed\n");
+	char err[128] = {0};
+
+	long long id = enqueue_book("rp", "Remove Part");
+	pump_until(id, ABS_DL_DOWNLOADING);
+	CHECK(abs_download_pump(), "file 1 pump did nothing\n");
+	char final1[1400];
+	card_file(FAKE_DEST "/track01.mp3", final1, sizeof(final1));
+	CHECK(file_bytes(final1) == 42, "completed file1 missing\n");
+
+	// Pause the active job mid file 2 (the GUI's own command path), then give
+	// the paused row a job-owned .part, exactly what a mid-transfer stop
+	// leaves on the card (§8.1: the retained .part stays invisible).
+	pause_mid_file = true;
+	pump_until(id, ABS_DL_PAUSED);
+	mkpath(plan_dest_buf);
+	char part2[1400];
+	card_file(FAKE_DEST "/track02.mp3.part", part2, sizeof(part2));
+	write_bytes(part2, 10, 'x');
+	CHECK(file_exists(part2), "the paused job's .part was not planted\n");
+
+	CHECK(abs_download_remove(id, err, sizeof(err)), "remove paused: %s\n", err);
+	abs_download_snapshot_t snap;
+	CHECK(abs_download_snapshot(&snap), "snapshot\n");
+	for (int i = 0; i < snap.job_count; i++) {
+		CHECK(snap.jobs[i].id != id, "removed job still in the mirror\n");
+	}
+	CHECK(!file_exists(part2), "Remove left the job-owned .part on the card (§8.1 line 466)\n");
+	CHECK(file_exists(final1), "Remove deleted completed audio (§8.1 line 466)\n");
+
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
 static void test_lifecycle(void) {
 	printf("state transitions... ");
 	const char *root = mkcard("lifecycle");
@@ -1962,6 +2006,7 @@ int main(int argc, char **argv) {
 
 	test_schema();
 	test_capacity_dedup();
+	test_remove_paused_part();
 	test_lifecycle();
 	test_no_token();
 	test_card_generation();

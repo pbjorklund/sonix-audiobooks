@@ -1438,7 +1438,18 @@ bool abs_download_remove(long long job_id, char *error, size_t error_size) {
 		pthread_mutex_unlock(&lock);
 		return false;
 	}
+	// §8.1 Remove: the job-owned .part paths resolve from the job's own
+	// non-complete DOWNLOAD_FILE records, so they are gathered BEFORE the
+	// transaction deletes those rows -- the committed order (rows deleted,
+	// then paths resolved inside delete_job_parts_locked) found an already
+	// empty table and every .part outlived its row (caught live by the GUI
+	// queue smoke on a paused mid-file Remove). Unlinking inside the open
+	// transaction is safe: a rolled-back Remove leaves the row behind and the
+	// next attempt truncates a fresh .part from byte zero (§8.1 resume
+	// semantics). Audio, sidecars, covers, manifests, resume state and remote
+	// progress are never touched here (§8.2 file rules).
 	db_exec("BEGIN");
+	delete_job_parts_locked(j);
 	sqlite3_stmt *del = prepare_locked("DELETE FROM DOWNLOAD_FILE WHERE job_id=?");
 	if (del) {
 		sqlite3_bind_int64(del, 1, (sqlite3_int64)job_id);
@@ -1455,7 +1466,10 @@ bool abs_download_remove(long long job_id, char *error, size_t error_size) {
 	if (!ok) {
 		db_exec("ROLLBACK");
 	} else {
-		delete_job_parts_locked(j); // best effort: a leftover .part is invisible garbage
+		// The .part cleanup already ran inside the transaction (the §8.1
+		// Remove note above). A rolled-back Remove leaves the row behind and
+		// its current file restarts from byte zero on the next attempt, so
+		// the row is consistent either way (§8.1 resume semantics).
 		if (storage_paused) {
 			storage_paused = false;
 		}

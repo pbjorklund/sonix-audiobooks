@@ -29,8 +29,10 @@ typedef struct abs_list abs_list_t;
 // subtitle or an empty string to hide the second line.
 typedef void (*abs_list_bind_cb)(void *user, int index, char *title, size_t title_size,
 								 char *subtitle, size_t subtitle_size);
-// A row was tapped; carries the data index it was showing.
-typedef void (*abs_list_click_cb)(void *user, int index);
+// A row was tapped; carries the data index it was showing and the row widget
+// itself, so a tap can open a control anchored to that row (the download
+// queue's per-item action menu). The widget is alive while the callback runs.
+typedef void (*abs_list_click_cb)(void *user, int index, lv_obj_t *row);
 
 typedef struct {
 	lv_obj_t *parent;   // the page's scrolling container; the canvas joins it

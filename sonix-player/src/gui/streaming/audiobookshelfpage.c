@@ -9,6 +9,7 @@
 #include <strings.h>
 
 #include "abslist.h"
+#include "audiobookshelfqueue.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/library/audiobooks.h"
 #include "src/gui/nowplaying/player.h"
@@ -27,6 +28,7 @@
 #include "src/system/library/audiobookdb.h"
 #include "src/system/net/wifi.h"
 #include "src/system/playback/audiobook.h"
+#include "src/system/streaming/abs_download.h"
 #include "src/system/streaming/abs_profiles.h"
 #include "src/system/streaming/audiobookshelf.h"
 
@@ -56,6 +58,12 @@ static char library_name[ABS_NAME_MAX];
 static char selected_id[ABS_ID_MAX];
 static char selected_title[ABS_NAME_MAX];
 static char selected_local_book[1280];
+// The §8.1 line-693 identity seed: what the download dedupes/queues with and
+// what the row's first remote-progress hint is. Values only — a full book
+// model is never retained for a queued download.
+static double selected_progress;
+static bool selected_finished;
+static double selected_duration;
 static char filter_title[ABS_NAME_MAX]; // display name of the active filter value
 
 // ---------------------------------------------------------------------------
@@ -100,8 +108,8 @@ static void book_row_bind(void *user, int index, char *title, size_t title_size,
 						  char *subtitle, size_t subtitle_size);
 static void group_row_bind(void *user, int index, char *title, size_t title_size,
 						   char *subtitle, size_t subtitle_size);
-static void item_click_cb(void *user, int index);
-static void group_click_cb(void *user, int index);
+static void item_click_cb(void *user, int index, lv_obj_t *row);
+static void group_click_cb(void *user, int index, lv_obj_t *row);
 static void group_page_cb(lv_event_t *e);
 static void open_search_cb(lv_event_t *e);
 static void search_accept_cb(lv_event_t *e);
@@ -112,7 +120,7 @@ static void open_filter_kind_cb(lv_event_t *e);
 static void request_group_kind(abs_browse_filter_t kind);
 static void library_clicked_cb(lv_event_t *e);
 
-typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_BROWSE, JOB_SEARCH, JOB_GROUPS, JOB_DOWNLOAD, JOB_LINK } job_kind_t;
+typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_BROWSE, JOB_SEARCH, JOB_GROUPS, JOB_LINK } job_kind_t;
 typedef struct {
 	job_kind_t kind;
 	uint32_t generation; // browse generation at submit time (§11.4)
@@ -149,19 +157,19 @@ typedef struct {
 } job_result_t;
 static job_result_t result;
 
-// Download/link outcomes ride along with the job result (same lock, same reader).
-static char downloaded_resume_file[1280];
-static double downloaded_resume_seconds;
-static bool downloaded_finished;
-static long long downloaded_updated_ms;
-static char downloaded_server[512];
-static lv_timer_t *resume_import_timer;
-static int resume_import_attempts;
-static int resume_scan_attempts;
-static bool resume_scan_needed;
-
-static int progress_percent;
-static int progress_posted = -1;
+// ---------------------------------------------------------------------------
+// §8.5 line 587: the follow-up scan on per-job completion. A low-rate watcher
+// on the queue's busy bit re-counts the "Downloads" badge at every busy/idle
+// crossing and at any enqueue this page makes, and — when a DONE row still
+// has its resume import pending — starts the Audiobooks scan whose completion
+// notification drives the import coordinator (§8.3 line 556). The watcher
+// owns no queue state: the heap snapshot it takes at a crossing is dropped
+// immediately, so the page's steady cost is one bool and an int.
+// ---------------------------------------------------------------------------
+static lv_timer_t *queue_watch_timer;
+static bool queue_watch_busy;
+static int downloads_badge;
+static bool downloads_badge_dirty;
 
 static bool wifi_connected(void) {
 #ifdef HOST_BUILD
@@ -330,8 +338,69 @@ static void run_loading(const job_t *job) {
 	submit(job);
 }
 
-// The libraries view, the root of the chain: the profile row on top, then one
-// row per book library.
+// One watcher observation: re-count the badge, and when a DONE row still owes
+// its resume import, start the Audiobooks scan whose completion notification
+// runs the queue's per-row import coordinator (§8.3 line 556). A job that
+// finished while a scan was already running imports at that scan's
+// completion; a scan that started before the files existed re-covers it via
+// the coordinator's retry at the next completed scan. The snapshot is a
+// transient heap copy — taken, read, dropped.
+static void queue_watch_observe(void) {
+	downloads_badge_dirty = false;
+	abs_download_snapshot_t *snap = malloc(sizeof(*snap));
+	if (!snap) return;
+	if (!abs_download_snapshot(snap)) {
+		// Queue disarmed (card absent / quiesced): the badge has nothing to
+		// count. A re-init makes the next observation see the rows again.
+		free(snap);
+		downloads_badge = 0;
+		return;
+	}
+	int pending = 0;
+	bool done_needs_import = false;
+	for (int i = 0; i < snap->job_count; i++) {
+		const abs_download_job_t *job = &snap->jobs[i];
+		if (job->state != ABS_DL_DONE && job->state != ABS_DL_FAILED &&
+			job->state != ABS_DL_CANCELLED)
+			pending++;
+		if (job->state == ABS_DL_DONE && job->index_pending) done_needs_import = true;
+	}
+	downloads_badge = pending;
+	free(snap);
+
+	if (!done_needs_import || audiobookdb_scan_running()) return;
+	const char *root = config->sd_root_path;
+	char scan_root[1024];
+	if (root && root[0] &&
+		(size_t)snprintf(scan_root, sizeof(scan_root), "%s/%s", root, AUDIOBOOKDB_FOLDER) <
+			sizeof(scan_root)) {
+		// §8.5 line 587: the per-job completion's follow-up scan. Failures
+		// keep every row importable: the coordinator runs again at the next
+		// completed scan, whichever path starts it.
+		audiobookdb_scan_start(scan_root);
+	}
+}
+
+static void queue_watch_cb(lv_timer_t *timer) {
+	(void)timer;
+	// One mutex-brief engine bit per tick; the snapshot observation only
+	// happens at a busy/idle crossing or right after this page enqueued.
+	bool busy_now = abs_download_busy();
+	if (busy_now != queue_watch_busy || downloads_badge_dirty) {
+		queue_watch_busy = busy_now;
+		queue_watch_observe();
+	}
+}
+
+// The "Downloads" row: the queue is card-local durable intent (§8.1), not a
+// remote view — it opens whatever the browse job state is.
+static void open_downloads_cb(lv_event_t *e) {
+	(void)e;
+	audiobookshelfqueue_open();
+}
+
+// The libraries view, the root of the chain: the profile row on top, one
+// Downloads row, then one row per book library.
 static void draw_libraries(void) {
 	view = VIEW_LIBRARIES;
 	books_list = NULL;
@@ -355,6 +424,26 @@ static void draw_libraries(void) {
 		lv_obj_set_width(server_value, lv_pct(52));
 		lv_obj_set_height(server_value, lv_font_get_line_height(&font_ui_20));
 		lv_obj_set_style_text_font(server_value, &font_ui_20, 0);
+	}
+
+	// §8.5 line 594: one "Downloads" entry — a row on the library view, not a
+	// new top-level streaming tile. The value is the watcher's last count of
+	// unfinished jobs. The queue itself is card-local durable intent: the row
+	// opens it regardless of configuration or Wi-Fi.
+	lv_obj_t *badge_value = NULL;
+	settingsrow_add(content, "audiobookshelf_downloads", &badge_value, open_downloads_cb, NULL);
+	if (badge_value) {
+		lv_label_set_long_mode(badge_value, LV_LABEL_LONG_DOT);
+		lv_obj_set_width(badge_value, lv_pct(16));
+		lv_obj_set_height(badge_value, lv_font_get_line_height(&font_ui_20));
+		lv_obj_set_style_text_font(badge_value, &font_ui_20, 0);
+		if (downloads_badge > 0) {
+			char badge[16];
+			snprintf(badge, sizeof(badge), "%d", downloads_badge);
+			lv_label_set_text(badge_value, badge);
+		} else {
+			lv_obj_set_hidden(badge_value, true);
+		}
 	}
 
 	if (!audiobookshelf_configured()) {
@@ -547,16 +636,68 @@ static bool unique_local_match(const audiobookshelf_item_t *remote, char *path, 
 	return true;
 }
 
+// §8.5 line 587: download = queue. The confirm's OK enqueues durable intent
+// (§8.1) and opens the queue view — a single one-item queue is exactly the old
+// single-download behavior (same formats: files, sidecars, manifest), just
+// durable, resumable and cancellable. Enqueue deduplicates unfinished jobs by
+// identity, so a repeated tap on a queued book reopens its row instead of
+// double-queueing it. No modal: back stays free at every moment (line 468).
 static void begin_download(void *user) {
 	(void)user;
 	if (!selected_id[0] || busy) return;
-	job_t job = {.kind = JOB_DOWNLOAD};
-	snprintf(job.id, sizeof(job.id), "%s", selected_id);
-	progress_percent = 0;
-	progress_posted = -1;
-	gui_modal_show(&icon_menu_audiobooks, theme()->accent, "audiobookshelf_downloading", selected_title);
-	gui_modal_progress(0);
-	submit(&job);
+
+	char active_id[ABS_PROFILE_ID_MAX];
+	abs_profile_t profiles[ABS_PROFILE_MAX];
+	if (!abs_profiles_active(active_id, sizeof(active_id)) || abs_profiles_list(profiles, ABS_PROFILE_MAX) < 1) {
+		gui_notify_popup(tr("audiobookshelf_not_configured"));
+		return;
+	}
+	const abs_profile_t *profile = NULL;
+	for (int i = 0; i < ABS_PROFILE_MAX; i++) {
+		if (strcmp(profiles[i].id, active_id) == 0) {
+			profile = &profiles[i];
+			break;
+		}
+	}
+	if (!profile || !profile->server[0]) {
+		gui_notify_popup(tr("audiobookshelf_not_configured"));
+		return;
+	}
+
+	// Item identity only (§9.2 line 693): the server refetches the expanded
+	// book under its own auth snapshot when the worker runs the job. The
+	// browse view's progress seeds the row's remote progress hint; the fetch
+	// reconciles against the live server values anyway.
+	double seeded_progress = -1;
+	if (selected_finished && selected_duration > 0) seeded_progress = selected_duration;
+	else if (selected_progress > 0) seeded_progress = selected_progress;
+	abs_download_enqueue_t req = {
+		.kind = ABS_DL_KIND_BOOK,
+		.profile_id = profile->id,
+		.server = profile->server, // the store's normalized URL, the sync identity
+		.library_id = library_id,
+		.item_id = selected_id,
+		.episode_id = "",          // books have no episode id (§8.1)
+		.title = selected_title,
+		.destination = "",         // books: the identity fetch computes the §11.5 hash directory
+		.remote_progress = seeded_progress,
+		.remote_finished = selected_finished ? 1 : 0,
+		.remote_updated_ms = 0,
+	};
+	long long job_id = 0;
+	bool deduped = false;
+	char error[ABS_DL_ERROR_MAX];
+	if (!abs_download_enqueue_book(&req, &job_id, &deduped, error, sizeof(error))) {
+		// Capacity, disarmed card, unusable database: all refusals happen
+		// before any network activity (§8.1), with the engine's English
+		// reason. The detail row the confirm came out of stays put.
+		gui_notify_popup(error[0] ? error : tr("audiobookshelf_request_failed"));
+		return;
+	}
+	// One-item queue or dedup: either way the queue view shows the book's
+	// row — the old modal's start-of-download moment, now persistent.
+	downloads_badge_dirty = true;
+	audiobookshelfqueue_open();
 }
 
 static void begin_link(void *user) {
@@ -575,12 +716,18 @@ static void begin_link(void *user) {
 // the other server's manifest (its copy stays its own; the new download lands
 // in this server's own abs-<hash> directory); unbound, or bound to this
 // server with a different item id -> the explicit re-link question, as before.
-static void item_click_cb(void *user, int index) {
+static void item_click_cb(void *user, int index, lv_obj_t *row) {
 	(void)user;
+	(void)row;
 	if (busy || !page_items || index < 0 || index >= page_count) return;
 	snprintf(selected_id, sizeof(selected_id), "%s", page_items[index].id);
 	snprintf(selected_title, sizeof(selected_title), "%s", page_items[index].title);
 	selected_local_book[0] = '\0';
+	// The identity seed for the confirm's download action (§8.1 line 693):
+	// values copied out of the owned page, never an index into it.
+	selected_progress = page_items[index].progress;
+	selected_finished = page_items[index].finished;
+	selected_duration = page_items[index].duration;
 	char message[ABS_NAME_MAX + 128];
 	if (unique_local_match(&page_items[index], selected_local_book, sizeof(selected_local_book))) {
 		if (audiobookshelf_local_linked(selected_local_book, selected_id)) {
@@ -747,8 +894,9 @@ static void all_books_cb(lv_event_t *e) {
 // The values of one group (§10.2). Author/series filter by object id,
 // genre/tag by the string itself; the display name is what the books view
 // notes. The page resets (apply_filter), as every filter change does.
-static void group_click_cb(void *user, int index) {
+static void group_click_cb(void *user, int index, lv_obj_t *row) {
 	(void)user;
+	(void)row;
 	if (busy || !groups || index < 0) return;
 	int absolute = group_page * ABS_GROUP_UI_PAGE_LIMIT + index;
 	if (absolute >= group_count) return;
@@ -994,72 +1142,10 @@ static void draw_books(void) {
 	}
 }
 
-static void resume_import_cb(lv_timer_t *timer) {
-	(void)timer;
-	if (audiobookdb_scan_running()) return;
-	if (resume_scan_needed) {
-		const char *root = config->sd_root_path;
-		char scan_root[1024];
-		if (root && root[0] &&
-			(size_t)snprintf(scan_root, sizeof(scan_root), "%s/%s", root, AUDIOBOOKDB_FOLDER) < sizeof(scan_root) &&
-			audiobookdb_scan_start(scan_root)) {
-			resume_scan_needed = false;
-			resume_scan_attempts++;
-		}
-		return;
-	}
-
-	char book[1280];
-	char file[1280], server[512];
-	double seconds = 0;
-	bool finished = false;
-	long long updated_ms = 0;
-	pthread_mutex_lock(&job_lock); // the worker publishes these under this lock (§11.4)
-	snprintf(file, sizeof(file), "%s", downloaded_resume_file);
-	seconds = downloaded_resume_seconds;
-	finished = downloaded_finished;
-	updated_ms = downloaded_updated_ms;
-	snprintf(server, sizeof(server), "%s", downloaded_server);
-	pthread_mutex_unlock(&job_lock);
-
-	if (audiobookdb_book_for_file(file, book, sizeof(book))) {
-		audiobookdb_save_position(book, file, seconds);
-		if (finished) audiobookdb_mark_finished(book);
-		audiobookdb_abs_checkpoint_t checkpoint;
-		if (updated_ms > 0 && audiobookdb_abs_get(book, &checkpoint))
-			audiobookdb_abs_import(&checkpoint, server, file, seconds, finished, updated_ms);
-		printf("audiobookshelf: imported resume %.1f s into %s\n", seconds, file);
-		lv_timer_delete(resume_import_timer);
-		resume_import_timer = NULL;
-		return;
-	}
-	// A scan already in progress when the download completed may have taken
-	// its directory snapshot before the new files were committed. One queued
-	// follow-up scan closes that race without repeatedly rescanning the card.
-	if (resume_scan_attempts < 2) resume_scan_needed = true;
-
-	if (++resume_import_attempts >= 120) {
-		fprintf(stderr, "audiobookshelf: downloaded book was not indexed for resume import\n");
-		lv_timer_delete(resume_import_timer);
-		resume_import_timer = NULL;
-	}
-}
-
-static void start_resume_import(bool scan_first) {
-	char file[1280];
-	pthread_mutex_lock(&job_lock); // published by the worker under this lock (§11.4)
-	snprintf(file, sizeof(file), "%s", downloaded_resume_file);
-	pthread_mutex_unlock(&job_lock);
-	if (!file[0]) return;
-	resume_import_attempts = 0;
-	resume_scan_attempts = 0;
-	resume_scan_needed = scan_first;
-	if (resume_import_timer) lv_timer_delete(resume_import_timer);
-	resume_import_timer = lv_timer_create(resume_import_cb, 500, NULL);
-}
-
 static bool back_guard(void) {
-	if (busy) return true;
+	// §8.1 line 468: back/navigation is always allowed — there is no download
+	// back guard. The §8.1 busy-bit guards taps (an in-flight browse must not
+	// build a second session on top of a half-drawn page), never navigation.
 	if (view == VIEW_GROUPS) { draw_filters(); return true; }
 	if (view == VIEW_FILTERS) { draw_books(); return true; }
 	if (view == VIEW_ITEMS && search_query[0]) {
@@ -1086,24 +1172,6 @@ static bool back_guard(void) {
 	return true;
 }
 
-static void progress_async(void *user) {
-	(void)user;
-	gui_modal_progress(progress_percent);
-}
-
-static void download_progress(int track, int tracks, long long done, long long total, void *user) {
-	(void)user;
-	int within = total > 0 ? (int)(done * 100 / total) : 0;
-	int overall = tracks > 0 ? ((track - 1) * 100 + within) / tracks : within;
-	if (overall < 0) overall = 0;
-	if (overall > 100) overall = 100;
-	progress_percent = overall;
-	if (overall != progress_posted) {
-		progress_posted = overall;
-		gui_post(progress_async, NULL);
-	}
-}
-
 static void job_done_async(void *user) {
 	(void)user;
 	job_result_t done;
@@ -1119,12 +1187,11 @@ static void job_done_async(void *user) {
 	// §11.4: a completion that landed after something newer was requested -- a
 	// profile switch or a superseding request -- is stale. Its data belongs to
 	// another profile's session and must not repaint this page (a tap on such a
-	// row would send the old server's item id to the active one). Download and
-	// link are different: their modal was shown for them, and the book they
-	// finished belongs to its own server whatever is active now, so their chrome
-	// and local resume import run even when stale.
-	if (done.kind == JOB_DOWNLOAD) gui_modal_hide();
-	if (stale && done.kind != JOB_DOWNLOAD && done.kind != JOB_LINK) return;
+	// row would send the old server's item id to the active one). The local
+	// link is different: its confirm belonged to it, and the book it linked
+	// belongs to its own server whatever is now active -- the completion toast
+	// runs even when stale (its resume import happened in the worker).
+	if (stale && done.kind != JOB_LINK) return;
 
 	if (!done.ok) {
 		gui_notify_popup(done.error[0] ? done.error : tr("audiobookshelf_request_failed"));
@@ -1150,13 +1217,7 @@ static void job_done_async(void *user) {
 	case JOB_GROUPS:
 		draw_groups();
 		break;
-	case JOB_DOWNLOAD: {
-		start_resume_import(true);
-		toast_success("audiobookshelf_downloaded");
-		break;
-	}
 	case JOB_LINK:
-		start_resume_import(false);
 		toast_success("audiobookshelf_linked");
 		break;
 	default:
@@ -1203,7 +1264,6 @@ static void *worker_main(void *user) {
 		// -- so a switch can never interleave with them (§11.4: no
 		// unsynchronized shared-field writes).
 		job_result_t done = {.kind = job.kind, .ok = false, .generation = job.generation};
-		char dl_path[1024] = "";
 		char dl_resume_file[1280] = "";
 		double dl_seconds = 0;
 		bool dl_finished = false;
@@ -1268,52 +1328,56 @@ static void *worker_main(void *user) {
 					done.ok = true;
 				}
 			}
-		} else if (job.kind == JOB_DOWNLOAD || job.kind == JOB_LINK) {
+		} else if (job.kind == JOB_LINK) {
 			audiobookshelf_book_t *book = calloc(1, sizeof(*book));
 			if (!book) snprintf(done.error, sizeof(done.error), "%s", tr("out_of_memory"));
 			else {
 				snprintf(dl_server, sizeof(dl_server), "%s", audiobookshelf_server());
-				if (job.kind == JOB_DOWNLOAD) {
-					const char *root = config->sd_root_path;
-					done.ok = root && root[0] && audiobookshelf_book(job.id, book) &&
-						audiobookshelf_download(book, root, download_progress, NULL, dl_path, sizeof(dl_path));
-					if (done.ok)
-						audiobookshelf_resume_target(book, dl_path, dl_resume_file,
-											 sizeof(dl_resume_file), &dl_seconds, &dl_finished);
-				} else {
-					done.ok = audiobookshelf_book(job.id, book) &&
-						audiobookshelf_link_local(book, job.path, dl_resume_file,
-										 sizeof(dl_resume_file), &dl_seconds, &dl_finished);
-					if (done.ok) {
-						char local_file[1280];
-						double local_seconds = 0;
-						if (audiobookdb_get_position(job.path, local_file, sizeof(local_file), &local_seconds)) {
-							audiobookshelf_queue_progress(job.path, local_file, local_seconds,
-													 audiobookdb_is_finished(job.path), true);
-							dl_resume_file[0] = '\0'; // the local position is already pending
+				done.ok = audiobookshelf_book(job.id, book) &&
+					audiobookshelf_link_local(book, job.path, dl_resume_file,
+									 sizeof(dl_resume_file), &dl_seconds, &dl_finished);
+				if (done.ok) dl_updated_ms = book->progress_updated_ms;
+				free(book);
+				// §11.5: bind an existing local copy. When the local book has
+				// its own position, that position is pushed to the server's
+				// queue (next sync pass). When it has none, the link imports
+				// the server's checkpoint onto the local copy — the old page
+				// did this through its resume-import timer; the linked book is
+				// already indexed (the tap matched it), so the import is
+				// immediate here, in the worker, with no shared state.
+				if (done.ok) {
+					char local_file[1280];
+					double local_seconds = 0;
+					if (audiobookdb_get_position(job.path, local_file, sizeof(local_file), &local_seconds)) {
+						audiobookshelf_queue_progress(job.path, local_file, local_seconds,
+													audiobookdb_is_finished(job.path), true);
+						dl_resume_file[0] = '\0'; // the local position is already pending
+					} else if (dl_resume_file[0]) {
+						char book_path[1280];
+						if (audiobookdb_book_for_file(dl_resume_file, book_path, sizeof(book_path))) {
+							audiobookdb_save_position(book_path, dl_resume_file, dl_seconds);
+							if (dl_finished) audiobookdb_mark_finished(book_path);
+							audiobookdb_abs_checkpoint_t checkpoint;
+							if (dl_updated_ms > 0 && audiobookdb_abs_get(book_path, &checkpoint))
+								audiobookdb_abs_import(&checkpoint, dl_server, dl_resume_file, dl_seconds,
+													   dl_finished, dl_updated_ms);
+							printf("audiobookshelf: linked copy imported resume %.1f s into %s\n",
+								   dl_seconds, dl_resume_file);
 						}
 					}
 				}
-				if (done.ok) dl_updated_ms = book->progress_updated_ms;
-				free(book);
 			}
 		}
 		if (!done.ok && !done.error[0])
 			snprintf(done.error, sizeof(done.error), "%s", audiobookshelf_last_error());
 
-		// One locked handoff to the GUI thread: the result plus, for download
-		// and link jobs only, their outcomes. Browse jobs must not touch
-		// downloaded_* -- a resume import may still be polling them from an
-		// earlier download while the user browses again.
+		// One locked handoff to the GUI thread: the result. The 0.5.x
+		// downloaded_* singleton handoff is gone: downloads are queue jobs
+		// whose rows carry their own resume values (imported per-row by the
+		// scan-completion coordinator), and the link's own import happened
+		// above, in this worker.
 		pthread_mutex_lock(&job_lock);
 		result = done;
-		if (done.kind == JOB_DOWNLOAD || done.kind == JOB_LINK) {
-			snprintf(downloaded_resume_file, sizeof(downloaded_resume_file), "%s", dl_resume_file);
-			downloaded_resume_seconds = dl_seconds;
-			downloaded_finished = dl_finished;
-			downloaded_updated_ms = dl_updated_ms;
-			snprintf(downloaded_server, sizeof(downloaded_server), "%s", dl_server);
-		}
 		pthread_mutex_unlock(&job_lock);
 		gui_post(job_done_async, NULL);
 	}
@@ -1365,6 +1429,11 @@ static lv_obj_t *make_field(lv_obj_t *parent, const char *placeholder, int y) {
 
 void audiobookshelfpage_init(gui_config_t *cfg) {
 	config = cfg;
+	// The queue screen is an ABS-family page: built with this one so every
+	// link to it (the Downloads row, a download confirm) exists up front. Its
+	// engine boundary is abs_download.h only — armed at boot in main.c, before
+	// any page exists.
+	audiobookshelfqueue_init(cfg);
 	audiobookshelf_screen = lv_obj_create(NULL);
 	content = settingsrow_page(audiobookshelf_screen, cfg, "audiobookshelf");
 	page_title = settingsrow_page_title(audiobookshelf_screen);
@@ -1395,6 +1464,13 @@ void audiobookshelfpage_init(gui_config_t *cfg) {
 	switcher_attach_back_gesture(audiobookshelf_screen);
 	player_sheet_attach_drag(audiobookshelf_screen, true);
 	player_sheet_attach_drag(content, true);
+	// §8.5 line 587: the per-job completion watcher. Started with the page so
+	// a download finishes (and its import scan fires) whichever screen the
+	// user is on; crossings also re-count the Downloads badge. One cheap
+	// engine-bit read per tick; observations only at crossings or enqueues.
+	queue_watch_busy = abs_download_busy();
+	downloads_badge_dirty = true; // count whatever the last session left behind
+	queue_watch_timer = lv_timer_create(queue_watch_cb, 500, NULL);
 }
 
 // ---------------------------------------------------------------------------

@@ -171,7 +171,7 @@ export DISPLAY="localhost:$(cat "$DISPLAY_FILE")"
 (
 	cd "$RUN"
 	exec env SONIX_SD_ROOT="$SD" SONIX_CONFIG="$CONFIG" SONIX_EBOOK_CONFIG="$WORK/ebook_config.ini" \
-		SONIX_LOG="$WORK/player.log" ALSA_CONFIG_PATH="$ASOUND" \
+		SONIX_LOG="$WORK/player.log" ALSA_CONFIG_PATH="$ASOUND" SONIX_AUDIOBOOKSHELF_PROFILES="$WORK/audiobookshelf-profiles.ini" \
 		./sonix_player_host >"$WORK/player.stdout" 2>&1
 ) &
 PLAYER_PID=$!
@@ -189,7 +189,7 @@ fi
 
 click 356 160 1       # Home -> Streaming (upstream 1.3.0 home layout)
 click 124 704 2       # Streaming -> Audiobookshelf (fifth tile, bottom left)
-click 280 305 2       # library
+click 280 419 2       # library (one row below the new Downloads row)
 # §10.2 toolbar: Search / Sort / Filter. Authors and Series live inside the
 # Filter page now; the group values keep their rows (first row centre y=200).
 click 390 180 2       # Filter toolbar -> filter kinds
@@ -218,11 +218,26 @@ grep -q '/search?q=m&limit=101' "$WORK/progress.requests" || fail "search did no
 grep -q 'filter=authors.YXV0aG9yLTE' "$WORK/progress.requests" || fail "author filter missing"
 grep -q 'sort=sequence.*filter=series.c2VyaWVzLTE' "$WORK/progress.requests" || fail "series order/filter missing"
 click 43 88 1         # search results -> libraries
-click 280 305 2       # reopen full library
+click 280 419 2       # reopen full library (one row below the new Downloads row)
 click 240 277 1       # first title below toolbar
 scrot "$WORK/action-confirm.png"
 click 330 475 1       # confirm download or local link
 
+# §8.5 line 597: the 0.6.0 download path is the queue: the confirm enqueues
+# (§8.5 line 587, begin_download) and the old modal's synchronous completion
+# is gone -- wait for durable queue DONE instead. The resume import is then
+# the queue's own chain: the page's per-job-completion watcher starts the
+# follow-up scan and the scan-completion coordinator imports the DONE row's
+# resume values into the audiobook index (§8.3 line 556).
+if [[ "$EXISTING" != 1 ]]; then
+	QDB="$SD/.local/audiobookshelf-downloads.db"
+	queue_done() {
+		local row
+		row=$(sqlite3 "$QDB" "SELECT state||'/'||ack_reset_done FROM DOWNLOAD_JOB WHERE seq=0;" 2>/dev/null)
+		[[ "$row" == "DONE/1" ]]
+	}
+	wait_for "durable queue DONE" 900 queue_done
+fi
 wait_for "downloaded resume import" 900 resume_ready
 # §11.5: new downloads land in the server-qualified abs-<sha256(server)[0:12]>
 # root. The mock server URL is already in normalized form, so this shell's
@@ -259,9 +274,22 @@ if [[ "$EXISTING" == 1 ]]; then
 	exit 0
 fi
 
+# Walk out to the Home grid. Re-entering the ABS page re-runs its load job,
+# which redraws the library view, so the chain is: pop the queue screen, wait
+# for the load's libraries fetch, then two chevrons (the guard passes at the
+# library view; the next two pop Streaming and Home).
 sleep 2                # let the success toast release the back button
-click 43 88 2          # titles -> libraries
-click 43 88 2          # Audiobookshelf -> Streaming
+libs_before=$(grep -c "GET /api/libraries " "$WORK/progress.requests" 2>/dev/null || true)
+click 43 88 2          # the queue screen -> the ABS page (line 597: the confirm opened the queue)
+grep_libraries_now() {
+	local n
+	n=$(grep -c "GET /api/libraries " "$WORK/progress.requests" 2>/dev/null) || true
+	[[ "$n" =~ ^[0-9]+$ ]] || n=0
+	[[ "$n" -gt "$libs_before" ]]
+}
+wait_for "the ABS page's library view after the queue" 60 grep_libraries_now
+sleep 1                # the fetch published -> draw_libraries
+click 43 88 2          # Audiobookshelf -> Streaming (the guard passes at the library view)
 click 43 88 2          # Streaming -> Home
 click 356 406 1        # Home -> Audiobooks (upstream 1.3.0 home layout)
 click 125 232 1        # Audiobooks -> Library
@@ -285,7 +313,7 @@ if [[ "$OFFLINE_RESTART" == 1 ]]; then
 	(
 		cd "$RUN"
 		exec env SONIX_SD_ROOT="$SD" SONIX_CONFIG="$CONFIG" SONIX_EBOOK_CONFIG="$WORK/ebook_config.ini" \
-			SONIX_LOG="$WORK/restart.log" ALSA_CONFIG_PATH="$ASOUND" \
+			SONIX_LOG="$WORK/restart.log" ALSA_CONFIG_PATH="$ASOUND" SONIX_AUDIOBOOKSHELF_PROFILES="$WORK/audiobookshelf-profiles.ini" \
 			./sonix_player_host >"$WORK/restart.stdout" 2>&1
 	) &
 	PLAYER_PID=$!
@@ -342,7 +370,7 @@ PY
 		(
 			cd "$RUN"
 			exec env SONIX_SD_ROOT="$SD" SONIX_CONFIG="$CONFIG" SONIX_EBOOK_CONFIG="$WORK/ebook_config.ini" \
-				SONIX_LOG="$WORK/$scenario.log" ALSA_CONFIG_PATH="$ASOUND" \
+				SONIX_LOG="$WORK/$scenario.log" ALSA_CONFIG_PATH="$ASOUND" SONIX_AUDIOBOOKSHELF_PROFILES="$WORK/audiobookshelf-profiles.ini" \
 				./sonix_player_host >"$WORK/$scenario.stdout" 2>&1
 		) &
 		PLAYER_PID=$!

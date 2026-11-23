@@ -27,6 +27,10 @@
 
 #define ABS_LIST_NOTE_SLOT ABS_LIST_ROW_POOL
 #define ABS_LIST_BIND_BUF 256
+// A note without rows still needs a place on the page: a zero-high canvas is
+// clipped to nothing and the message would never be seen. When the note is
+// up (empty, loading, error) the canvas keeps this much height.
+#define ABS_LIST_NOTE_AREA 192
 
 struct abs_list {
 	lv_obj_t *canvas;
@@ -43,6 +47,16 @@ struct abs_list {
 };
 
 static void abs_list_rebind(abs_list_t *list);
+
+// The canvas is the full data height: the last slot's bottom edge is
+// (count - 1) * pitch + row_height. With the note up the canvas keeps the
+// note's standing height instead (§10.2: the empty page is a state of its
+// own -- the message has to be visible, not clipped into nothing).
+static int abs_list_canvas_height(const abs_list_t *list) {
+	if (list->noted) return ABS_LIST_NOTE_AREA;
+	if (list->count <= 0) return 0;
+	return (list->count - 1) * list->pitch + list->row_height;
+}
 
 // Recomputes the visible window from the parent's scroll position and
 // refills the pool from `first`: rows past the end of the data hide, every
@@ -105,7 +119,7 @@ static void row_clicked_cb(lv_event_t *e) {
 		if (list->rows[i] != row) continue;
 		int index = list->row_index[i];
 		if (index < 0 || index >= list->count) return;
-		if (list->click) list->click(list->user, index);
+		if (list->click) list->click(list->user, index, row);
 		return;
 	}
 }
@@ -220,16 +234,14 @@ void abs_list_destroy(abs_list_t *list) {
 void abs_list_set_count(abs_list_t *list, int count) {
 	if (!list || count < 0) return;
 	list->count = count;
-	// The canvas is the full data height: the last slot's bottom edge is
-	// (count - 1) * pitch + row_height.
-	int height = count > 0 ? (count - 1) * list->pitch + list->row_height : 0;
-	lv_obj_set_height(list->canvas, height);
+	lv_obj_set_height(list->canvas, abs_list_canvas_height(list));
 	if (!list->noted) abs_list_rebind(list);
 }
 
 void abs_list_note(abs_list_t *list, const char *text) {
 	if (!list) return;
 	list->noted = text && text[0];
+	lv_obj_set_height(list->canvas, abs_list_canvas_height(list));
 	lv_obj_t *note = lv_obj_get_child(list->canvas, ABS_LIST_NOTE_SLOT);
 	if (note) lv_label_set_text(note, list->noted ? text : "");
 	abs_list_rebind(list);

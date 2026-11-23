@@ -354,6 +354,7 @@ class Handler(BaseHTTPRequestHandler):
     credentials: dict
     log_path: Path
     log_lock: threading.Lock
+    throttle: dict  # file URL token -> per-16 KiB delay in ms (default empty)
 
     def log_message(self, fmt, *args):
         return
@@ -695,12 +696,32 @@ class Handler(BaseHTTPRequestHandler):
             if not media_file.is_file():
                 self.send_error_json("not found", 404)
                 return
-            self.send_bytes(200, media_file.read_bytes(), "audio/mpeg")
+            self.send_media_file(media_file, file_token)
             return
         if self.find_row(item_id) is None and item_id not in self.fixture.details:
             self.send_error_json("not found", 404)
             return
-        self.send_bytes(200, synthetic_audio_bytes(item_id, file_token), "audio/mpeg")
+        self.send_media_file(None, file_token, synthetic_bytes=synthetic_audio_bytes(item_id, file_token))
+
+    def send_media_file(self, media_file, file_token, synthetic_bytes=None):
+        """serve_item_file's body: plain, or chunked+slept when the launch
+        throttled this file's URL token (§8.5 line 595 slow responses)."""
+        body = (synthetic_bytes if media_file is None
+                else media_file.read_bytes())
+        delay_ms = Handler.throttle.get(file_token, 0)
+        if delay_ms <= 0:
+            self.send_bytes(200, body, "audio/mpeg")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        chunk_size = 16 * 1024
+        for start in range(0, len(body), chunk_size):
+            self.wfile.write(body[start:start + chunk_size])
+            self.wfile.flush()
+            if start + chunk_size < len(body):
+                time.sleep(delay_ms / 1000.0)
 
     def serve_cover(self):
         item_id = urlparse(self.path).path.split("/")[3]
@@ -839,6 +860,12 @@ def main():
     parser.add_argument("--fixture-dir", type=Path, default=DEFAULT_FIXTURE_ROOT)
     parser.add_argument("--verify-only", action="store_true",
                         help="validate provenance and hashes, then exit")
+    parser.add_argument("--throttle", action="append", default=[],
+                        metavar="TOKEN:MS",
+                        help="slow the media-file response whose URL token is "
+                             "TOKEN by MS milliseconds per 16 KiB chunk "
+                             "(repeatable), e.g. --throttle 2:1500 — lets a "
+                             "test pause a transfer mid-file deterministically")
     args = parser.parse_args()
 
     try:
@@ -866,6 +893,13 @@ def main():
     Handler.credentials = {"credential-a": progress_a, "credential-b": progress_b}
     Handler.log_path = args.progress_file.with_suffix(".requests")
     Handler.log_lock = threading.Lock()
+    Handler.throttle = {}
+    for spec in args.throttle:
+        token, sep, ms = spec.partition(":")
+        if not sep or not ms.isdigit() or int(ms) <= 0:
+            print(f"sonix-abs-mock: invalid --throttle {spec!r} (want TOKEN:MS)", file=sys.stderr)
+            return 2
+        Handler.throttle[token] = int(ms)
     log_startup(fixture, Handler.log_path, Handler.log_lock)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
