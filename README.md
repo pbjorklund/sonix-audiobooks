@@ -12,8 +12,8 @@ progress that syncs by itself once Wi-Fi is back.
 > do is upstream's own and is in **[FEATURES.md](FEATURES.md)**. What the fork
 > adds is described in **[AUDIOBOOK_EDITION.md](AUDIOBOOK_EDITION.md)**.
 
-## Release 0.5.0
-Rebuilt on upstream sonix-player v1.3.1. This release introduces a custom boot screen (SonixOS lockup + blue DJ gnome) and several correctness fixes, including non-destructive effects bypass, atomic EQ presets, and hardened cover-cache indexing.
+## Release 0.6.0
+Rebuilt on upstream sonix-player v1.3.1. This release adds multiple Audiobookshelf server profiles, a persistent download queue, a detailed book view with authenticated covers, and refined browsing with 100-match search and advanced sorting/filtering.
 
 <p align="center"><img src="docs/screenshots/boot-screen.png" width="240" alt="Sonix Audiobooks 0.5.0 boot screen"></p>
 

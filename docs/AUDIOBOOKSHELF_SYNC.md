@@ -8,10 +8,10 @@ The R1 remains a standalone player. Download or link a book once, turn Wi-Fi off
 
 Starting with **0.3.0**, open **Streaming > Audiobookshelf**, choose your server library, then use the toolbar:
 
-- **Search** opens the keyboard. Enter a query and tap the magnifying-glass key to submit. This searches the whole server library, not just the visible page. Matching follows the server's search behavior, so results can match metadata beyond the title. At most 40 books are shown; refine the query if the limit notice appears.
-- **Authors** opens an alphabetical author list. Select an author to see their books by title.
-- **Series** opens an alphabetical series list. Select a series to see its books in series sequence.
-- Group lists and ordinary/filtered book lists have 40-entry pages. Use the page controls to continue browsing.
+- **Search** opens the keyboard. Enter a query and tap the magnifying-glass key to submit. This searches the whole server library, not just the visible page. Matching follows the server's search behavior, so results can match metadata beyond the title. Up to 100 books are shown; a notice appears if more results exist.
+- **Filter** allows you to narrow results by Authors, Series, Genres, or Tags.
+- **Sort** lets you order the list by title, author, date, duration, or series.
+- Group lists and ordinary/filtered book lists use virtual scrolling for fast navigation.
 - **Back** returns from an author's or series' books to that group list. **All books** clears a search or filter; submitting an empty search also returns to all books.
 
 Wi-Fi and a reachable configured server are required for this browser. It does not change the local Audiobooks views, and finding a book does not automatically download it. Author spelling, series membership and sequence come from your server's metadata; this interface does not merge duplicate author spellings.
@@ -23,6 +23,21 @@ Wi-Fi and a reachable configured server are required for this browser. It does n
 ## Which books sync?
 
 Books downloaded through Streaming > Audiobookshelf are linked. An existing SD-card copy must first be linked through that server library; a matching title alone does not enable sync. Local-only books continue to remember their position on the R1 without sending it anywhere.
+
+### Multiple Servers and Profiles
+Starting with **0.6.0**, you can configure multiple Audiobookshelf servers. Each server is saved as a named profile (URL + token). You can switch between profiles using the profile picker. To ensure security, the player enforces same-origin checks and uses per-operation auth snapshots.
+
+### Book Details and Covers
+Before downloading, you can now view a **Book Detail** page. This provides a full overview of the book, including the narrator, series position, description, and a list of chapters. The page displays an authenticated cached cover image, which can be viewed in fullscreen. From here, you can choose to:
+- **Play local**: Start playback if the book is already on the card.
+- **Link existing**: Link a book already present on the SD card to the server.
+- **Queue download**: Add the book to the download queue.
+
+### Download Queue
+Downloads are now managed by a persistent 16-job FIFO queue. The queue is durable, meaning it survives crashes or power loss. You can pause, resume, cancel, remove, or retry individual jobs from the Queue screen. The system includes a `WAITING_NETWORK` backoff to prevent repeated failures during connectivity drops.
+
+### Server-Specific Downloads
+If a book is available on multiple configured servers, you can explicitly choose to "Download anyway from this server," allowing you to override the default profile for a specific book.
 
 ## Now Playing indicator
 

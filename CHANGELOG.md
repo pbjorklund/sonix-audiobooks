@@ -2,6 +2,18 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 0.6.0 - 2026-11-23
+
+- **Multiple ABS Servers:** Added support for named URL+token profiles with a profile picker and editor. Includes per-operation auth snapshots and same-origin enforcement.
+- **Browse Refinements:** Expanded search to 100 matches with truthful overflow. Added exact sorting and filtering by title, author, date, duration, series, genres, and tags. Implemented virtual scrolling for smoother browsing.
+- **Download Queue:** Added a persistent 16-job FIFO queue with durable state. Supports pause, resume, cancel, remove, and retry, with automatic recovery from crashes or power loss and network backoff.
+- **Book Detail Page:** New pre-download view showing full metadata (narrator, series position, description, chapters) and authenticated cached covers. Options to play local, link existing, or queue for download.
+- **Deferred:** Podcasts via ABS (M5) have been deferred to a future release.
+
+> [!NOTE]
+> **Downgrade Note:** A downgrade to 0.5.0 may require re-entering ABS credentials; it must not require redownloading media or resetting local resume.
+> **R3PII Parity:** The R3 Pro II English catalogue currently lags the new keys and is source-parity-only; this is not a support claim.
+
 ## Sonix Audiobooks 0.5.0 - 2026-11-21
 
 Rebuilt on upstream sonix-player v1.3.1 (commit `5d8bb17`).
