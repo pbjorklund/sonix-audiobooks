@@ -41,7 +41,7 @@
 // notches read as a dotted line, not a scale. Finer sliders (Soundfield width,
 // 0.00 to 2.00 in steps of 0.05) go without.
 #define SLIDER_TICK_MAX_STEPS 16
-#define ROW_RADIUS 12 // Adwaita boxed-list corner radius
+#define ROW_RADIUS SETTINGSROW_ROW_RADIUS
 #define ROW_GAP 8
 
 // Every page heading, row name and card name goes through this file, so the
@@ -800,7 +800,7 @@ lv_obj_t *settingsrow_toggle_pills(lv_obj_t *parent, const char *title, lv_event
 	lv_obj_set_width(card, lv_pct(100));
 	lv_obj_set_height(card, LV_SIZE_CONTENT);
 	lv_obj_add_style(card, &theme_style_card, 0);
-	lv_obj_set_style_radius(card, 12, 0);
+	lv_obj_set_style_radius(card, ROW_RADIUS, 0);
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
 	lv_obj_set_style_pad_all(card, 20, 0);
@@ -857,7 +857,7 @@ lv_obj_t *settingsrow_pills(lv_obj_t *parent, const char *title, lv_obj_t **pill
 	lv_obj_set_width(card, lv_pct(100));
 	lv_obj_set_height(card, LV_SIZE_CONTENT);
 	lv_obj_add_style(card, &theme_style_card, 0);
-	lv_obj_set_style_radius(card, 12, 0);
+	lv_obj_set_style_radius(card, ROW_RADIUS, 0);
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
 	lv_obj_set_style_pad_all(card, 20, 0);
@@ -930,7 +930,7 @@ static void paint_duration_roller(lv_obj_t *roller) {
 	}
 	lv_obj_set_style_text_color(roller, theme()->text_secondary, 0);
 	lv_obj_set_style_bg_color(roller, theme()->surface_pressed, LV_PART_SELECTED);
-	lv_obj_set_style_text_color(roller, theme()->accent, LV_PART_SELECTED);
+	lv_obj_set_style_text_color(roller, theme()->accent_readable, LV_PART_SELECTED);
 }
 
 static void fill_wheel_numbers(char *out, size_t size, int last, const char *format) {

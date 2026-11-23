@@ -18,23 +18,28 @@ lv_style_t theme_style_switch_checked; // switch indicator, on state
 lv_style_t theme_style_accent_bg;	   // anything that must follow the accent
 lv_style_t theme_style_slider_track;   // a slider's unfilled part
 
-// Dark palette, matching the boot screen: a near-black window (#0a0a0a) with
-// cards a step above it (#1a1a1a) and a royal-blue accent (#0086fc). Secondary
-// text is #a0a0a0, flattened against the card colour.
+// Dark palette, the Hat Blue design: an almost-black window (#08090C) with
+// cards a step above it (#191B21) and the deep royal-blue accent #135EDB, the
+// hue of the menu icons' knitted hat. Small blue foreground marks (check
+// ticks, links, focus rings) use the lighter #7BAEFF instead, which holds its
+// contrast on a dark card; see accent_readable.
 static theme_palette_t palette_dark = {
-	.screen_bg = LV_COLOR_MAKE(10, 10, 10),
-	.surface = LV_COLOR_MAKE(26, 26, 26),
-	.surface_pressed = LV_COLOR_MAKE(38, 38, 38),
-	.panel = LV_COLOR_MAKE(15, 15, 15),
-	.cover_bg = LV_COLOR_MAKE(15, 15, 15),
-	.text_primary = LV_COLOR_MAKE(255, 255, 255),
-	.text_secondary = LV_COLOR_MAKE(160, 160, 160),
-	.accent = LV_COLOR_MAKE(0, 134, 252),
+	.screen_bg = LV_COLOR_MAKE(8, 9, 12),
+	.surface = LV_COLOR_MAKE(25, 27, 33),
+	.surface_pressed = LV_COLOR_MAKE(36, 42, 53),
+	.panel = LV_COLOR_MAKE(16, 18, 22),
+	.cover_bg = LV_COLOR_MAKE(16, 18, 22),
+	.text_primary = LV_COLOR_MAKE(245, 247, 252),
+	.text_secondary = LV_COLOR_MAKE(168, 175, 188),
+	.accent = LV_COLOR_MAKE(19, 94, 219),
+	.accent_readable = LV_COLOR_MAKE(123, 174, 255),
 	.dark = true,
 };
 
 // Adwaita light: window #fafafa, cards white, pressed = black at 8%%, text
-// black at 80%%. The accent is the same royal blue #0086fc in both variants.
+// black at 80%%. The accent follows the accent presets like the dark palette,
+// and its readable form is the accent itself: #135EDB already reads against a
+// white card, so light mode keeps every small blue mark exactly where it was.
 static theme_palette_t palette_light = {
 	// The window is pushed further from white than stock Adwaita's #fafafa:
 	// on this panel white cards on a #fafafa window are indistinguishable, so
@@ -46,7 +51,8 @@ static theme_palette_t palette_light = {
 	.cover_bg = LV_COLOR_MAKE(224, 226, 230),
 	.text_primary = LV_COLOR_MAKE(50, 50, 50),
 	.text_secondary = LV_COLOR_MAKE(115, 115, 115),
-	.accent = LV_COLOR_MAKE(0, 134, 252),
+	.accent = LV_COLOR_MAKE(19, 94, 219),
+	.accent_readable = LV_COLOR_MAKE(19, 94, 219),
 	.dark = false,
 };
 
@@ -69,7 +75,7 @@ static theme_palette_t *active = &palette_dark;
 // The accent presets, Adwaita's named accents, ordered as requested: blue
 // (the default), then warm to cool -- orange, yellow, green, purple, pink.
 static const lv_color_t ACCENT_COLORS[THEME_ACCENT_COUNT] = {
-	LV_COLOR_MAKE(0, 134, 252),  // blue (#0086fc, royal — matches the boot-screen gnome)
+	LV_COLOR_MAKE(19, 94, 219),  // blue (#135EDB, the Hat Blue royal — the colour of the menu icons)
 	LV_COLOR_MAKE(255, 120, 0),  // orange (#ff7800)
 	LV_COLOR_MAKE(229, 165, 10), // yellow (#e5a50a)
 	LV_COLOR_MAKE(46, 194, 126), // green (#2ec27e)
@@ -147,6 +153,22 @@ static lv_color_t tint_with(lv_color_t c, lv_color_t accent, float strength) {
 // Points `active` at the chosen preset, or at a tinted copy of it.
 static void rebuild_active(void) {
 	theme_palette_t *base = dark_selected ? &palette_dark : &palette_light;
+
+	// The readable form of the accent. The Hat Blue blue keeps a brighter
+	// small-mark colour in the dark palette (#7BAEFF): a thin check tick or a
+	// link drawn in the fill blue sits at three-to-one against a dark card,
+	// where the same blue on a light card is fine as it is. Any other accent
+	// keeps its preset colour everywhere, as it always has.
+	lv_color_t blue = ACCENT_COLORS[0];
+	bool is_blue_palette = base->accent.red == blue.red && base->accent.green == blue.green &&
+						   base->accent.blue == blue.blue;
+	if (is_blue_palette) {
+		palette_dark.accent_readable = lv_color_make(123, 174, 255);
+		palette_light.accent_readable = lv_color_make(19, 94, 219);
+	} else {
+		palette_dark.accent_readable = palette_dark.accent;
+		palette_light.accent_readable = palette_light.accent;
+	}
 
 	if (!dynamic_tint) {
 		active = base;

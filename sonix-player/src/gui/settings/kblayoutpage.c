@@ -110,7 +110,7 @@ static void refresh(void) {
 		// the accent is what says so -- without it the order of the list would
 		// look like a preference rather than a decision.
 		bool is_default = i == 0;
-		lv_obj_set_style_text_color(entries[i].name, is_default ? theme()->accent : theme()->text_primary, 0);
+		lv_obj_set_style_text_color(entries[i].name, is_default ? theme()->accent_readable : theme()->text_primary, 0);
 	}
 
 	lv_obj_set_y(others_heading, others_heading_y());
@@ -218,7 +218,7 @@ static void drag_cb(lv_event_t *e) {
 		lv_obj_add_style(drag_ghost, &theme_style_card, 0);
 		lv_obj_set_style_radius(drag_ghost, ROW_RADIUS, 0);
 		lv_obj_set_style_border_width(drag_ghost, 2, 0);
-		lv_obj_set_style_border_color(drag_ghost, theme()->accent, 0);
+		lv_obj_set_style_border_color(drag_ghost, theme()->accent_readable, 0);
 		lv_obj_set_style_shadow_width(drag_ghost, 0, 0);
 		lv_obj_set_style_pad_hor(drag_ghost, 20, 0);
 		lv_obj_set_scrollable(drag_ghost, false);

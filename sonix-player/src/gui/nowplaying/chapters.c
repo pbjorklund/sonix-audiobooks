@@ -148,10 +148,10 @@ static lv_obj_t *make_row(int i, const char *title, const char *clock, bool play
 	// The chapter being listened to is marked the way the queue marks the
 	// playing track: the accent on the words, not a second widget.
 	if (playing) {
-		lv_obj_set_style_text_color(number, theme()->accent, 0);
-		lv_obj_set_style_text_color(label, theme()->accent, 0);
+		lv_obj_set_style_text_color(number, theme()->accent_readable, 0);
+		lv_obj_set_style_text_color(label, theme()->accent_readable, 0);
 		if (time_label) {
-			lv_obj_set_style_text_color(time_label, theme()->accent, 0);
+			lv_obj_set_style_text_color(time_label, theme()->accent_readable, 0);
 		}
 	}
 	return row;

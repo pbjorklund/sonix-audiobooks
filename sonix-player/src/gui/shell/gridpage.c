@@ -15,7 +15,7 @@
 #include "src/system/device/usb.h"
 
 #define GRID_GAP 14
-#define TILE_RADIUS 12 // Adwaita card radius
+#define TILE_RADIUS 22 // Hat Blue tile radius; the icon squares' own corners echo it
 
 static void unavailable_cb(lv_event_t *e) {
 	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
@@ -66,6 +66,11 @@ static void add_tile(lv_obj_t *grid, const grid_entry_t *entry, int width, int h
 	lv_obj_add_style(tile, &theme_style_card, 0);
 	lv_obj_add_style(tile, &theme_style_card_pressed, LV_STATE_PRESSED);
 	lv_obj_set_style_radius(tile, TILE_RADIUS, 0);
+	// Flat card: the artwork's own gradient and rounded corners are the
+	// decoration. No border, no shadow, and a press only changes the fill --
+	// theme_style_card_pressed pins the grow already in theme_init(). The
+	// keyboard focus outline the default theme adds stays available.
+	lv_obj_set_style_border_width(tile, 0, 0);
 	lv_obj_set_style_shadow_width(tile, 0, 0);
 	lv_obj_set_style_pad_all(tile, 8, 0);
 

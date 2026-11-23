@@ -1140,7 +1140,7 @@ static void build_toggle_pills(lv_obj_t *parent, const char *title, lv_event_cb_
 	lv_obj_set_width(card, lv_pct(100));
 	lv_obj_set_height(card, LV_SIZE_CONTENT);
 	lv_obj_add_style(card, &theme_style_card, 0);
-	lv_obj_set_style_radius(card, 12, 0);
+	lv_obj_set_style_radius(card, SETTINGSROW_ROW_RADIUS, 0);
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
 	lv_obj_set_style_pad_all(card, 20, 0);
@@ -1407,7 +1407,7 @@ static lv_obj_t *make_control_card(lv_obj_t *parent, const char *title) {
 	lv_obj_set_width(card, lv_pct(100));
 	lv_obj_set_height(card, LV_SIZE_CONTENT);
 	lv_obj_add_style(card, &theme_style_card, 0);
-	lv_obj_set_style_radius(card, 12, 0);
+	lv_obj_set_style_radius(card, SETTINGSROW_ROW_RADIUS, 0);
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
 	lv_obj_set_style_pad_all(card, 20, 0);
@@ -1597,7 +1597,7 @@ static void build_scan_page(gui_config_t *cfg) {
 
 	scan_count_label = lv_label_create(container);
 	lv_label_set_text(scan_count_label, "0");
-	lv_obj_set_style_text_color(scan_count_label, theme()->accent, 0);
+	lv_obj_set_style_text_color(scan_count_label, theme()->accent_readable, 0);
 	lv_obj_set_style_text_font(scan_count_label, &font_ui_32, 0);
 
 	scan_status_label = lv_label_create(container);

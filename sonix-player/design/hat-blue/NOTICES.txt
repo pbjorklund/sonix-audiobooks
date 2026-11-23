@@ -1,0 +1,10 @@
+Source and artwork notices
+
+This design kit targets https://github.com/yetisoldier/sonix-audiobooks, mapped against commit b0756860dfb68edebb71deee7bad4e71be82cef6.
+The project's GPL-3.0 license is reproduced in LICENSE-upstream.txt. Retained utility SVGs and semantic quality badges originate from that repository and keep their original embedded notices. Their source copies are provided in this kit.
+
+New menu artwork, gradient containers and design documentation were produced for the user's Sonix Audiobooks project. AirPlay, DLNA and SonixLink symbols reuse the corresponding existing SVG geometry. Existing utility artwork is retained rather than represented as new work. The design is inspired by modern iOS conventions; no Apple SF Symbols assets or Apple fonts are distributed. Preview text uses the host's Segoe UI font at render time; no font binaries are included.
+
+Tidal, Qobuz, AirPlay, Bluetooth, DLNA and related service names and marks identify their respective services and remain the property of their respective owners. Their inclusion does not imply affiliation. Tidal's four-diamond layout follows the existing repository artwork. Qobuz uses a simplified Q/record construction matching the established identity.
+
+The approved concept image was generated during this design conversation. Editable SVG artwork and exports reconstruct and extend the approved direction rather than claiming to reproduce exact generated pixels.

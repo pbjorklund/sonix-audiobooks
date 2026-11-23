@@ -16,6 +16,11 @@ typedef struct {
 	lv_color_t text_primary;
 	lv_color_t text_secondary;
 	lv_color_t accent;		   // the blue used for active things
+	lv_color_t accent_readable; // the accent as a small foreground mark: check
+							   // ticks, links, focus rings. Filled controls stay
+							   // on `accent`; a thin line or a few-px-wide glyph
+							   // needs more contrast against a dark surface than
+							   // the fill colour alone gives.
 	bool dark;
 } theme_palette_t;
 

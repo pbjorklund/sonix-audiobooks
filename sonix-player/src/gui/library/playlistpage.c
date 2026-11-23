@@ -826,7 +826,7 @@ static void import_tick_paint(int index) {
 		return;
 	}
 	bool on = import_selected[index];
-	lv_obj_set_style_image_recolor(import_ticks[index], on ? theme()->accent : theme()->text_secondary, 0);
+	lv_obj_set_style_image_recolor(import_ticks[index], on ? theme()->accent_readable : theme()->text_secondary, 0);
 	lv_obj_set_style_image_opa(import_ticks[index], on ? LV_OPA_COVER : LV_OPA_30, 0);
 }
 
@@ -1234,14 +1234,14 @@ static void rebuild_rows(void) {
 	lv_obj_t *new_icon = lv_image_create(new_row);
 	lv_image_set_src(new_icon, &icon_plus);
 	lv_obj_add_style(new_icon, &theme_style_icon, 0);
-	lv_obj_set_style_image_recolor(new_icon, theme()->accent, 0);
+	lv_obj_set_style_image_recolor(new_icon, theme()->accent_readable, 0);
 	lv_obj_set_style_image_recolor_opa(new_icon, LV_OPA_COVER, 0);
 
 	lv_obj_t *new_label = lv_label_create(new_row);
 	lv_label_set_text(new_label, tr("playlist_new_playlist"));
 	lv_obj_add_style(new_label, &theme_style_text, 0);
 	lv_obj_set_style_text_font(new_label, &font_ui_24, 0);
-	lv_obj_set_style_text_color(new_label, theme()->accent, 0);
+	lv_obj_set_style_text_color(new_label, theme()->accent_readable, 0);
 
 	int count = 0;
 	if (picking && pending_qobuz_id > 0) {

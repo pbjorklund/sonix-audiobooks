@@ -172,7 +172,7 @@ static void carried_look(int index, bool on) {
 	lv_obj_t *row = entries[index].row;
 	lv_obj_set_style_border_width(row, on ? 2 : 0, 0);
 	if (on) {
-		lv_obj_set_style_border_color(row, theme()->accent, 0);
+		lv_obj_set_style_border_color(row, theme()->accent_readable, 0);
 		lv_obj_set_style_border_opa(row, LV_OPA_COVER, 0);
 	}
 }

@@ -221,7 +221,7 @@ static void add_row(int index) {
 	lv_label_set_text(kind, tr(r->synced ? "lyrics_synced" : "lyrics_plain"));
 	lv_obj_set_style_text_font(kind, &font_ui_20, 0);
 	if (r->synced) {
-		lv_obj_set_style_text_color(kind, theme()->accent, 0);
+		lv_obj_set_style_text_color(kind, theme()->accent_readable, 0);
 	} else {
 		lv_obj_add_style(kind, &theme_style_text_dim, 0);
 	}

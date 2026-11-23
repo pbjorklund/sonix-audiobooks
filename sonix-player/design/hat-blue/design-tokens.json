@@ -1,0 +1,62 @@
+{
+  "name": "Sonix Hat Blue",
+  "version": "1.0",
+  "reference_commit": "b0756860dfb68edebb71deee7bad4e71be82cef6",
+  "colors": {
+    "screen": "#08090C",
+    "surface": "#191B21",
+    "surface_pressed": "#242A35",
+    "panel": "#101216",
+    "cover_bg": "#101216",
+    "text_primary": "#F5F7FC",
+    "text_secondary": "#A8AFBC",
+    "accent": "#135EDB",
+    "accent_readable": "#7BAEFF",
+    "icon_top": "#2474E8",
+    "icon_mid": "#135EDB",
+    "icon_bottom": "#0841A6",
+    "icon_foreground": "#F5F7FC",
+    "icon_detail": "#C4DCFF",
+    "error": "#FF6B73",
+    "warning": "#FFC46B",
+    "success": "#63D69A"
+  },
+  "layout": {
+    "screen_width": 480,
+    "screen_height": 800,
+    "top_bar_height": 44,
+    "padding": 15,
+    "grid_gap": 14,
+    "tile_radius": 22,
+    "tile_icon_gap": 8,
+    "tile_padding": 8,
+    "tile_columns": 2,
+    "tile_rows": 3,
+    "toolbar_button": 56,
+    "home_icon_px": 128,
+    "section_icon_px": 112,
+    "page_hero_px": 200,
+    "playback_badge_px": 52,
+    "grid_label_px": 24,
+    "header_px": 32,
+    "minimum_title_px": 24,
+    "section_content_top": 130,
+    "home_tile_size": [
+      218,
+      232
+    ],
+    "section_tile_size": [
+      218,
+      204
+    ]
+  },
+  "behavior": {
+    "tile_pressed": "surface_pressed only; no resize",
+    "unavailable_icon_opacity": 0.4,
+    "focus_border_px": 2,
+    "focus_border_color": "#7BAEFF",
+    "reduced_motion": "no added motion",
+    "light_theme": "preserve existing light palette and contrast behavior",
+    "other_accents": "preserve supported presets; Hat Blue is the default blue only"
+  }
+}

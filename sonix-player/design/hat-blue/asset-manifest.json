@@ -1,0 +1,2204 @@
+{
+  "reference_commit": "b0756860dfb68edebb71deee7bad4e71be82cef6",
+  "assets": [
+    {
+      "key": "music",
+      "label": "Music",
+      "group": "Home",
+      "kind": "menu",
+      "source": "masters/menu/music.svg",
+      "file": "assets/icons/music.png",
+      "c_identifier": "icon_menu_music",
+      "size": 128,
+      "new_symbol": false
+    },
+    {
+      "key": "streaming",
+      "label": "Streaming",
+      "group": "Home",
+      "kind": "menu",
+      "source": "masters/menu/streaming.svg",
+      "file": "assets/icons/streaming.png",
+      "c_identifier": "icon_menu_streaming",
+      "size": 128,
+      "new_symbol": false
+    },
+    {
+      "key": "wireless",
+      "label": "Wireless",
+      "group": "Home",
+      "kind": "menu",
+      "source": "masters/menu/wireless.svg",
+      "file": "assets/icons/wireless.png",
+      "c_identifier": "icon_menu_wireless",
+      "size": 128,
+      "new_symbol": false
+    },
+    {
+      "key": "audiobooks",
+      "label": "Audiobooks",
+      "group": "Home",
+      "kind": "menu",
+      "source": "masters/menu/audiobooks.svg",
+      "file": "assets/icons/audiobooks.png",
+      "c_identifier": "icon_menu_audiobooks",
+      "size": 128,
+      "new_symbol": false
+    },
+    {
+      "key": "more",
+      "label": "More",
+      "group": "Home",
+      "kind": "menu",
+      "source": "masters/menu/more.svg",
+      "file": "assets/icons/more.png",
+      "c_identifier": "icon_menu_more",
+      "size": 128,
+      "new_symbol": false
+    },
+    {
+      "key": "settings",
+      "label": "Settings",
+      "group": "Home",
+      "kind": "menu",
+      "source": "masters/menu/settings.svg",
+      "file": "assets/icons/settings.png",
+      "c_identifier": "icon_menu_settings",
+      "size": 128,
+      "new_symbol": false
+    },
+    {
+      "key": "all",
+      "label": "All tracks",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/all.svg",
+      "file": "assets/icons/all.png",
+      "c_identifier": "icon_menu_all",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "album",
+      "label": "Albums",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/album.svg",
+      "file": "assets/icons/album.png",
+      "c_identifier": "icon_menu_album",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "artist",
+      "label": "Artists",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/artist.svg",
+      "file": "assets/icons/artist.png",
+      "c_identifier": "icon_menu_artist",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "album_artist",
+      "label": "Album artists",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/album_artist.svg",
+      "file": "assets/icons/album_artist.png",
+      "c_identifier": "icon_menu_album_artist",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "genre",
+      "label": "Genres",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/genre.svg",
+      "file": "assets/icons/genre.png",
+      "c_identifier": "icon_menu_genre",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "year",
+      "label": "Years",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/year.svg",
+      "file": "assets/icons/year.png",
+      "c_identifier": "icon_menu_year",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "favourites",
+      "label": "Favourites",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/favourites.svg",
+      "file": "assets/icons/favourites.png",
+      "c_identifier": "icon_menu_favourites",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "most-played",
+      "label": "Most played",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/most-played.svg",
+      "file": "assets/icons/most-played.png",
+      "c_identifier": "icon_menu_most_played",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "playlist",
+      "label": "Playlists",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/playlist.svg",
+      "file": "assets/icons/playlist.png",
+      "c_identifier": "icon_menu_playlist",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "explorer",
+      "label": "Browse",
+      "group": "Music",
+      "kind": "menu",
+      "source": "masters/menu/explorer.svg",
+      "file": "assets/icons/explorer.png",
+      "c_identifier": "icon_menu_explorer",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "wifi-settings",
+      "label": "Wi-Fi",
+      "group": "Wireless",
+      "kind": "menu",
+      "source": "masters/menu/wifi-settings.svg",
+      "file": "assets/icons/wifi-settings.png",
+      "c_identifier": "icon_menu_wifi_settings",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "bluetooth",
+      "label": "Bluetooth",
+      "group": "Wireless",
+      "kind": "menu",
+      "source": "masters/menu/bluetooth.svg",
+      "file": "assets/icons/bluetooth.png",
+      "c_identifier": "icon_menu_bluetooth",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "airplay",
+      "label": "AirPlay",
+      "group": "Wireless",
+      "kind": "menu",
+      "source": "masters/menu/airplay.svg",
+      "file": "assets/icons/airplay.png",
+      "c_identifier": "icon_menu_airplay",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "wifi-transfer",
+      "label": "Transfer",
+      "group": "Wireless",
+      "kind": "menu",
+      "source": "masters/menu/wifi-transfer.svg",
+      "file": "assets/icons/wifi-transfer.png",
+      "c_identifier": "icon_menu_wifi_transfer",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "sonixlink",
+      "label": "SonixLink",
+      "group": "Wireless",
+      "kind": "menu",
+      "source": "masters/menu/sonixlink.svg",
+      "file": "assets/icons/sonixlink.png",
+      "c_identifier": "icon_menu_sonixlink",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "dlna",
+      "label": "DLNA",
+      "group": "Wireless",
+      "kind": "menu",
+      "source": "masters/menu/dlna.svg",
+      "file": "assets/icons/dlna.png",
+      "c_identifier": "icon_menu_dlna",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "tidal",
+      "label": "Tidal",
+      "group": "Streaming",
+      "kind": "menu",
+      "source": "masters/menu/tidal.svg",
+      "file": "assets/icons/tidal.png",
+      "c_identifier": "icon_menu_tidal",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "qobuz",
+      "label": "Qobuz",
+      "group": "Streaming",
+      "kind": "menu",
+      "source": "masters/menu/qobuz.svg",
+      "file": "assets/icons/qobuz.png",
+      "c_identifier": "icon_menu_qobuz",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "radio",
+      "label": "Radio",
+      "group": "Streaming",
+      "kind": "menu",
+      "source": "masters/menu/radio.svg",
+      "file": "assets/icons/radio.png",
+      "c_identifier": "icon_menu_radio",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "podcast",
+      "label": "Podcasts",
+      "group": "Streaming",
+      "kind": "menu",
+      "source": "masters/menu/podcast.svg",
+      "file": "assets/icons/podcast.png",
+      "c_identifier": "icon_menu_podcast",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "audiobookshelf",
+      "label": "Audiobookshelf",
+      "group": "Streaming",
+      "kind": "menu",
+      "source": "masters/menu/audiobookshelf.svg",
+      "file": "assets/icons/audiobookshelf.png",
+      "c_identifier": "icon_menu_audiobookshelf",
+      "size": 112,
+      "new_symbol": true
+    },
+    {
+      "key": "audiobook-library",
+      "label": "Library",
+      "group": "Audiobooks",
+      "kind": "menu",
+      "source": "masters/menu/audiobook-library.svg",
+      "file": "assets/icons/audiobook-library.png",
+      "c_identifier": "icon_menu_audiobook_library",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "audiobook-series",
+      "label": "Series",
+      "group": "Audiobooks",
+      "kind": "menu",
+      "source": "masters/menu/audiobook-series.svg",
+      "file": "assets/icons/audiobook-series.png",
+      "c_identifier": "icon_menu_audiobook_series",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "audiobook-author",
+      "label": "Authors",
+      "group": "Audiobooks",
+      "kind": "menu",
+      "source": "masters/menu/audiobook-author.svg",
+      "file": "assets/icons/audiobook-author.png",
+      "c_identifier": "icon_menu_audiobook_author",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "audiobook-continue",
+      "label": "Continue",
+      "group": "Audiobooks",
+      "kind": "menu",
+      "source": "masters/menu/audiobook-continue.svg",
+      "file": "assets/icons/audiobook-continue.png",
+      "c_identifier": "icon_menu_audiobook_continue",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "dac",
+      "label": "DAC",
+      "group": "More",
+      "kind": "menu",
+      "source": "masters/menu/dac.svg",
+      "file": "assets/icons/dac.png",
+      "c_identifier": "icon_menu_dac",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "gearboy",
+      "label": "Gearboy",
+      "group": "More",
+      "kind": "menu",
+      "source": "masters/menu/gearboy.svg",
+      "file": "assets/icons/gearboy.png",
+      "c_identifier": "icon_menu_gearboy",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "ebook",
+      "label": "Books",
+      "group": "More",
+      "kind": "menu",
+      "source": "masters/menu/ebook.svg",
+      "file": "assets/icons/ebook.png",
+      "c_identifier": "icon_menu_books",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "file-explorer",
+      "label": "File explorer",
+      "group": "More",
+      "kind": "menu",
+      "source": "masters/menu/file-explorer.svg",
+      "file": "assets/icons/file-explorer.png",
+      "c_identifier": "icon_menu_file_explorer",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "flappy-bird",
+      "label": "Flappy Bird",
+      "group": "More",
+      "kind": "menu",
+      "source": "masters/menu/flappy-bird.svg",
+      "file": "assets/icons/flappy-bird.png",
+      "c_identifier": "icon_menu_flappy_bird",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "metronome",
+      "label": "Metronome",
+      "group": "More",
+      "kind": "menu",
+      "source": "masters/menu/metronome.svg",
+      "file": "assets/icons/metronome.png",
+      "c_identifier": "icon_menu_metronome",
+      "size": 112,
+      "new_symbol": false
+    },
+    {
+      "key": "dac-icon-page",
+      "label": "DAC",
+      "group": "Page illustrations",
+      "kind": "hero",
+      "source": "masters/heroes/dac-icon-page.svg",
+      "file": "assets/icons/dac-icon-page.png",
+      "c_identifier": "icon_dac_page",
+      "size": 200,
+      "new_symbol": false
+    },
+    {
+      "key": "sonixlink-icon-page",
+      "label": "SonixLink",
+      "group": "Page illustrations",
+      "kind": "hero",
+      "source": "masters/heroes/sonixlink-icon-page.svg",
+      "file": "assets/icons/sonixlink-icon-page.png",
+      "c_identifier": "icon_sonixlink_page",
+      "size": 200,
+      "new_symbol": false
+    },
+    {
+      "key": "bluetooth-receiver-icon-page",
+      "label": "Bluetooth receiver",
+      "group": "Page illustrations",
+      "kind": "hero",
+      "source": "masters/heroes/bluetooth-receiver-icon-page.svg",
+      "file": "assets/icons/bluetooth-receiver-icon-page.png",
+      "c_identifier": "icon_bluetooth_receiver_page",
+      "size": 200,
+      "new_symbol": false
+    },
+    {
+      "key": "tidal-badge",
+      "label": "Tidal badge",
+      "group": "Playback badges",
+      "kind": "badge",
+      "source": "masters/badges/tidal-badge.svg",
+      "file": "assets/icons/tidal-badge.png",
+      "c_identifier": "icon_tidal_badge",
+      "size": 52,
+      "new_symbol": false
+    },
+    {
+      "key": "qobuz-badge",
+      "label": "Qobuz badge",
+      "group": "Playback badges",
+      "kind": "badge",
+      "source": "masters/badges/qobuz-badge.svg",
+      "file": "assets/icons/qobuz-badge.png",
+      "c_identifier": "icon_qobuz_badge",
+      "size": 52,
+      "new_symbol": false
+    },
+    {
+      "key": "podcast-badge",
+      "label": "Podcast badge",
+      "group": "Playback badges",
+      "kind": "badge",
+      "source": "masters/badges/podcast-badge.svg",
+      "file": "assets/icons/podcast-badge.png",
+      "c_identifier": "icon_podcast_badge",
+      "size": 52,
+      "new_symbol": false
+    },
+    {
+      "key": "quality_lossy",
+      "label": "Quality Lossy",
+      "group": "Quality badges",
+      "kind": "preserved-semantic",
+      "source": "assets/icons/lossy-quality.svg",
+      "file": "assets/icons/lossy-quality.svg",
+      "c_identifier": "icon_quality_lossy",
+      "size": 26,
+      "new_symbol": false
+    },
+    {
+      "key": "quality_cd",
+      "label": "Quality Cd",
+      "group": "Quality badges",
+      "kind": "preserved-semantic",
+      "source": "assets/icons/cd-quality.svg",
+      "file": "assets/icons/cd-quality.svg",
+      "c_identifier": "icon_quality_cd",
+      "size": 26,
+      "new_symbol": false
+    },
+    {
+      "key": "quality_hifi",
+      "label": "Quality Hifi",
+      "group": "Quality badges",
+      "kind": "preserved-semantic",
+      "source": "assets/icons/hifi-quality.svg",
+      "file": "assets/icons/hifi-quality.svg",
+      "c_identifier": "icon_quality_hifi",
+      "size": 26,
+      "new_symbol": false
+    },
+    {
+      "key": "quality_dsd",
+      "label": "Quality Dsd",
+      "group": "Quality badges",
+      "kind": "preserved-semantic",
+      "source": "assets/icons/dsd-quality.svg",
+      "file": "assets/icons/dsd-quality.svg",
+      "c_identifier": "icon_quality_dsd",
+      "size": 26,
+      "new_symbol": false
+    }
+  ],
+  "utility_glyphs": [
+    {
+      "source": "glyphs/svg/chevron-left.svg",
+      "file": "glyphs/png/chevron_left.png",
+      "c_identifier": "icon_chevron_left",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/chevron-right.svg",
+      "file": "glyphs/png/chevron_right.png",
+      "c_identifier": "icon_chevron_right",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/check.svg",
+      "file": "glyphs/png/check.png",
+      "c_identifier": "icon_check",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/close.svg",
+      "file": "glyphs/png/close.png",
+      "c_identifier": "icon_close",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/x.svg",
+      "file": "glyphs/png/clear.png",
+      "c_identifier": "icon_clear",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/eye.svg",
+      "file": "glyphs/png/eye.png",
+      "c_identifier": "icon_eye",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/eye-off.svg",
+      "file": "glyphs/png/eye_off.png",
+      "c_identifier": "icon_eye_off",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/folder.svg",
+      "file": "glyphs/png/folder.png",
+      "c_identifier": "icon_folder",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/folder.svg",
+      "file": "glyphs/png/folder_corner.png",
+      "c_identifier": "icon_folder_corner",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/folder-root.svg",
+      "file": "glyphs/png/folder_root.png",
+      "c_identifier": "icon_folder_root",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/file.svg",
+      "file": "glyphs/png/file.png",
+      "c_identifier": "icon_file",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/music-settings.svg",
+      "file": "glyphs/png/music_settings.png",
+      "c_identifier": "icon_music_settings",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/book-finished.svg",
+      "file": "glyphs/png/book_finished.png",
+      "c_identifier": "icon_book_finished",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/audio-waveform.svg",
+      "file": "glyphs/png/audio_waveform.png",
+      "c_identifier": "icon_audio_waveform",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/autoeq-update.svg",
+      "file": "glyphs/png/autoeq_update.png",
+      "c_identifier": "icon_autoeq_update",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/repeat.svg",
+      "file": "glyphs/png/repeat_all.png",
+      "c_identifier": "icon_repeat_all",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/repeat-1.svg",
+      "file": "glyphs/png/repeat_one.png",
+      "c_identifier": "icon_repeat_one",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/repeat-off.svg",
+      "file": "glyphs/png/repeat_off.png",
+      "c_identifier": "icon_repeat_off",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/play.svg",
+      "file": "glyphs/png/play.png",
+      "c_identifier": "icon_play",
+      "width": 40,
+      "height": 40,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/pause.svg",
+      "file": "glyphs/png/pause.png",
+      "c_identifier": "icon_pause",
+      "width": 40,
+      "height": 40,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/stop.svg",
+      "file": "glyphs/png/stop.png",
+      "c_identifier": "icon_stop",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/play-status.svg",
+      "file": "glyphs/png/play_status.png",
+      "c_identifier": "icon_play_status",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/pause-status.svg",
+      "file": "glyphs/png/pause_status.png",
+      "c_identifier": "icon_pause_status",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airplay-status.svg",
+      "file": "glyphs/png/airplay_status.png",
+      "c_identifier": "icon_airplay_status",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sonixlink-status.svg",
+      "file": "glyphs/png/sonixlink_status.png",
+      "c_identifier": "icon_sonixlink_status",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/database-search.svg",
+      "file": "glyphs/png/library_checking.png",
+      "c_identifier": "icon_library_checking",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/database-check.svg",
+      "file": "glyphs/png/library_checked.png",
+      "c_identifier": "icon_library_checked",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/skip-back.svg",
+      "file": "glyphs/png/skip_back.png",
+      "c_identifier": "icon_skip_back",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/skip-forward.svg",
+      "file": "glyphs/png/skip_forward.png",
+      "c_identifier": "icon_skip_forward",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/play.svg",
+      "file": "glyphs/png/play_large.png",
+      "c_identifier": "icon_play_large",
+      "width": 48,
+      "height": 48,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/pause.svg",
+      "file": "glyphs/png/pause_large.png",
+      "c_identifier": "icon_pause_large",
+      "width": 48,
+      "height": 48,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/skip-back.svg",
+      "file": "glyphs/png/skip_back_large.png",
+      "c_identifier": "icon_skip_back_large",
+      "width": 42,
+      "height": 42,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/skip-forward.svg",
+      "file": "glyphs/png/skip_forward_large.png",
+      "c_identifier": "icon_skip_forward_large",
+      "width": 42,
+      "height": 42,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/music-note.svg",
+      "file": "glyphs/png/music_note.png",
+      "c_identifier": "icon_music_note",
+      "width": 128,
+      "height": 128,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/radio-player.svg",
+      "file": "glyphs/png/radio_player.png",
+      "c_identifier": "icon_radio_player",
+      "width": 128,
+      "height": 128,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airplay-page-icon.svg",
+      "file": "glyphs/png/airplay_page.png",
+      "c_identifier": "icon_airplay_page",
+      "width": 128,
+      "height": 128,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/dlna-page-icon.svg",
+      "file": "glyphs/png/dlna_page.png",
+      "c_identifier": "icon_dlna_page",
+      "width": 128,
+      "height": 128,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/battery.svg",
+      "file": "glyphs/png/battery.png",
+      "c_identifier": "icon_battery",
+      "width": 38,
+      "height": 38,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/battery-charging-body.svg",
+      "file": "glyphs/png/battery_charging_body.png",
+      "c_identifier": "icon_battery_charging_body",
+      "width": 38,
+      "height": 38,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/battery-charging-bolt.svg",
+      "file": "glyphs/png/battery_charging_bolt.png",
+      "c_identifier": "icon_battery_charging_bolt",
+      "width": 38,
+      "height": 38,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/battery.svg",
+      "file": "glyphs/png/battery_small.png",
+      "c_identifier": "icon_battery_small",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/volume.svg",
+      "file": "glyphs/png/volume_mute.png",
+      "c_identifier": "icon_volume_mute",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/headphones.svg",
+      "file": "glyphs/png/headphones.png",
+      "c_identifier": "icon_headphones",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/usb-audio-out.svg",
+      "file": "glyphs/png/usbaudioout.png",
+      "c_identifier": "icon_usbaudioout",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/volume-1.svg",
+      "file": "glyphs/png/volume_low.png",
+      "c_identifier": "icon_volume_low",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/volume-2.svg",
+      "file": "glyphs/png/volume_high.png",
+      "c_identifier": "icon_volume_high",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/power-off.svg",
+      "file": "glyphs/png/power_off.png",
+      "c_identifier": "icon_power_off",
+      "width": 56,
+      "height": 56,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/reboot.svg",
+      "file": "glyphs/png/reboot.png",
+      "c_identifier": "icon_reboot",
+      "width": 56,
+      "height": 56,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/battery-warning.svg",
+      "file": "glyphs/png/battery_warning.png",
+      "c_identifier": "icon_battery_warning",
+      "width": 56,
+      "height": 56,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/music-2.svg",
+      "file": "glyphs/png/music2.png",
+      "c_identifier": "icon_music2",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/artist.svg",
+      "file": "glyphs/png/artist.png",
+      "c_identifier": "icon_artist",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/podcast-list.svg",
+      "file": "glyphs/png/podcast_list.png",
+      "c_identifier": "icon_podcast_list",
+      "width": 40,
+      "height": 40,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/artist-album.svg",
+      "file": "glyphs/png/artist_album.png",
+      "c_identifier": "icon_artist_album",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/genre.svg",
+      "file": "glyphs/png/genre.png",
+      "c_identifier": "icon_genre",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/album.svg",
+      "file": "glyphs/png/album.png",
+      "c_identifier": "icon_album",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/list-a-z.svg",
+      "file": "glyphs/png/sort_az.png",
+      "c_identifier": "icon_sort_az",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/list-z-a.svg",
+      "file": "glyphs/png/sort_za.png",
+      "c_identifier": "icon_sort_za",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/calendar-arrow-up.svg",
+      "file": "glyphs/png/sort_date_old.png",
+      "c_identifier": "icon_sort_date_old",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/calendar-arrow-down.svg",
+      "file": "glyphs/png/sort_date_new.png",
+      "c_identifier": "icon_sort_date_new",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/year-arrow-down.svg",
+      "file": "glyphs/png/sort_year_asc.png",
+      "c_identifier": "icon_sort_year_asc",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/year-arrow-up.svg",
+      "file": "glyphs/png/sort_year_desc.png",
+      "c_identifier": "icon_sort_year_desc",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/history.svg",
+      "file": "glyphs/png/sort_played.png",
+      "c_identifier": "icon_sort_played",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/list-ordered.svg",
+      "file": "glyphs/png/sort_series.png",
+      "c_identifier": "icon_sort_series",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/album.svg",
+      "file": "glyphs/png/album_corner.png",
+      "c_identifier": "icon_album_corner",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/album.svg",
+      "file": "glyphs/png/album_big.png",
+      "c_identifier": "icon_album_big",
+      "width": 96,
+      "height": 96,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/circle-play.svg",
+      "file": "glyphs/png/circle_play.png",
+      "c_identifier": "icon_circle_play",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/ellipsis-vertical.svg",
+      "file": "glyphs/png/ellipsis_vertical.png",
+      "c_identifier": "icon_ellipsis_vertical",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/list-music.svg",
+      "file": "glyphs/png/list_music.png",
+      "c_identifier": "icon_list_music",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/list-plus.svg",
+      "file": "glyphs/png/list_plus.png",
+      "c_identifier": "icon_list_plus",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/star-plus.svg",
+      "file": "glyphs/png/star_plus.png",
+      "c_identifier": "icon_star_plus",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/list-queue.svg",
+      "file": "glyphs/png/list_queue.png",
+      "c_identifier": "icon_list_queue",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/list-x.svg",
+      "file": "glyphs/png/list_x.png",
+      "c_identifier": "icon_list_x",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/star-x.svg",
+      "file": "glyphs/png/star_x.png",
+      "c_identifier": "icon_star_x",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/search.svg",
+      "file": "glyphs/png/search.png",
+      "c_identifier": "icon_search",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi.svg",
+      "file": "glyphs/png/wifi.png",
+      "c_identifier": "icon_wifi",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/bluetooth.svg",
+      "file": "glyphs/png/bluetooth.png",
+      "c_identifier": "icon_bluetooth",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi-zero.svg",
+      "file": "glyphs/png/wifi_zero.png",
+      "c_identifier": "icon_wifi_zero",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi-low.svg",
+      "file": "glyphs/png/wifi_low.png",
+      "c_identifier": "icon_wifi_low",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi-high.svg",
+      "file": "glyphs/png/wifi_high.png",
+      "c_identifier": "icon_wifi_high",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi-max.svg",
+      "file": "glyphs/png/wifi_max.png",
+      "c_identifier": "icon_wifi_max",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/bluetooth-status.svg",
+      "file": "glyphs/png/bluetooth_status.png",
+      "c_identifier": "icon_bluetooth_status",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi-search.svg",
+      "file": "glyphs/png/wifi_search.png",
+      "c_identifier": "icon_wifi_search",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/bluetooth-search.svg",
+      "file": "glyphs/png/bluetooth_search.png",
+      "c_identifier": "icon_bluetooth_search",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/bluetooth-receiver.svg",
+      "file": "glyphs/png/bluetooth_receiver.png",
+      "c_identifier": "icon_bluetooth_receiver",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/change_codec_receiver.svg",
+      "file": "glyphs/png/change_codec.png",
+      "c_identifier": "icon_change_codec",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/bluetooth-connecting.svg",
+      "file": "glyphs/png/bluetooth_connecting.png",
+      "c_identifier": "icon_bluetooth_connecting",
+      "width": 56,
+      "height": 56,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/headphones.svg",
+      "file": "glyphs/png/headphones_big.png",
+      "c_identifier": "icon_headphones_big",
+      "width": 56,
+      "height": 56,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sun.svg",
+      "file": "glyphs/png/sun.png",
+      "c_identifier": "icon_sun",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/shift.svg",
+      "file": "glyphs/png/shift.png",
+      "c_identifier": "icon_shift",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/caps-lock.svg",
+      "file": "glyphs/png/caps_lock.png",
+      "c_identifier": "icon_caps_lock",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/delete.svg",
+      "file": "glyphs/png/delete.png",
+      "c_identifier": "icon_delete",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/space.svg",
+      "file": "glyphs/png/space.png",
+      "c_identifier": "icon_space",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/chevron-up.svg",
+      "file": "glyphs/png/chevron_up.png",
+      "c_identifier": "icon_chevron_up",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/chevron-down.svg",
+      "file": "glyphs/png/chevron_down.png",
+      "c_identifier": "icon_chevron_down",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/control-center-line.svg",
+      "file": "glyphs/png/control_center_line.png",
+      "c_identifier": "icon_control_center_line",
+      "width": 56,
+      "height": 56,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/mseb.svg",
+      "file": "glyphs/png/mseb.png",
+      "c_identifier": "icon_mseb",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/equalizer.svg",
+      "file": "glyphs/png/equalizer.png",
+      "c_identifier": "icon_equalizer",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/lineout.svg",
+      "file": "glyphs/png/lineout.png",
+      "c_identifier": "icon_lineout",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/fade-track.svg",
+      "file": "glyphs/png/fade_track.png",
+      "c_identifier": "icon_fade_track",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/low-gain.svg",
+      "file": "glyphs/png/low_gain.png",
+      "c_identifier": "icon_low_gain",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/high-gain.svg",
+      "file": "glyphs/png/high_gain.png",
+      "c_identifier": "icon_high_gain",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airplay-status.svg",
+      "file": "glyphs/png/airplay_quick.png",
+      "c_identifier": "icon_airplay_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/peq.svg",
+      "file": "glyphs/png/peq_quick.png",
+      "c_identifier": "icon_peq_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sonixlink-status.svg",
+      "file": "glyphs/png/sonixlink_quick.png",
+      "c_identifier": "icon_sonixlink_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/dlna-quick.svg",
+      "file": "glyphs/png/dlna_quick.png",
+      "c_identifier": "icon_dlna_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi-transfer-quick.svg",
+      "file": "glyphs/png/wifi_transfer_quick.png",
+      "c_identifier": "icon_wifi_transfer_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sleep-timer-music.svg",
+      "file": "glyphs/png/sleep_music_quick.png",
+      "c_identifier": "icon_sleep_music_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sleep-timer-audiobook.svg",
+      "file": "glyphs/png/sleep_audiobook_quick.png",
+      "c_identifier": "icon_sleep_audiobook_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sleep-timer-podcast.svg",
+      "file": "glyphs/png/sleep_podcast_quick.png",
+      "c_identifier": "icon_sleep_podcast_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/gapless-on-quick.svg",
+      "file": "glyphs/png/gapless_on_quick.png",
+      "c_identifier": "icon_gapless_on_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/gapless-off-quick.svg",
+      "file": "glyphs/png/gapless_off_quick.png",
+      "c_identifier": "icon_gapless_off_quick",
+      "width": 46,
+      "height": 46,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-music.svg",
+      "file": "glyphs/png/files_music.png",
+      "c_identifier": "icon_files_music",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-audiobook.svg",
+      "file": "glyphs/png/files_audiobook.png",
+      "c_identifier": "icon_files_audiobook",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-playlist.svg",
+      "file": "glyphs/png/files_playlist.png",
+      "c_identifier": "icon_files_playlist",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/playlist-overwrite-alert.svg",
+      "file": "glyphs/png/playlist_overwrite_alert.png",
+      "c_identifier": "icon_playlist_overwrite_alert",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-image.svg",
+      "file": "glyphs/png/files_image.png",
+      "c_identifier": "icon_files_image",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-text.svg",
+      "file": "glyphs/png/files_text.png",
+      "c_identifier": "icon_files_text",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-update.svg",
+      "file": "glyphs/png/files_update.png",
+      "c_identifier": "icon_files_update",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-gamepad.svg",
+      "file": "glyphs/png/files_game.png",
+      "c_identifier": "icon_files_game",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/files-book.svg",
+      "file": "glyphs/png/files_book.png",
+      "c_identifier": "icon_files_book",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/trash.svg",
+      "file": "glyphs/png/trash.png",
+      "c_identifier": "icon_trash",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/pencil.svg",
+      "file": "glyphs/png/pencil.png",
+      "c_identifier": "icon_pencil",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/folder-new.svg",
+      "file": "glyphs/png/folder_new.png",
+      "c_identifier": "icon_folder_new",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/grip-horizontal.svg",
+      "file": "glyphs/png/grip.png",
+      "c_identifier": "icon_grip",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/move-vertical.svg",
+      "file": "glyphs/png/reorder.png",
+      "c_identifier": "icon_reorder",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/now-playing.svg",
+      "file": "glyphs/png/now_playing.png",
+      "c_identifier": "icon_now_playing",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/circle-dashed-check.svg",
+      "file": "glyphs/png/select_mode.png",
+      "c_identifier": "icon_select_mode",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/plus.svg",
+      "file": "glyphs/png/plus.png",
+      "c_identifier": "icon_plus",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/minus.svg",
+      "file": "glyphs/png/minus.png",
+      "c_identifier": "icon_minus",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/import.svg",
+      "file": "glyphs/png/import.png",
+      "c_identifier": "icon_import",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/reset.svg",
+      "file": "glyphs/png/reset.png",
+      "c_identifier": "icon_reset",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/circle-check.svg",
+      "file": "glyphs/png/circle_check.png",
+      "c_identifier": "icon_circle_check",
+      "width": 64,
+      "height": 64,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/circle-alert.svg",
+      "file": "glyphs/png/circle_alert.png",
+      "c_identifier": "icon_circle_alert",
+      "width": 64,
+      "height": 64,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/book-headphones.svg",
+      "file": "glyphs/png/book_headphones.png",
+      "c_identifier": "icon_book_headphones",
+      "width": 128,
+      "height": 128,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/book-headphones.svg",
+      "file": "glyphs/png/book_headphones_row.png",
+      "c_identifier": "icon_book_headphones_row",
+      "width": 64,
+      "height": 64,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sd-card.svg",
+      "file": "glyphs/png/sd_card.png",
+      "c_identifier": "icon_sd_card",
+      "width": 128,
+      "height": 128,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/sd-card.svg",
+      "file": "glyphs/png/sd_card_badge.png",
+      "c_identifier": "icon_sd_card_badge",
+      "width": 16,
+      "height": 16,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/arrow-down-to-line.svg",
+      "file": "glyphs/png/download_badge.png",
+      "c_identifier": "icon_download_badge",
+      "width": 16,
+      "height": 16,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/arrow-down-to-line.svg",
+      "file": "glyphs/png/download.png",
+      "c_identifier": "icon_download",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/wifi-off.svg",
+      "file": "glyphs/png/wifi_off.png",
+      "c_identifier": "icon_wifi_off",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/folder-open.svg",
+      "file": "glyphs/png/folder_open.png",
+      "c_identifier": "icon_folder_open",
+      "width": 80,
+      "height": 80,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/file-down.svg",
+      "file": "glyphs/png/file_down.png",
+      "c_identifier": "icon_file_down",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/check.svg",
+      "file": "glyphs/png/check_small.png",
+      "c_identifier": "icon_check_small",
+      "width": 22,
+      "height": 22,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/play.svg",
+      "file": "glyphs/png/play_small.png",
+      "c_identifier": "icon_play_small",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/pause.svg",
+      "file": "glyphs/png/pause_small.png",
+      "c_identifier": "icon_pause_small",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/podcast-list.svg",
+      "file": "glyphs/png/podcast_cover.png",
+      "c_identifier": "icon_podcast_cover",
+      "width": 128,
+      "height": 128,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/shuffle.svg",
+      "file": "glyphs/png/shuffle.png",
+      "c_identifier": "icon_shuffle",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/shuffle-repeat.svg",
+      "file": "glyphs/png/shuffle_repeat.png",
+      "c_identifier": "icon_shuffle_repeat",
+      "width": 30,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/arrow-down-up.svg",
+      "file": "glyphs/png/arrow_down_up.png",
+      "c_identifier": "icon_arrow_down_up",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/star.svg",
+      "file": "glyphs/png/star.png",
+      "c_identifier": "icon_star",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/star-filled.svg",
+      "file": "glyphs/png/star_filled.png",
+      "c_identifier": "icon_star_filled",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/star.svg",
+      "file": "glyphs/png/star_corner.png",
+      "c_identifier": "icon_star_corner",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/lyrics-search.svg",
+      "file": "glyphs/png/lyrics_search.png",
+      "c_identifier": "icon_lyrics_search",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/radio-recent.svg",
+      "file": "glyphs/png/radio_recent.png",
+      "c_identifier": "icon_radio_recent",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/custom-radio.svg",
+      "file": "glyphs/png/radio_custom.png",
+      "c_identifier": "icon_radio_custom",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/radio-quality.svg",
+      "file": "glyphs/png/radio_quality.png",
+      "c_identifier": "icon_radio_quality",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/refresh.svg",
+      "file": "glyphs/png/refresh.png",
+      "c_identifier": "icon_refresh",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/prev_10.svg",
+      "file": "glyphs/png/prev_10.png",
+      "c_identifier": "icon_prev_10",
+      "width": 50,
+      "height": 50,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/next_10.svg",
+      "file": "glyphs/png/next_10.png",
+      "c_identifier": "icon_next_10",
+      "width": 50,
+      "height": 50,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/prev_30.svg",
+      "file": "glyphs/png/prev_30.png",
+      "c_identifier": "icon_prev_30",
+      "width": 50,
+      "height": 50,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/next_30.svg",
+      "file": "glyphs/png/next_30.png",
+      "c_identifier": "icon_next_30",
+      "width": 50,
+      "height": 50,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/prev_60.svg",
+      "file": "glyphs/png/prev_60.png",
+      "c_identifier": "icon_prev_60",
+      "width": 50,
+      "height": 50,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/next_60.svg",
+      "file": "glyphs/png/next_60.png",
+      "c_identifier": "icon_next_60",
+      "width": 50,
+      "height": 50,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/chapter.svg",
+      "file": "glyphs/png/chapter.png",
+      "c_identifier": "icon_chapter",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/podcast-episodes.svg",
+      "file": "glyphs/png/podcast_episodes.png",
+      "c_identifier": "icon_podcast_episodes",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/play-speed.svg",
+      "file": "glyphs/png/play_speed.png",
+      "c_identifier": "icon_play_speed",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/zap.svg",
+      "file": "glyphs/png/zap.png",
+      "c_identifier": "icon_zap",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/zap-off.svg",
+      "file": "glyphs/png/zap_off.png",
+      "c_identifier": "icon_zap_off",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/qobuz-quality.svg",
+      "file": "glyphs/png/qobuz_quality.png",
+      "c_identifier": "icon_qobuz_quality",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/log-out.svg",
+      "file": "glyphs/png/log_out.png",
+      "c_identifier": "icon_log_out",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/swap-remap.svg",
+      "file": "glyphs/png/swap_remap.png",
+      "c_identifier": "icon_swap_remap",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/save-state.svg",
+      "file": "glyphs/png/save_state.png",
+      "c_identifier": "icon_save_state",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/load-state.svg",
+      "file": "glyphs/png/load_state.png",
+      "c_identifier": "icon_load_state",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/loader-circle.svg",
+      "file": "glyphs/png/loader_small.png",
+      "c_identifier": "icon_loader_small",
+      "width": 26,
+      "height": 26,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/loader-circle.svg",
+      "file": "glyphs/png/loader_big.png",
+      "c_identifier": "icon_loader_big",
+      "width": 56,
+      "height": 56,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods.svg",
+      "file": "glyphs/png/airpods_hero.png",
+      "c_identifier": "icon_airpods_hero",
+      "width": 31,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-gen3.svg",
+      "file": "glyphs/png/airpods_gen3_hero.png",
+      "c_identifier": "icon_airpods_gen3_hero",
+      "width": 42,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-gen4.svg",
+      "file": "glyphs/png/airpods_gen4_hero.png",
+      "c_identifier": "icon_airpods_gen4_hero",
+      "width": 40,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-pro.svg",
+      "file": "glyphs/png/airpods_pro_hero.png",
+      "c_identifier": "icon_airpods_pro_hero",
+      "width": 45,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-max.svg",
+      "file": "glyphs/png/airpods_max_hero.png",
+      "c_identifier": "icon_airpods_max_hero",
+      "width": 28,
+      "height": 30,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpod-left.svg",
+      "file": "glyphs/png/airpod_left.png",
+      "c_identifier": "icon_airpod_left",
+      "width": 32,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpod-right.svg",
+      "file": "glyphs/png/airpod_right.png",
+      "c_identifier": "icon_airpod_right",
+      "width": 32,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpod-gen3-left.svg",
+      "file": "glyphs/png/airpod_gen3_left.png",
+      "c_identifier": "icon_airpod_gen3_left",
+      "width": 45,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpod-gen3-right.svg",
+      "file": "glyphs/png/airpod_gen3_right.png",
+      "c_identifier": "icon_airpod_gen3_right",
+      "width": 45,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-gen4-left.svg",
+      "file": "glyphs/png/airpod_gen4_left.png",
+      "c_identifier": "icon_airpod_gen4_left",
+      "width": 43,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-gen4-right.svg",
+      "file": "glyphs/png/airpod_gen4_right.png",
+      "c_identifier": "icon_airpod_gen4_right",
+      "width": 43,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-pro-left.svg",
+      "file": "glyphs/png/airpod_pro_left.png",
+      "c_identifier": "icon_airpod_pro_left",
+      "width": 55,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-pro-right.svg",
+      "file": "glyphs/png/airpod_pro_right.png",
+      "c_identifier": "icon_airpod_pro_right",
+      "width": 55,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-chargingcase-fill.svg",
+      "file": "glyphs/png/airpods_case.png",
+      "c_identifier": "icon_airpods_case",
+      "width": 59,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-chargingcase-wireless-fill.svg",
+      "file": "glyphs/png/airpods_case_wireless.png",
+      "c_identifier": "icon_airpods_case_wireless",
+      "width": 59,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-gen3-chargingcase-wireless-fill.svg",
+      "file": "glyphs/png/airpods_gen3_case.png",
+      "c_identifier": "icon_airpods_gen3_case",
+      "width": 85,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-gen4-chargingcase-wireless-fill.svg",
+      "file": "glyphs/png/airpods_gen4_case.png",
+      "c_identifier": "icon_airpods_gen4_case",
+      "width": 78,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-pro-chargingcase-wireless-fill.svg",
+      "file": "glyphs/png/airpods_pro_case.png",
+      "c_identifier": "icon_airpods_pro_case",
+      "width": 94,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/airpods-max.svg",
+      "file": "glyphs/png/airpods_max_big.png",
+      "c_identifier": "icon_airpods_max_big",
+      "width": 66,
+      "height": 72,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/zap.svg",
+      "file": "glyphs/png/airpods_charge.png",
+      "c_identifier": "icon_airpods_charge",
+      "width": 20,
+      "height": 20,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/noise-control-off.svg",
+      "file": "glyphs/png/airpods_noise_off.png",
+      "c_identifier": "icon_airpods_noise_off",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/noise-cancellation.svg",
+      "file": "glyphs/png/airpods_anc.png",
+      "c_identifier": "icon_airpods_anc",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/transparency.svg",
+      "file": "glyphs/png/airpods_transparency.png",
+      "c_identifier": "icon_airpods_transparency",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/adaptive.svg",
+      "file": "glyphs/png/airpods_adaptive.png",
+      "c_identifier": "icon_airpods_adaptive",
+      "width": 32,
+      "height": 32,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/chapter.svg",
+      "file": "glyphs/png/ebook_chapter.png",
+      "c_identifier": "icon_ebook_chapter",
+      "width": 44,
+      "height": 44,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/font-settings.svg",
+      "file": "glyphs/png/ebook_font.png",
+      "c_identifier": "icon_ebook_font",
+      "width": 44,
+      "height": 44,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/book-theme.svg",
+      "file": "glyphs/png/ebook_theme.png",
+      "c_identifier": "icon_ebook_theme",
+      "width": 44,
+      "height": 44,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/fast-turn.svg",
+      "file": "glyphs/png/ebook_turn_fast.png",
+      "c_identifier": "icon_ebook_turn_fast",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/scroll-turn.svg",
+      "file": "glyphs/png/ebook_turn_slide.png",
+      "c_identifier": "icon_ebook_turn_slide",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/vertical-turn.svg",
+      "file": "glyphs/png/ebook_turn_vertical.png",
+      "c_identifier": "icon_ebook_turn_vertical",
+      "width": 34,
+      "height": 34,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/ebook-cover.svg",
+      "file": "glyphs/png/ebook_cover.png",
+      "c_identifier": "icon_ebook_cover",
+      "width": 96,
+      "height": 96,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/ebook-cover.svg",
+      "file": "glyphs/png/ebook_cover_small.png",
+      "c_identifier": "icon_ebook_cover_small",
+      "width": 40,
+      "height": 40,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/bookmark.svg",
+      "file": "glyphs/png/bookmark.png",
+      "c_identifier": "icon_bookmark",
+      "width": 36,
+      "height": 36,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/bookmark-check.svg",
+      "file": "glyphs/png/bookmark_check.png",
+      "c_identifier": "icon_bookmark_check",
+      "width": 64,
+      "height": 64,
+      "disposition": "retained existing monochrome artwork"
+    },
+    {
+      "source": "glyphs/svg/heart.svg",
+      "file": "glyphs/png/heart.png",
+      "c_identifier": "icon_heart",
+      "width": 160,
+      "height": 160,
+      "disposition": "retained existing monochrome artwork"
+    }
+  ]
+}

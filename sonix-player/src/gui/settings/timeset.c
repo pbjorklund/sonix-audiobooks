@@ -144,7 +144,7 @@ static void fill_numbers(char *out, size_t out_size, int first, int last, const 
 static void paint_roller(lv_obj_t *roller) {
 	lv_obj_set_style_text_color(roller, theme()->text_secondary, 0);
 	lv_obj_set_style_bg_color(roller, theme()->surface_pressed, LV_PART_SELECTED);
-	lv_obj_set_style_text_color(roller, theme()->accent, LV_PART_SELECTED);
+	lv_obj_set_style_text_color(roller, theme()->accent_readable, LV_PART_SELECTED);
 }
 
 static lv_obj_t *make_roller(lv_obj_t *parent, const char *options, int width) {
@@ -842,7 +842,7 @@ static void timeset_refresh_theme(void) {
 		}
 		lv_obj_set_style_text_color(rollers[i], theme()->text_secondary, 0);
 		lv_obj_set_style_bg_color(rollers[i], theme()->surface_pressed, LV_PART_SELECTED);
-		lv_obj_set_style_text_color(rollers[i], theme()->accent, LV_PART_SELECTED);
+		lv_obj_set_style_text_color(rollers[i], theme()->accent_readable, LV_PART_SELECTED);
 	}
 
 	// And the pill: its fill is set by hand when the page is built, so it holds

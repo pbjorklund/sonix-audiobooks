@@ -310,7 +310,7 @@ static void paint_knob(int band) {
 	char text[16];
 	short_db(eq_get_band_tenths(band), text, sizeof(text));
 	lv_label_set_text(eq.values[band], text);
-	lv_obj_set_style_text_color(eq.values[band], chosen && on ? theme()->accent : theme()->text_secondary, 0);
+	lv_obj_set_style_text_color(eq.values[band], chosen && on ? theme()->accent_readable : theme()->text_secondary, 0);
 }
 
 static void paint_band_card(void) {
@@ -319,7 +319,7 @@ static void paint_band_card(void) {
 	lv_label_set_text(eq.band_title, text);
 	long_db(eq_get_band_tenths(eq.selected), text, sizeof(text));
 	lv_label_set_text(eq.band_value, text);
-	lv_obj_set_style_text_color(eq.band_value, eq_get_enabled() ? theme()->accent : theme()->text_secondary, 0);
+	lv_obj_set_style_text_color(eq.band_value, eq_get_enabled() ? theme()->accent_readable : theme()->text_secondary, 0);
 }
 
 static void paint_headroom(void) {

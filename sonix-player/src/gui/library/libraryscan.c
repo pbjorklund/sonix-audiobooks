@@ -387,7 +387,7 @@ static void pick_append(int n) {
 		pick_marks[i] = lv_image_create(row);
 		lv_image_set_src(pick_marks[i], &icon_check);
 		lv_obj_add_style(pick_marks[i], &theme_style_icon, 0);
-		lv_obj_set_style_image_recolor(pick_marks[i], theme()->accent, 0);
+		lv_obj_set_style_image_recolor(pick_marks[i], theme()->accent_readable, 0);
 		lv_obj_set_style_image_recolor_opa(pick_marks[i], LV_OPA_COVER, 0);
 		lv_obj_set_style_image_opa(pick_marks[i], pick_on[i] ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
 	}
@@ -583,7 +583,7 @@ void libraryscan_init(gui_config_t *cfg) {
 	// and the largest type on it.
 	count_label = lv_label_create(container);
 	lv_label_set_text(count_label, "0");
-	lv_obj_set_style_text_color(count_label, theme()->accent, 0);
+	lv_obj_set_style_text_color(count_label, theme()->accent_readable, 0);
 	lv_obj_set_style_text_font(count_label, &font_ui_32, 0);
 
 	status_label = lv_label_create(container);

@@ -238,7 +238,7 @@ static int queue_scroll_max(void) {
 static void queue_row_paint_check(queue_row_t *row) {
 	bool on = queue_mode == QUEUE_SELECT && queue_chosen && row->index >= 0 && row->index < queue_total && queue_chosen[row->index];
 	if (on) {
-		lv_obj_set_style_image_recolor(row->check, theme()->accent, 0);
+		lv_obj_set_style_image_recolor(row->check, theme()->accent_readable, 0);
 	}
 	lv_obj_set_hidden(row->check, !on);
 }
@@ -278,7 +278,7 @@ static void queue_mode_show(void) {
 
 	lv_obj_t *glyph = lv_obj_get_child(queue_reorder_btn, 0);
 	if (glyph && reorder) {
-		lv_obj_set_style_image_recolor(glyph, theme()->accent, 0);
+		lv_obj_set_style_image_recolor(glyph, theme()->accent_readable, 0);
 	} else if (glyph) {
 		lv_obj_remove_local_style_prop(glyph, LV_STYLE_IMAGE_RECOLOR, 0);
 	}
@@ -384,7 +384,7 @@ static void queue_row_paint_mark(queue_row_t *row) {
 	lv_image_set_src(row->icon, is_playing_row ? &icon_now_playing : &icon_music2);
 	lv_obj_add_style(row->icon, &theme_style_icon, 0);
 	if (is_playing_row) {
-		lv_obj_set_style_image_recolor(row->icon, theme()->accent, 0);
+		lv_obj_set_style_image_recolor(row->icon, theme()->accent_readable, 0);
 	} else {
 		lv_obj_remove_local_style_prop(row->icon, LV_STYLE_IMAGE_RECOLOR, 0);
 	}
@@ -863,7 +863,7 @@ static void queue_drag_start(queue_row_t *row, lv_obj_t *held, lv_point_t point)
 	lv_obj_add_style(queue_ghost, &theme_style_card, 0);
 	lv_obj_set_style_radius(queue_ghost, 12, 0);
 	lv_obj_set_style_border_width(queue_ghost, 2, 0);
-	lv_obj_set_style_border_color(queue_ghost, theme()->accent, 0);
+	lv_obj_set_style_border_color(queue_ghost, theme()->accent_readable, 0);
 	lv_obj_set_style_shadow_width(queue_ghost, 0, 0);
 	lv_obj_set_style_pad_all(queue_ghost, 8, 0);
 	lv_obj_set_style_pad_column(queue_ghost, 14, 0);

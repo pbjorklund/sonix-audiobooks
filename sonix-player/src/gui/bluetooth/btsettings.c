@@ -485,7 +485,7 @@ static void add_row(lv_obj_t *parent, const bt_device_t *device, bool paired_sec
 		lv_label_set_text(state, tr("connected"));
 		lv_obj_add_style(state, &theme_style_text_dim, 0);
 		lv_obj_set_style_text_font(state, &font_ui_20, 0);
-		lv_obj_set_style_text_color(state, theme()->accent, 0);
+		lv_obj_set_style_text_color(state, theme()->accent_readable, 0);
 	}
 
 	// Three dots on every known device, connected or merely paired: a tap on

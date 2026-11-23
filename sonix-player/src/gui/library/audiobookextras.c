@@ -62,7 +62,7 @@ static lv_obj_t *make_card(lv_obj_t *parent) {
 	lv_obj_set_height(row, LV_SIZE_CONTENT);
 	lv_obj_add_style(row, &theme_style_card, 0);
 	lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
-	lv_obj_set_style_radius(row, 12, 0);
+	lv_obj_set_style_radius(row, SETTINGSROW_ROW_RADIUS, 0);
 	lv_obj_set_style_border_width(row, 0, 0);
 	lv_obj_set_style_shadow_width(row, 0, 0);
 	lv_obj_set_style_pad_all(row, 18, 0);

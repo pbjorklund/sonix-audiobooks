@@ -389,7 +389,7 @@ static void add_row(lv_obj_t *parent, const wifi_network_t *net, bool with_menu)
 	lv_obj_add_style(icon, &theme_style_icon, 0);
 	lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
 	if (net->current) {
-		lv_obj_set_style_image_recolor(icon, theme()->accent, 0);
+		lv_obj_set_style_image_recolor(icon, theme()->accent_readable, 0);
 	} else if (!net->signal) {
 		// Saved, but not on the air right now: the glyph says "no bars"
 		// already, the dimming says "and not here at all".
@@ -432,7 +432,7 @@ static void add_row(lv_obj_t *parent, const wifi_network_t *net, bool with_menu)
 		lv_obj_add_style(sub, &theme_style_text_dim, 0);
 		lv_obj_set_style_text_font(sub, &font_ui_20, 0);
 		if (net->current) {
-			lv_obj_set_style_text_color(sub, theme()->accent, 0);
+			lv_obj_set_style_text_color(sub, theme()->accent_readable, 0);
 		}
 		// Measured from the middle rather than the top: the pair then sits
 		// centred in the row whatever padding the button style brings along.

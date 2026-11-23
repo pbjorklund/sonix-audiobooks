@@ -59,7 +59,7 @@ static void refresh_filter_checks(void) {
 	for (int i = 0; i < 4; i++) {
 		if (filter_checks[i]) {
 			lv_label_set_text(filter_checks[i], i == active ? "\xE2\x9C\x93" : "");
-			lv_obj_set_style_text_color(filter_checks[i], theme()->accent, 0);
+			lv_obj_set_style_text_color(filter_checks[i], theme()->accent_readable, 0);
 		}
 	}
 }

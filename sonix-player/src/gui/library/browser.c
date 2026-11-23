@@ -602,7 +602,7 @@ static void update_corner_buttons(void);
 static void row_update_selection(row_t *row) {
 	bool on = selecting && chosen && row->index >= 0 && (size_t)row->index < shown.count && chosen[row->index];
 	if (on) {
-		lv_obj_set_style_image_recolor(row->check, theme()->accent, 0);
+		lv_obj_set_style_image_recolor(row->check, theme()->accent_readable, 0);
 		lv_obj_set_hidden(row->check, false);
 	} else {
 		lv_obj_set_hidden(row->check, true);

@@ -748,7 +748,7 @@ static void pick_rebuild(void) {
 		lv_obj_set_size(row, lv_pct(100), ROW_HEIGHT);
 		lv_obj_add_style(row, &theme_style_card, 0);
 		lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
-		lv_obj_set_style_radius(row, 12, 0);
+		lv_obj_set_style_radius(row, SETTINGSROW_ROW_RADIUS, 0);
 		lv_obj_set_style_border_width(row, 0, 0);
 		lv_obj_set_style_shadow_width(row, 0, 0);
 		lv_obj_set_style_pad_hor(row, 16, 0);
@@ -766,7 +766,7 @@ static void pick_rebuild(void) {
 		lv_obj_t *glyph = lv_image_create(row);
 		lv_image_set_src(glyph, &icon_folder);
 		lv_obj_add_style(glyph, &theme_style_icon, 0);
-		lv_obj_set_style_image_recolor(glyph, theme()->accent, 0);
+		lv_obj_set_style_image_recolor(glyph, theme()->accent_readable, 0);
 		lv_obj_set_style_image_recolor_opa(glyph, LV_OPA_COVER, 0);
 
 		lv_obj_t *label = lv_label_create(row);
@@ -998,7 +998,7 @@ static void build_row(int index) {
 	lv_obj_set_size(row, lv_pct(100), ROW_HEIGHT);
 	lv_obj_add_style(row, &theme_style_card, 0);
 	lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
-	lv_obj_set_style_radius(row, 12, 0);
+	lv_obj_set_style_radius(row, SETTINGSROW_ROW_RADIUS, 0);
 	lv_obj_set_style_border_width(row, 0, 0);
 	lv_obj_set_style_shadow_width(row, 0, 0);
 	lv_obj_set_style_pad_hor(row, 16, 0);

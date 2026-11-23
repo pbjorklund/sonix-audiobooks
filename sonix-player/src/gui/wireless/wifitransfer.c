@@ -469,7 +469,7 @@ static void wifi_row_cb(lv_event_t *e) {
 // accent changed afterwards would otherwise stay stale until reboot.
 static void refresh_accent(void) {
 	if (url_label) {
-		lv_obj_set_style_text_color(url_label, theme()->accent, 0);
+		lv_obj_set_style_text_color(url_label, theme()->accent_readable, 0);
 	}
 }
 
@@ -496,7 +496,7 @@ void wifitransfer_page_init(gui_config_t *cfg) {
 	lv_label_set_long_mode(url_label, LV_LABEL_LONG_WRAP);
 	lv_obj_add_style(url_label, &theme_style_text, 0);
 	lv_obj_set_style_text_font(url_label, &font_ui_32, 0);
-	lv_obj_set_style_text_color(url_label, theme()->accent, 0);
+	lv_obj_set_style_text_color(url_label, theme()->accent_readable, 0);
 	lv_obj_set_style_text_align(url_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_set_style_pad_ver(url_label, 16, 0);
 

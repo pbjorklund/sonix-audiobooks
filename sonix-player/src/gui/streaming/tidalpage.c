@@ -2365,7 +2365,7 @@ static void paint_login(void) {
 	if (!login_url) {
 		return;
 	}
-	lv_obj_set_style_text_color(login_url, theme()->accent, 0);
+	lv_obj_set_style_text_color(login_url, theme()->accent_readable, 0);
 	lv_obj_set_style_text_color(login_code, theme()->text_primary, 0);
 	lv_obj_set_style_bg_color(login_retry, theme()->accent, 0);
 	lv_obj_set_style_text_color(lv_obj_get_child(login_retry, 0), lv_color_white(), 0);

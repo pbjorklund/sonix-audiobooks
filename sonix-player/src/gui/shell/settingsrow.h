@@ -9,6 +9,10 @@
 // a file browser row, so a list of settings and a list of tracks read as the
 // same interface.
 
+// The shared card's corner radius: the Hat Blue design's rounding, the same
+// value the menu tiles use, so a list card and a menu tile read as one family.
+#define SETTINGSROW_ROW_RADIUS 22
+
 // The page heading, sitting to the right of the floating back button and
 // vertically centred on it. Shared so every page's title lines up in exactly
 // the same place.

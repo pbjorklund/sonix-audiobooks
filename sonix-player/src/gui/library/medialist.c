@@ -1019,7 +1019,7 @@ static void row_update_playmark(panel_t *p, row_t *row) {
 		if (p->tinted) {
 			lv_obj_set_style_text_color(row->number, playing ? p->tint_ink : p->tint_dim, 0);
 		} else if (playing) {
-			lv_obj_set_style_text_color(row->number, theme()->accent, 0);
+			lv_obj_set_style_text_color(row->number, theme()->accent_readable, 0);
 		} else {
 			lv_obj_remove_local_style_prop(row->number, LV_STYLE_TEXT_COLOR, 0);
 		}
@@ -1181,7 +1181,7 @@ static void row_update_selection(panel_t *p, row_t *row, const char *name, const
 	char buf[16];
 	bool chosen = p->selecting && sel_find(p, row_key(p, row->index, name, path, buf, sizeof(buf))) >= 0;
 	if (chosen) {
-		lv_obj_set_style_image_recolor(row->check, p->tinted ? p->tint_ink : theme()->accent, 0);
+		lv_obj_set_style_image_recolor(row->check, p->tinted ? p->tint_ink : theme()->accent_readable, 0);
 		lv_obj_set_hidden(row->check, false);
 	} else {
 		lv_obj_set_hidden(row->check, true);
@@ -2432,7 +2432,7 @@ static void reorder_icon_paint(panel_t *p) {
 	}
 	lv_obj_t *glyph = lv_obj_get_child(p->reorder_btn, 0);
 	if (glyph) {
-		lv_obj_set_style_image_recolor(glyph, p->reordering ? theme()->accent : theme()->text_primary, 0);
+		lv_obj_set_style_image_recolor(glyph, p->reordering ? theme()->accent_readable : theme()->text_primary, 0);
 	}
 }
 
@@ -2795,7 +2795,7 @@ static void drag_mark_rows(panel_t *p) {
 		bool carried = drag_panel == p && p->rows[i].index >= 0 && p->rows[i].index == drag_from;
 		lv_obj_set_style_border_width(p->rows[i].button, carried ? 2 : 0, 0);
 		if (carried) {
-			lv_obj_set_style_border_color(p->rows[i].button, theme()->accent, 0);
+			lv_obj_set_style_border_color(p->rows[i].button, theme()->accent_readable, 0);
 			lv_obj_set_style_border_opa(p->rows[i].button, LV_OPA_COVER, 0);
 		}
 	}
@@ -3353,7 +3353,7 @@ static lv_obj_t *play_menu_row(lv_obj_t *parent, const char *text, lv_event_cb_t
 	lv_obj_set_size(row, lv_pct(100), 76);
 	lv_obj_add_style(row, &theme_style_card, 0);
 	lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
-	lv_obj_set_style_radius(row, 12, 0);
+	lv_obj_set_style_radius(row, SETTINGSROW_ROW_RADIUS, 0);
 	lv_obj_set_style_border_width(row, 0, 0);
 	lv_obj_set_style_shadow_width(row, 0, 0);
 	lv_obj_set_style_pad_hor(row, 16, 0);
@@ -4188,7 +4188,7 @@ static void head_paint(panel_t *p) {
 	local_color(p->head_title, LV_STYLE_TEXT_COLOR, 0, t, p->tint_ink);
 	if (p->head_artist) {
 		// The artist in the accent, as the theme has it, or in the ink.
-		lv_obj_set_style_text_color(p->head_artist, t ? p->tint_ink : theme()->accent, 0);
+		lv_obj_set_style_text_color(p->head_artist, t ? p->tint_ink : theme()->accent_readable, 0);
 	}
 	local_color(p->head_meta, LV_STYLE_TEXT_COLOR, 0, t, p->tint_dim);
 
@@ -4230,7 +4230,7 @@ static void page_paint(panel_t *p) {
 		}
 		row_update_playmark(p, row); // the number's colour depends on the mark
 		if (!lv_obj_is_hidden(row->check)) {
-			lv_obj_set_style_image_recolor(row->check, t ? p->tint_ink : theme()->accent, 0);
+			lv_obj_set_style_image_recolor(row->check, t ? p->tint_ink : theme()->accent_readable, 0);
 		}
 	}
 
@@ -4988,12 +4988,12 @@ void medialist_open(const char *title, library_list_t kind, library_filter_t fil
 		// Lit in the accent on the records: the button is a state, not an
 		// action that happens once.
 		lv_obj_set_style_image_recolor(lv_obj_get_child(p->album_btn, 0),
-									   artist_albums ? theme()->accent : theme()->text_primary, 0);
+									   artist_albums ? theme()->accent_readable : theme()->text_primary, 0);
 	}
 	if (p->reverse_btn) {
 		// Lit in the accent colour for as long as the list is reversed.
 		lv_obj_set_style_image_recolor(lv_obj_get_child(p->reverse_btn, 0),
-									   fav_reversed ? theme()->accent : theme()->text_primary, 0);
+									   fav_reversed ? theme()->accent_readable : theme()->text_primary, 0);
 	}
 	bool by_date = sort_by_date(p) || sort_by_year(p);
 	sort_icon_paint(p);
