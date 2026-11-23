@@ -2,6 +2,12 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 0.6.1 - 2026-11-23
+
+- **Hat Blue Theme:** New iOS-inspired dark theme with royal-blue `#135EDB` accents on near-black `#08090C` screens and `#191B21` cards. Menu tiles are now flat with 22px rounded corners.
+- **Restyled Icons:** 37 menu icons updated to layered blue-gradient artwork, plus 3 page illustrations and 3 playback badges. Brand-blue icons are preserved regardless of selected control accent.
+- **Audiobookshelf Icon:** Added a dedicated icon for Audiobookshelf, separate from the local Audiobooks tile on the Home screen.
+
 ## Sonix Audiobooks 0.6.0 - 2026-11-23
 
 - **Multiple ABS Servers:** Added support for named URL+token profiles with a profile picker and editor. Includes per-operation auth snapshots and same-origin enforcement.

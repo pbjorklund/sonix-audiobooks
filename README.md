@@ -12,8 +12,10 @@ progress that syncs by itself once Wi-Fi is back.
 > do is upstream's own and is in **[FEATURES.md](FEATURES.md)**. What the fork
 > adds is described in **[AUDIOBOOK_EDITION.md](AUDIOBOOK_EDITION.md)**.
 
+## Release 0.6.1
+Introduces the **Hat Blue** visual redesign: an iOS-inspired dark theme featuring a royal-blue `#135EDB` accent (matching the boot-screen gnome's knitted hat) on near-black `#08090C` screens with `#191B21` cards. Menu tiles are now flat with 22px rounded corners, and 37 menu icons have been restyled as layered blue-gradient artwork.
+
 ## Release 0.6.0
-Rebuilt on upstream sonix-player v1.3.1. This release adds multiple Audiobookshelf server profiles, a persistent download queue, a detailed book view with authenticated covers, and refined browsing with 100-match search and advanced sorting/filtering.
 
 <p align="center"><img src="docs/screenshots/boot-screen.png" width="240" alt="Sonix Audiobooks 0.5.0 boot screen"></p>
 
