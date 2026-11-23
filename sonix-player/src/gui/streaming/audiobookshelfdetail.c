@@ -397,12 +397,11 @@ static void draw_chapters(void) {
 	abs_list_set_count(list, model->chapter_count + (model->chapters_overflow ? 1 : 0));
 }
 
-// The cover block (§9.2, between the summary|chapters content and the
-// actions): a card the shape of the §9.5 contain view, showing either the
-// decoded picture (tappable), the spinner while the decode runs, or the
-// "Cover unavailable" row. No block at all when the §9.2 detail is
-// text-only: the cover was never fetched, failed to fetch, or the item has
-// none on the server.
+// The cover block (§9.2): the page's first content element, a card the shape
+// of the §9.5 contain view, showing either the decoded picture (tappable),
+// the spinner while the decode runs, or the "Cover unavailable" row. No block
+// at all when the §9.2 detail is text-only: the cover was never fetched,
+// failed to fetch, or the item has none on the server.
 static void draw_cover_block(void) {
 	cover_widget = cover_busy = cover_note = NULL;
 	if (!cover_file[0]) return;
@@ -463,6 +462,11 @@ static void draw(void) {
 		note("audiobookshelf_detail_too_large");
 	}
 
+	// The cover leads the page: it is the first content element, above the
+	// metadata rows, so a book's artwork is visible the moment the detail
+	// opens (fetch/decode pending shows the spinner in the same slot).
+	draw_cover_block();
+
 	char value[ABS_NAME_MAX + 40];
 	if (model->item.author[0]) meta_row("audiobookshelf_detail_author", model->item.author);
 	if (model->narrator[0]) meta_row("audiobookshelf_detail_narrator", model->narrator);
@@ -487,7 +491,6 @@ static void draw(void) {
 	pills_row();
 	if (show_chapters) draw_chapters();
 	else draw_summary();
-	draw_cover_block();
 	draw_actions();
 }
 
