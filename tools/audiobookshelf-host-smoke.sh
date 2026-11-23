@@ -217,9 +217,13 @@ scrot "$WORK/action-confirm.png"
 click 330 475 1       # confirm download or local link
 
 wait_for "downloaded resume import" 900 resume_ready
+# §11.5: new downloads land in the server-qualified abs-<sha256(server)[0:12]>
+# root. The mock server URL is already in normalized form, so this shell's
+# hash matches the player's destination hash byte for byte.
+ABS_HASH=$(printf '%s' "http://127.0.0.1:$PORT" | sha256sum | cut -c1-12)
 if [[ "$EXISTING" == 1 ]]; then
 	[[ -s "$SD/Audiobooks/Test Author/The Mock Journey/.audiobookshelf" ]] || fail "local link manifest missing"
-	[[ ! -e "$SD/Audiobooks/Audiobookshelf/Test Author/The Mock Journey" ]] || fail "linked book was downloaded again"
+	[[ ! -e "$SD/Audiobooks/Audiobookshelf/abs-$ABS_HASH" ]] || fail "linked book was downloaded again"
 	if [[ "$LOCAL_PROGRESS" == 1 ]]; then
 		wait_for "uploaded existing local progress" 400 progress_uploaded
 	fi
@@ -231,9 +235,11 @@ if [[ "$EXISTING" == 1 ]]; then
 		wait_for "linked local playback" 100 grep -q "play requested.*Local Chapter Two.mp3.*from 3" "$WORK/player.log"
 	fi
 else
-	[[ -s "$SD/Audiobooks/Audiobookshelf/Test Author/The Mock Journey/001 - Part One.mp3" ]] || fail "part one missing"
-	[[ -s "$SD/Audiobooks/Audiobookshelf/Test Author/The Mock Journey/002 - Part Two.mp3" ]] || fail "part two missing"
-	[[ -s "$SD/Audiobooks/Audiobookshelf/Test Author/The Mock Journey/cover.jpg" ]] || fail "cover missing"
+	[[ -s "$SD/Audiobooks/Audiobookshelf/abs-$ABS_HASH/Test Author/The Mock Journey/001 - Part One.mp3" ]] || fail "part one missing"
+	[[ -s "$SD/Audiobooks/Audiobookshelf/abs-$ABS_HASH/Test Author/The Mock Journey/002 - Part Two.mp3" ]] || fail "part two missing"
+	[[ -s "$SD/Audiobooks/Audiobookshelf/abs-$ABS_HASH/Test Author/The Mock Journey/cover.jpg" ]] || fail "cover missing"
+	# The legacy 0.5.0 layout must stay empty for new downloads (§11.5).
+	[[ ! -e "$SD/Audiobooks/Audiobookshelf/Test Author" ]] || fail "a new download used the legacy 0.5.0 layout"
 fi
 scrot "$WORK/action-complete.png"
 

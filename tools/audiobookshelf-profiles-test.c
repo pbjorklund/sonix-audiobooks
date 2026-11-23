@@ -117,6 +117,18 @@ static void validation_tests(void) {
 	assert(valid("http://a/#frag", NULL));
 	assert(valid("http://a/\x01b", NULL));
 	assert(valid(long_url, NULL)); // 699 chars > ABS_SERVER_MAX - 1
+
+	// The M1 editor report flagged `http://40703` as a "hostless URL". It is
+	// not hostless: RFC 3986 places the port AFTER a colon, so "40703" is the
+	// host itself -- a legal reg-name of unreserved characters, the same class
+	// of opaque hostname the contract already accepts as an IPv4 textual host.
+	// The documented store contract (§11.2) validates the syntax -- http(s)
+	// scheme, no control bytes, no userinfo, no fragment -- and leaves
+	// reachability to the request layer, exactly as it does for any DNS name
+	// that later fails to resolve. ACCEPT is contract-correct; this test pins
+	// the behavior so a later "fix" must either justify a contract change or
+	// keep the acceptance.
+	assert(valid("http://40703", "http://40703"));
 }
 
 // ---------------------------------------------------------------------------

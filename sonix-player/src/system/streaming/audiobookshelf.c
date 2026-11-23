@@ -3,6 +3,7 @@
 #include "abs_sync.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <math.h>
 #include <pthread.h>
@@ -16,6 +17,7 @@
 #include "src/system/core/config.h"
 #include "src/system/core/json.h"
 #include "src/system/core/pathlimits.h"
+#include "src/system/core/sha256.h"
 #include "src/system/core/utils.h"
 #include "src/system/decode/decode.h"
 #include "src/system/library/audiobookdb.h"
@@ -1126,6 +1128,122 @@ static void safe_component(const char *input, char *out, size_t size) {
 	if (!out[0]) snprintf(out, size, "Unknown");
 }
 
+// ---------------------------------------------------------------------------
+// New-book destination (§11.5)
+//
+// Every book downloaded after 0.6.0 lives under a server-qualified directory:
+//
+//     <sd>/Audiobooks/Audiobookshelf/abs-<sha256(normalized-server)[0:12]>/
+//       <safe-author>/<safe-title>/
+//
+// The pre-0.6.0 layout (<sd>/Audiobooks/Audiobookshelf/<author>/<title>) put
+// one physical copy under author/title alone, so two servers carrying the same
+// title -- even the same item id -- would collapse into one shareable
+// directory and its single manifest. The hash prefix separates them, and the
+// prefix is only a fast path: a download whose hash-prefix directory already
+// carries another server's manifest is failed outright (below), because the
+// manifest server -- not the prefix -- is the binding identity. Legacy 0.5.0
+// books are never moved or rewritten; their manifest-less binding keeps
+// resolving through legacy_server (§11.5).
+// ---------------------------------------------------------------------------
+
+// Twelve hex characters are 48 bits. Full digests would make every path name
+// unwieldy; the collision case is covered by reading full manifest servers
+// before any directory is shared, not by widening the prefix.
+#define ABS_BOOK_HASH_LEN 12
+
+// First ABS_BOOK_HASH_LEN hex characters of the SHA-256 over the normalized
+// server identity. The same string goes into the manifest's server= line, so
+// the directory a book lands in and the identity its manifest binds can never
+// disagree about which server downloads it.
+static void abs_book_hash_prefix(const char *server, char *out, size_t size) {
+	char hex[SHA256_HEX_LEN];
+	sha256_ctx ctx;
+	sha256_init(&ctx);
+	sha256_update(&ctx, server, strlen(server));
+	sha256_final_hex(&ctx, hex);
+	snprintf(out, size, "%.*s", ABS_BOOK_HASH_LEN, hex);
+}
+
+// Reads the server= binding of one manifest and normalizes it. Books under an
+// abs- root are always written with server= (audiobookshelf_download), so a
+// manifest that cannot be resolved to a server is treated as a foreign claim,
+// never as ours (§11.5: fail the job rather than share the directory).
+static bool abs_manifest_server(const char *manifest, char *out, size_t size) {
+	if (out && size) out[0] = '\0';
+	FILE *f = fopen(manifest, "r");
+	if (!f) return false;
+	char line[ABS_SERVER_MAX + 16];
+	bool found = false;
+	while (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (strncmp(line, "server=", 7) == 0) {
+			abs_profiles_normalize_server(line + 7, out, size);
+			found = out[0] != '\0';
+			break;
+		}
+	}
+	fclose(f);
+	return found;
+}
+
+// True when any manifest under the abs- hash root names a different
+// Audiobookshelf server than `ours`, or a manifest with no resolvable server
+// at all. Book manifests live two levels below the root (author/title/...);
+// the depth cap keeps a surprise deep tree from walking the whole card, and
+// only exact ".audiobookshelf" files are read, so .tmp sidecars, covers and
+// partial .part files can never look like a claim.
+static bool abs_dir_has_foreign_claim(const char *root, const char *ours, int depth) {
+	DIR *dir = opendir(root);
+	if (!dir) return false;
+	char path[ABS_LOCAL_PATH_MAX];
+	bool foreign = false;
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL && !foreign) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+		// d_type is unreliable on some card filesystems; opendir() is the test.
+		if ((size_t)snprintf(path, sizeof(path), "%s/%s", root, entry->d_name) >= sizeof(path)) continue;
+		if (strcmp(entry->d_name, ".audiobookshelf") == 0) {
+			char bound[ABS_SERVER_MAX];
+			if (!abs_manifest_server(path, bound, sizeof(bound))) foreign = true;
+			else foreign = strcmp(bound, ours) != 0;
+			continue;
+		}
+		DIR *sub = opendir(path);
+		if (!sub) continue; // a file that is not a manifest carries no claim
+		closedir(sub);
+		if (entry->d_name[0] == '.') continue; // hidden helper directories
+		if (depth > 0) foreign = abs_dir_has_foreign_claim(path, ours, depth - 1);
+	}
+	closedir(dir);
+	return foreign;
+}
+
+typedef enum {
+	ABS_DEST_OK,       // `out` holds the destination; the hash root is unclaimed
+	ABS_DEST_COLLIDE,  // hash root exists and is bound to another server
+	ABS_DEST_UNNAMEABLE // the destination cannot even be named (component overflow)
+} abs_destination_t;
+
+// Builds the new-book destination and checks the hash root's claim. Called
+// BEFORE make_dirs and before any network or card write (§11.5): a refused
+// destination must not leave traces on the card.
+static abs_destination_t abs_book_destination(const char *sd_root, const char *server,
+											  const char *author, const char *title,
+											  char *out, size_t size) {
+	char hash[16];
+	abs_book_hash_prefix(server, hash, sizeof(hash));
+	char root[ABS_LOCAL_PATH_MAX];
+	if ((size_t)snprintf(root, sizeof(root), "%s/Audiobooks/Audiobookshelf/abs-%s", sd_root, hash) >= sizeof(root))
+		return ABS_DEST_UNNAMEABLE;
+	if ((size_t)snprintf(out, size, "%s/%s/%s", root, author, title) >= size)
+		return ABS_DEST_UNNAMEABLE;
+	struct stat st;
+	if (stat(root, &st) != 0 || !S_ISDIR(st.st_mode)) return ABS_DEST_OK;
+	if (abs_dir_has_foreign_claim(root, server, 2)) return ABS_DEST_COLLIDE;
+	return ABS_DEST_OK;
+}
+
 static void encode_content_path(const char *input, char *out, size_t size) {
 	static const char hex[] = "0123456789ABCDEF";
 	size_t w = 0;
@@ -1330,21 +1448,28 @@ bool audiobookshelf_local_linked(const char *local_book, const char *item_id) {
 	FILE *f = fopen(manifest, "r");
 	if (!f) return false;
 
-	// Both answers are collected: `server=` is written after `item_id=` in the
-	// manifest, so neither line may stop the scan early.
+	// All three answers are collected: `server=` is written after `item_id=`
+	// in the manifest, so neither line may stop the scan early, and `version=`
+	// is the manifest's own format commitment (§11.5: validate version and
+	// required fields before trusting the binding).
 	bool id_matched = false;
+	bool version_ok = false;
 	char bound[ABS_SERVER_MAX] = "";
 	char line[ABS_SERVER_MAX + 32];
 	while (fgets(line, sizeof(line), f)) {
 		line[strcspn(line, "\r\n")] = '\0';
 		if (strncmp(line, "item_id=", 8) == 0) {
-			id_matched = strcmp(line + 8, item_id) == 0;
+			id_matched = line[8] != '\0' && strcmp(line + 8, item_id) == 0;
 		} else if (strncmp(line, "server=", 7) == 0 && !bound[0]) {
 			snprintf(bound, sizeof(bound), "%.*s", (int)sizeof(bound) - 1, line + 7);
+		} else if (strcmp(line, "version=1") == 0) {
+			version_ok = true;
 		}
 	}
 	fclose(f);
-	if (!id_matched) return false;
+	// A manifest without a recognized version or a matching item id is not a
+	// linkable binding: it must never open a copy that some other state wrote.
+	if (!version_ok || !id_matched) return false;
 
 	char resolved[ABS_SERVER_MAX];
 	abs_profiles_normalize_server(bound, resolved, sizeof(resolved));
@@ -1369,12 +1494,21 @@ bool audiobookshelf_link_local(const audiobookshelf_book_t *book, const char *lo
 	}
 	// The manifest must bind the exact server the item was browsed from
 	// (§11.3/§11.5): one identity decides, and nothing reads the legacy
-	// globals directly.
+	// globals directly. Normalized exactly like the download's manifest so the
+	// two writers can never disagree on the binding spelling (round-trip
+	// through a scratch buffer: the normalizer clears its output first).
 	char server[ABS_SERVER_MAX];
 	if (!request_credentials_copy(NULL, server, sizeof(server), NULL, 0) || !server[0]) {
 		set_error("Audiobookshelf is not configured.");
 		return false;
 	}
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(server, normalized, sizeof(normalized));
+	if (!normalized[0]) {
+		set_error("The Audiobookshelf server is invalid.");
+		return false;
+	}
+	snprintf(server, sizeof(server), "%s", normalized);
 
 	local_files_t files = {
 		.paths = calloc((size_t)book->track_count, ABS_LOCAL_PATH_MAX),
@@ -1503,38 +1637,64 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 		set_error("Audiobookshelf is not configured.");
 		return false;
 	}
+	// §11.5: the destination hash and the manifest's server= line must be the
+	// SAME string, so the identity is re-normalized here even though profile
+	// storage already normalizes on write -- a manifest and a directory hash
+	// derived from different spellings of one URL would defeat the collision
+	// gate below. (abs_profiles_normalize_server clears its output first, so
+	// the round-trip goes through a scratch buffer rather than in place.)
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(server, normalized, sizeof(normalized));
+	if (!normalized[0]) {
+		set_error("The Audiobookshelf server is invalid.");
+		memset(token, 0, sizeof(token));
+		return false;
+	}
+	snprintf(server, sizeof(server), "%s", normalized);
 	char author[160], title[220];
 	safe_component(book->item.author[0] ? book->item.author : "Unknown Author", author, sizeof(author));
 	safe_component(book->item.title, title, sizeof(title));
 	char folder[900];
-	if ((size_t)snprintf(folder, sizeof(folder), "%s/Audiobooks/Audiobookshelf/%s/%s", sd_root, author, title) >= sizeof(folder) ||
-		!make_dirs(folder)) {
-		set_error("The Audiobookshelf download folder could not be created.");
+	// §11.5: the destination is refused BEFORE any byte is written. The hash
+	// gate runs first (a directory claimed by another server is never shared),
+	// then the shared path ceiling: every final track path must be
+	// representable by the narrowest downstream consumer (the durable
+	// checkpoint row and the progress watch slots carry the same strings) --
+	// still before make_dirs, so a refused job leaves no card residue.
+	abs_destination_t destination = abs_book_destination(sd_root, server, author, title, folder, sizeof(folder));
+	if (destination == ABS_DEST_COLLIDE) {
+		set_error("The download path is already used by another Audiobookshelf server.");
+		memset(token, 0, sizeof(token));
 		return false;
 	}
-
-	// §11.5: every final destination must be representable by the narrowest
-	// downstream consumer (the durable checkpoint row and the progress watch
-	// slots carry the same strings) before the first byte is written. The gate
-	// covers the folder transitively -- it prefixes every track path.
+	if (destination != ABS_DEST_OK) {
+		set_error("The audiobook download path is too long.");
+		memset(token, 0, sizeof(token));
+		return false;
+	}
 	for (int i = 0; i < book->track_count; i++) {
 		char numbered[280];
-		char destination[ABS_LOCAL_PATH_MAX];
+		char track_destination[ABS_LOCAL_PATH_MAX];
 		if (!local_track_name(&book->tracks[i], i, numbered, sizeof(numbered)) ||
-			(size_t)snprintf(destination, sizeof(destination), "%s/%s", folder, numbered) >= sizeof(destination) ||
-			!sonix_linked_path_representable(strlen(destination))) {
+			(size_t)snprintf(track_destination, sizeof(track_destination), "%s/%s", folder, numbered) >= sizeof(track_destination) ||
+			!sonix_linked_path_representable(strlen(track_destination))) {
 			set_error("The audiobook download path is too long.");
 			memset(token, 0, sizeof(token));
 			return false;
 		}
 	}
+	if (!make_dirs(folder)) {
+		set_error("The Audiobookshelf download folder could not be created.");
+		memset(token, 0, sizeof(token));
+		return false;
+	}
 
 	for (int i = 0; i < book->track_count; i++) {
 		const audiobookshelf_track_t *track = &book->tracks[i];
 		char numbered[280];
-		char destination[ABS_LOCAL_PATH_MAX];
+		char track_destination[ABS_LOCAL_PATH_MAX];
 		if (!local_track_name(track, i, numbered, sizeof(numbered)) ||
-			(size_t)snprintf(destination, sizeof(destination), "%s/%s", folder, numbered) >= sizeof(destination)) {
+			(size_t)snprintf(track_destination, sizeof(track_destination), "%s/%s", folder, numbered) >= sizeof(track_destination)) {
 			set_error("The audiobook download path is too long.");
 			memset(token, 0, sizeof(token));
 			return false;
@@ -1570,9 +1730,9 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 		} else if (encoded[0] == '/') snprintf(url, sizeof(url), "%s%s", server, encoded);
 		else snprintf(url, sizeof(url), "%s/%s", server, encoded);
 
-		if (!download_file(url, token, destination, i + 1, book->track_count, cb, user) ||
-			!write_sidecars(destination, book, track, i + 1) ||
-			(i == 0 && !write_description(destination, book->description))) {
+		if (!download_file(url, token, track_destination, i + 1, book->track_count, cb, user) ||
+			!write_sidecars(track_destination, book, track, i + 1) ||
+			(i == 0 && !write_description(track_destination, book->description))) {
 			memset(token, 0, sizeof(token));
 			return false;
 		}

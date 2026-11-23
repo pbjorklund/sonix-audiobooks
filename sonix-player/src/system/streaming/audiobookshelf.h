@@ -67,11 +67,15 @@ int audiobookshelf_filtered_items(const char *library_id, int page, const char *
 void audiobookshelf_group_filter(bool series, const char *id, char *out, size_t size);
 bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out);
 
-// Downloads one complete book into
-//   <sd>/Audiobooks/Audiobookshelf/<author>/<title>/
+// Downloads one complete book into the server-qualified directory (§11.5)
+//   <sd>/Audiobooks/Audiobookshelf/abs-<sha256(normalized-server)[0:12]>/<author>/<title>/
 // and writes metadata sidecars understood by the local audiobook scanner.
-// Existing complete files are kept. Temporary files end in .part and are not
-// visible to the scanner.
+// Existing 0.5.0-era books under the un-hashed layout are never moved or
+// rewritten. Existing complete files are kept; temporary files end in .part
+// and are not visible to the scanner. The destination is refused -- before any
+// byte or directory is written -- when the hash-prefix directory already binds
+// a different Audiobookshelf server, or when any downstream consumer (durable
+// checkpoint row, progress watch slot) could not represent the path.
 typedef void (*audiobookshelf_progress_cb)(int track, int tracks, long long done, long long total, void *user);
 bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_root,
 								 audiobookshelf_progress_cb cb, void *user, char *book_path, size_t path_size);
@@ -92,7 +96,12 @@ bool audiobookshelf_link_local(const audiobookshelf_book_t *book, const char *lo
 								 char *file_out, size_t file_size, double *seconds_out,
 								 bool *finished_out);
 
-// True when the local book's manifest already belongs to this server item.
+// True when the local book's manifest binds THIS server item: a valid
+// version=1 manifest whose resolved server and item_id both match (§11.5).
+// Matching item_id alone would let server B's copy of one book open server A's
+// local files. A manifest without `server=` (pre-0.6.0 vintage) resolves to
+// the persisted legacy_server; with no reliable binding, false -- an explicit
+// re-link is required and local progress stays pending.
 // This lets the server library open a previously linked copy directly instead
 // of offering to link the same book again.
 bool audiobookshelf_local_linked(const char *local_book, const char *item_id);
