@@ -909,24 +909,55 @@ static bool recover_locked(void) {
 	}
 
 	// 3. FINALIZING with the acknowledgement commit missing (a crash inside
-	// the finalize window). §8.2's full reconciliation needs the manifest
-	// validator and the acknowledgement reset call, which arrive with the
-	// audiobookshelf_download() split — see the report's missing entry points.
-	// The bounded foundation answer leaves a recoverable FAILED job: the sync
-	// barrier releases, completed files are kept, and Retry redoes finalize
-	// only (fetch reuses every completed file record).
-	stmt = prepare_locked("SELECT * FROM DOWNLOAD_JOB WHERE state='FINALIZING' AND ack_reset_done=0");
-	if (stmt) {
-		while (sqlite3_step(stmt) == SQLITE_ROW) {
-			abs_download_job_t j;
-			job_from_row(stmt, &j);
-			j.state = ABS_DL_FAILED;
-			snprintf(j.error_stage, sizeof(j.error_stage), "manifest");
-			snprintf(j.error, sizeof(j.error),
-					 "Finalization was interrupted by a restart; retry to finish it");
-			persist_job_locked(&j);
+	// the finalize window). §8.2 recovery table line 540: the sync barrier is
+	// RE-ESTABLISHED by the persisted row itself — FINALIZING + ack_reset_done=0
+	// stays exactly as the crash left it, reload_locked() makes it the active
+	// job again, and the worker redoes the finalize step, whose media ops
+	// reconcile from the card: a valid manifest completes the acknowledgement
+	// (resume rebuild + reset + DONE transaction) offline; a missing one
+	// retries finalization only (identity refetch, committed audio reused).
+	// One active job exists per process, so at most one such row is expected;
+	// extras in a foreign/corrupt database are normalized to a recoverable
+	// FAILED job so no stale barrier blocks sync forever (§8.4 sanitizable
+	// state, same defensive posture as the DONE normalization below).
+	{
+		int barrier_rows = 0;
+		long long keep_id = 0;
+		stmt = prepare_locked(
+			"SELECT id FROM DOWNLOAD_JOB WHERE state='FINALIZING' AND ack_reset_done=0 ORDER BY seq");
+		if (stmt) {
+			while (sqlite3_step(stmt) == SQLITE_ROW) {
+				long long id = sqlite3_column_int64(stmt, 0);
+				if (!barrier_rows) {
+					keep_id = id;
+				}
+				barrier_rows++;
+			}
+			sqlite3_finalize(stmt);
 		}
-		sqlite3_finalize(stmt);
+		for (int extra = 1; extra < barrier_rows; extra++) {
+			// Deterministic extra mapping: every row after the seq-first one.
+			stmt = prepare_locked(
+				"SELECT id FROM DOWNLOAD_JOB WHERE state='FINALIZING' AND ack_reset_done=0"
+				" AND id<>? ORDER BY seq LIMIT 1");
+			if (stmt) {
+				sqlite3_bind_int64(stmt, 1, (sqlite3_int64)keep_id);
+				long long id = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : 0;
+				sqlite3_finalize(stmt);
+				if (id) {
+					stmt = prepare_locked(
+						"UPDATE DOWNLOAD_JOB SET state='FAILED', error_stage='manifest',"
+						" error='Finalization was interrupted by a restart; retry to finish it',"
+						" updated_ms=? WHERE id=?");
+					if (stmt) {
+						sqlite3_bind_int64(stmt, 1, (sqlite3_int64)now);
+						sqlite3_bind_int64(stmt, 2, (sqlite3_int64)id);
+						sqlite3_step(stmt);
+						sqlite3_finalize(stmt);
+					}
+				}
+			}
+		}
 	}
 
 	// 4. A DONE row whose acknowledgement commit has not landed cannot result

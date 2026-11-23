@@ -43,6 +43,8 @@
 // harness; nothing here duplicates them.
 
 #include "src/system/core/sha256.h"
+#include "src/system/db/sqlite3.h"
+#include "src/system/library/audiobookdb.h"
 #include "src/system/net/http.h"
 #include "src/system/streaming/abs_download.h"
 #include "src/system/streaming/abs_profiles.h"
@@ -50,11 +52,13 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define CHECK(cond, ...)                                                    \
@@ -250,6 +254,10 @@ static abs_download_job_t snapshot_job(long long id) {
 	exit(1);
 }
 
+static abs_download_state_t job_state(long long id) {
+	return snapshot_job(id).state;
+}
+
 // Drives the engine until the job reaches a terminal state for the phase
 // (paused counts as terminal for the pause phase) or the loop bound trips.
 static abs_download_state_t pump_until_terminal(long long job_id) {
@@ -315,7 +323,179 @@ static long long enqueue_episode(const char *profile, const char *server, const 
 }
 
 // ---------------------------------------------------------------------------
-// Offline shape
+// Shared finalize-wave helpers (§8.2 steps 5–8): manifest reading, the resume
+// mapping the row snapshot implies, and the REAL acknowledgement reset proof
+// (a planted AUDIOBOOK_ABS_SYNC row that must die with the job's reset and
+// survive every later reopen of a DONE row).
+// ---------------------------------------------------------------------------
+
+// The .audiobookshelf lines the finalize writes (and local_progress reads),
+// parsed back for the assertions. `present` is false when nothing is there.
+typedef struct {
+	bool present;
+	char version[16];
+	char item_id[ABS_URL_MAX];
+	char server[ABS_SERVER_MAX];
+	char duration[32];
+	char progress[32];
+	char progress_updated[32];
+	struct {
+		long no;
+		double offset;
+		double duration;
+		char name[ABS_DL_NAME_MAX];
+	} tracks[8];
+	int track_count;
+} manifest_view_t;
+
+static void read_manifest(const char *path, manifest_view_t *m) {
+	memset(m, 0, sizeof(*m));
+	FILE *f = fopen(path, "r");
+	if (!f) {
+		return;
+	}
+	char line[ABS_URL_MAX + 64];
+	while (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (strncmp(line, "version=", 8) == 0) {
+			snprintf(m->version, sizeof(m->version), "%.15s", line + 8);
+		} else if (strncmp(line, "item_id=", 8) == 0) {
+			snprintf(m->item_id, sizeof(m->item_id), "%.95s", line + 8);
+		} else if (strncmp(line, "server=", 7) == 0) {
+			snprintf(m->server, sizeof(m->server), "%.511s", line + 7);
+		} else if (strncmp(line, "duration=", 9) == 0) {
+			snprintf(m->duration, sizeof(m->duration), "%.31s", line + 9);
+		} else if (strncmp(line, "progress=", 9) == 0) {
+			snprintf(m->progress, sizeof(m->progress), "%.31s", line + 9);
+		} else if (strncmp(line, "progress_updated=", 17) == 0) {
+			snprintf(m->progress_updated, sizeof(m->progress_updated), "%.31s", line + 17);
+		} else if (strncmp(line, "track=", 6) == 0) {
+			if (m->track_count < 8) {
+				char *second = strchr(line + 6, '\t');
+				char *third = second ? strchr(second + 1, '\t') : NULL;
+				char *fourth = third ? strchr(third + 1, '\t') : NULL;
+				if (second && third && fourth) {
+					manifest_view_t *v = m;
+					v->tracks[m->track_count].no = atol(line + 6);
+					v->tracks[m->track_count].offset = strtod(second + 1, NULL);
+					v->tracks[m->track_count].duration = strtod(third + 1, NULL);
+					snprintf(v->tracks[m->track_count].name, sizeof(v->tracks[0].name), "%.255s",
+							 fourth + 1);
+				}
+			}
+			m->track_count++;
+		}
+	}
+	fclose(f);
+	m->present = true;
+}
+
+// The resume mapping the job's own remote whole-book snapshot implies over
+// the given plan/file records — exactly the algorithm both finalize shapes
+// implement (audiobookshelf_resume_target() for the normal window, the row
+// rebuild for crash recovery). `finished` books restart at part one.
+static void expected_resume(const abs_download_file_req_t *files, int count,
+							double remote_progress, int remote_finished, char *name_out,
+							size_t name_size, double *seconds_out) {
+	double whole = remote_finished ? 0.0 : remote_progress;
+	if (!(whole > 0)) {
+		whole = 0;
+	}
+	if (count > 0 && files[count - 1].duration > 0) {
+		double total = files[count - 1].start_offset + files[count - 1].duration;
+		if (total > 0 && whole > total) {
+			whole = total;
+		}
+	}
+	int selected = 0;
+	for (int i = 1; i < count; i++) {
+		if (files[i].start_offset <= whole + 0.001) {
+			selected = i;
+		} else {
+			break;
+		}
+	}
+	snprintf(name_out, name_size, "%s", files[selected].final_name);
+	double relative = whole - files[selected].start_offset;
+	if (relative < 0) {
+		relative = 0;
+	}
+	if (files[selected].duration > 0 && relative > files[selected].duration) {
+		relative = files[selected].duration;
+	}
+	if (seconds_out) {
+		*seconds_out = relative;
+	}
+}
+
+// The queue's one active engine step at a time lets the test probe exactly
+// between the FINALIZING commit (the barrier opens with it) and the finalize
+// op itself (§8.2 step 6).
+static void pump_to(long long job_id, abs_download_state_t want) {
+	for (int steps = 0; steps < 4096; steps++) {
+		abs_download_job_t j = snapshot_job(job_id);
+		if (j.state == want) {
+			return;
+		}
+		if (j.state == ABS_DL_DONE || j.state == ABS_DL_FAILED || j.state == ABS_DL_CANCELLED ||
+			j.state == ABS_DL_PAUSED || j.state == ABS_DL_WAITING_NETWORK) {
+			CHECK(0, "job %lld reached %s before %s\n", job_id, abs_download_state_name(j.state),
+				  abs_download_state_name(want));
+		}
+		CHECK(abs_download_pump(), "the pump starved before %s for job %lld\n",
+			  abs_download_state_name(want), job_id);
+	}
+	CHECK(0, "pump_to(%lld, %s) exhausted\n", job_id, abs_download_state_name(want));
+}
+
+// The REAL acknowledgement reset target: one audiobookdb on the work root.
+// AUDIOBOOK_ABS_SYNC rows are keyed by the card-resolved folder path; the
+// test plants and checks them with raw SQL through the same vendored sqlite.
+static char audiobook_db[1000];
+
+static void audiobook_db_open(void) {
+	snprintf(audiobook_db, sizeof(audiobook_db), "%.990s/audiobooks.db", work);
+	CHECK(audiobookdb_open(audiobook_db), "audiobookdb_open failed\n");
+}
+
+static void checkpoint_plant(const char *abs_book) {
+	sqlite3 *raw = NULL;
+	CHECK(sqlite3_open(audiobook_db, &raw) == SQLITE_OK, "checkpoint plant open\n");
+	sqlite3_stmt *stmt = NULL;
+	CHECK(sqlite3_prepare_v2(raw, "INSERT OR REPLACE INTO AUDIOBOOK_ABS_SYNC"
+							  "(book,server,linked,file,seconds,finished,attempted,failed)"
+							  " VALUES(?1,'plant',1,'f',3.0,0,0,0)",
+						  -1, &stmt, NULL) == SQLITE_OK,
+		  "checkpoint plant prepare\n");
+	sqlite3_bind_text(stmt, 1, abs_book, -1, SQLITE_TRANSIENT);
+	CHECK(sqlite3_step(stmt) == SQLITE_DONE, "checkpoint plant step\n");
+	sqlite3_finalize(stmt);
+	sqlite3_close(raw);
+}
+
+static bool checkpoint_present(const char *abs_book) {
+	sqlite3 *raw = NULL;
+	bool present = false;
+	if (sqlite3_open(audiobook_db, &raw) == SQLITE_OK) {
+		sqlite3_stmt *stmt = NULL;
+		if (sqlite3_prepare_v2(raw, "SELECT 1 FROM AUDIOBOOK_ABS_SYNC WHERE book=?1", -1, &stmt,
+							   NULL) == SQLITE_OK) {
+			sqlite3_bind_text(stmt, 1, abs_book, -1, SQLITE_TRANSIENT);
+			present = sqlite3_step(stmt) == SQLITE_ROW;
+			sqlite3_finalize(stmt);
+		}
+		sqlite3_close(raw);
+	}
+	return present;
+}
+
+// A crash child re-enters the card in a fresh process. The finalize-wave
+// offline bodies below define their own per-phase crash children; the shared
+// region stays HTTP-free.
+
+
+// ---------------------------------------------------------------------------
+// Offline shape: canned expanded JSON, real files, real engine steps
 // ---------------------------------------------------------------------------
 
 #ifndef ABS_QUEUE_TRANSFER_LIVE
@@ -325,12 +505,20 @@ static char stub_body[262144];
 static size_t stub_len;
 static char stub_url[2048];
 static bool stream_was_reached; // stream stubs must never run offline
+// Stub bookkeeping: how many buffered API requests the stub served, and which
+// cover URL (if any) reached the poisoned stream surface.
+static long long stub_requests;
+static bool cover_stream_seen;
+static char cover_stream_url[2048];
 
 static void stub_reset(void) {
 	stub_len = 0;
 	stub_body[0] = '\0';
 	stub_url[0] = '\0';
 	stream_was_reached = false;
+	cover_stream_seen = false;
+	cover_stream_url[0] = '\0';
+	stub_requests = 0;
 }
 
 static void stub_append(const char *text) {
@@ -351,7 +539,8 @@ static void build_expanded(const char *id, const char *title, const char *author
 	char piece[700];
 	snprintf(piece, sizeof(piece),
 			 "{\"id\":\"%s\",\"media\":{\"duration\":200.0,\"coverPath\":\"/api/items/%s/cover\","
-			 "\"metadata\":{\"title\":\"%s\",\"authorName\":\"%s\"},\"tracks\":[",
+			 "\"metadata\":{\"title\":\"%s\",\"authorName\":\"%s\","
+			 "\"description\":\"Stub words about the canned book.\"},\"tracks\":[",
 			 id, id, title, author);
 	stub_append(piece);
 	for (int i = 0; i < tracks; i++) {
@@ -390,6 +579,7 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 	(void)req;
 	(void)limit;
 	(void)timeout_secs;
+	stub_requests++;
 	snprintf(stub_url, sizeof(stub_url), "%s", url ? url : "");
 	if (status_out) *status_out = 200;
 	char *body = malloc(stub_len + 1);
@@ -400,17 +590,24 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 	return true;
 }
 
-// Every offline transfer probe must decide before any connection; a touch of
-// the stream surface marks the probe broken.
+// The stream surface stays poisoned for every offline probe EXCEPT the cover
+// sidecar of the finalize path: its failure is the §8.2 cover rule under test
+// (cover.jpg is the only NONFATAL sidecar). Any probe that opens a stream for
+// real media is still the broken decision it always was — and now it is loud.
 bool http_stream_open_ex(http_stream_t *st, const char *url, const char *extra_headers,
 						 int timeout_secs) {
 	(void)st;
-	(void)url;
 	(void)extra_headers;
 	(void)timeout_secs;
+	if (url && strstr(url, "/cover")) {
+		cover_stream_seen = true;
+		snprintf(cover_stream_url, sizeof(cover_stream_url), "%s", url);
+		return false;
+	}
 	stream_was_reached = true;
-	fprintf(stderr, "transfer test: offline probe touched http_stream_open_ex\n");
-	return false;
+	fprintf(stderr, "transfer test: offline probe touched http_stream_open_ex (%s)\n",
+			url ? url : "");
+	abort(); // loud: a transfer must decide before it ever opens a stream
 }
 
 int http_stream_read(http_stream_t *st, void *buf, int len) {
@@ -426,7 +623,7 @@ void http_stream_close(http_stream_t *st) {
 }
 
 const char *http_last_error(void) {
-	return "offline stub: the transfer path must not open streams";
+	return "offline stub: the stream refused to open";
 }
 
 static abs_auth_snapshot_t held;
@@ -434,6 +631,12 @@ static volatile int offline_cancel;
 static abs_download_plan_t offline_plan_out;
 static char offline_error[512];
 static const char *offline_stage;
+// The crash-child runner and finalize-wave phase cards (§8.2 steps 5–8),
+// defined below with their phase bodies.
+static void crash_child_finalize(bool write_manifest, bool keep_files);
+static void run_crash_child(bool write_manifest, bool keep_files);
+static void phase_card(const char *name);
+static void offline_create_media(void);
 
 // auth_acquire + fetch_identity, exactly the queue engine's calling shape.
 static bool offline_fetch(void) {
@@ -468,6 +671,88 @@ static bool offline_transfer(long long job_id, const abs_download_file_t *row, l
 								 .cancel = &offline_cancel, .user = NULL};
 	return ops->file_download(NULL, &ctx, row, size_out, &offline_stage, offline_error,
 							  sizeof(offline_error));
+}
+
+// Fresh per-phase card directory: every phase arms its own queue on an empty
+// sandbox (a crash child needs one nobody armed before the fork).
+static void phase_card(const char *name) {
+	snprintf(card, sizeof(card), "%.700s/%.180s", work, name);
+	if (mkdir(card, 0777) != 0 && errno != EEXIST) {
+		CHECK(0, "cannot create %s: %s\n", card, strerror(errno));
+	}
+}
+
+// §8.2 material for the finalize phases: the canned expanded JSON (2 tracks,
+// known sizes, whole-book progress 13 s stamped 1700000000000) and the audio
+// already on the card at the exact sizes, so the queue's retention path closes
+// the loop without a single connection.
+static void offline_create_media(void) {
+	long long sizes[2] = {1200, 1200};
+	build_expanded(STUB_ID, "Stub Book", "Stub Author", 2, sizes, false, true, 0);
+	char want_dest[600];
+	expected_destination(STUB_SERVER, "Stub Author", "Stub Book", want_dest, sizeof(want_dest));
+	char dest_abs[1400];
+	snprintf(dest_abs, sizeof(dest_abs), "%.700s/%.599s", card, want_dest);
+	mkpath_abs(dest_abs);
+	char final1[1400];
+	media_path_for(card, want_dest, "001 - Part 1.mp3", final1, sizeof(final1));
+	make_file(final1, 1200, 'k');
+	char final2[1400];
+	media_path_for(card, want_dest, "002 - Part 2.mp3", final2, sizeof(final2));
+	make_file(final2, 1200, 'k');
+}
+
+// A crash child: the engine drives the job to the FINALIZING commit and then
+// dies at a chosen point, so the parent opens a database whose reconciliation
+// the real recovery path must complete.
+static void crash_child_finalize(bool write_manifest, bool keep_files) {
+	queue_init();
+	offline_create_media();
+	long long id = enqueue_book("p1", STUB_SERVER, STUB_ID, "Stub Book");
+	CHECK(id > 0, "crash child enqueue failed\n");
+	pump_to(id, ABS_DL_FINALIZING);
+	if (write_manifest) {
+		// The real finalize op runs while the attempt state is still held —
+		// the §8.2 step 7 write — and then the process dies before any
+		// acknowledgement: rows FINALIZING, manifest committed, no reset.
+		abs_download_job_t job = snapshot_job(id);
+		abs_download_file_t files[ABS_DL_FILE_CAP];
+		int n = abs_download_job_files(id, files, ABS_DL_FILE_CAP);
+		CHECK(n == 2, "crash child file rows %d\n", n);
+		abs_download_op_ctx_t ctx = {.job_id = id, .state = ABS_DL_FINALIZING,
+									 .cancel = &offline_cancel, .user = NULL};
+		abs_download_resume_t resume;
+		memset(&resume, 0, sizeof(resume));
+		resume.resume_seconds = -1;
+		const char *stage = "";
+		char error[256] = {0};
+		CHECK(ops->finalize(NULL, &ctx, &job, files, n, &resume, &stage, error, sizeof(error)),
+			  "crash child finalize failed: %s (%s)\n", error, stage);
+		CHECK(resume.resume_file[0] != '\0', "crash child resume mapping empty\n");
+	} else if (!keep_files) {
+		// A file lost after its commit record: recovery must refuse to fake a
+		// commit over recorded-complete-but-gone audio (§8.2 file rules).
+		char want_dest[600];
+		expected_destination(STUB_SERVER, "Stub Author", "Stub Book", want_dest, sizeof(want_dest));
+		char final2[1400];
+		media_path_for(card, want_dest, "002 - Part 2.mp3", final2, sizeof(final2));
+		CHECK(unlink(final2) == 0, "crash child could not drop the second file\n");
+	}
+	_exit(80); // the closest a test can come to power being pulled
+}
+
+static void run_crash_child(bool write_manifest, bool keep_files) {
+	pid_t pid = fork();
+	CHECK(pid >= 0, "fork failed: %s\n", strerror(errno));
+	if (pid == 0) {
+		crash_child_finalize(write_manifest, keep_files); // _exits
+		_exit(99);
+	}
+	int status = 0;
+	CHECK(waitpid(pid, &status, 0) == pid, "waitpid failed\n");
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 80,
+		  "crash child exited %d, wanted a clean _exit(80)\n",
+		  WIFEXITED(status) ? WEXITSTATUS(status) : -1);
 }
 
 static void offline_run(void) {
@@ -626,7 +911,7 @@ static void offline_run(void) {
 
 	// An existing final file of the exact size is retained without a stream.
 	char dest_abs[1400];
-	snprintf(dest_abs, sizeof(dest_abs), "%.700s/%.600s", card, want_dest);
+	snprintf(dest_abs, sizeof(dest_abs), "%.700s/%.599s", card, want_dest);
 	mkpath_abs(dest_abs);
 	char final1[1400];
 	snprintf(final1, sizeof(final1), "%.1100s/001 - Part 1.mp3", dest_abs);
@@ -664,6 +949,375 @@ static void offline_run(void) {
 	printf("transfer test: offline gates passed\n");
 }
 
+// ---------------------------------------------------------------------------
+// Offline finalize-wave phases (§8.2 steps 5–8). One phase per fresh card:
+// the engine runs the real adapter end to end with pre-created audio (the
+// retention loop needs no stream) and the canned-JSON stub answers the
+// expanded identity fetches. The stream stub only ever opens — and refuses —
+// the cover URL, which simultaneously pins the cover-is-nonfatal rule.
+// ---------------------------------------------------------------------------
+
+// The destination dir + absolute card paths the phases share.
+static void offline_paths(char *want_dest, size_t dest_size, char *dest_abs, size_t abs_size,
+						  char *final1, size_t f1_size, char *final2, size_t f2_size) {
+	expected_destination(STUB_SERVER, "Stub Author", "Stub Book", want_dest, dest_size);
+	snprintf(dest_abs, abs_size, "%.700s/%.599s", card, want_dest);
+	media_path_for(card, want_dest, "001 - Part 1.mp3", final1, f1_size);
+	media_path_for(card, want_dest, "002 - Part 2.mp3", final2, f2_size);
+}
+
+static long long offline_enqueue(void) {
+	return enqueue_book("p1", STUB_SERVER, STUB_ID, "Stub Book");
+}
+
+// Phase A: full book DONE end to end — audio + sidecars + .tags/.description
+// + (refused) cover + manifest + real audiobookdb reset + the DONE
+// transaction; the sync barrier is visible from the FINALIZING commit and is
+// released only by the DONE commit.
+static void offline_phase_done(void) {
+	printf("transfer test: offline DONE end to end... ");
+	phase_card("fin-done");
+	audiobook_db_open();
+	offline_create_media();
+	char want_dest[600], dest_abs[1400], final1[1400], final2[1400];
+	offline_paths(want_dest, sizeof(want_dest), dest_abs, sizeof(dest_abs), final1, sizeof(final1),
+				  final2, sizeof(final2));
+	char manifest[1400];
+	snprintf(manifest, sizeof(manifest), "%.1300s/.audiobookshelf", dest_abs);
+	char abs_book[1400];
+	snprintf(abs_book, sizeof(abs_book), "%s", dest_abs); // the scanner's key form
+	checkpoint_plant(abs_book);
+
+	queue_init();
+	long long id = offline_enqueue();
+	pump_to(id, ABS_DL_FINALIZING);
+	// §8.2 step 6: the barrier opens with the FINALIZING commit, BEFORE the
+	// manifest (nothing is exposed yet).
+	CHECK(!file_exists_abs(manifest), "a manifest appeared before the finalize op\n");
+	CHECK(abs_download_sync_blocked(want_dest), "barrier during FINALIZING (relative)\n");
+	char abs_probe[1400];
+	snprintf(abs_probe, sizeof(abs_probe), "%s", final1); // any file under the destination
+	CHECK(abs_download_sync_blocked(abs_probe), "barrier during FINALIZING (absolute)\n");
+	CHECK(pump_until_terminal(id) == ABS_DL_DONE, "the job must finish DONE\n");
+
+	abs_download_job_t j = snapshot_job(id);
+	CHECK(j.error[0] == '\0', "DONE carries an error: %s\n", j.error);
+	CHECK(j.ack_reset_done == 1 && j.index_pending == 1, "DONE flags ack %d index %d\n",
+		  j.ack_reset_done, j.index_pending);
+	CHECK(fabs(j.remote_progress - 13.0) < 1e-9, "remote progress %f\n", j.remote_progress);
+	// §8.2 step 5: the resume mapping persisted part-relative, exactly what
+	// audiobookshelf_resume_target() maps (13 s into a 10 s first part -> part
+	// two at 3 s).
+	CHECK(strcmp(j.resume_file, "002 - Part 2.mp3") == 0, "resume file %.260s\n", j.resume_file);
+	CHECK(fabs(j.resume_seconds - 3.0) < 1e-9, "resume seconds %f\n", j.resume_seconds);
+	{
+		abs_download_file_t rows[8];
+		int n = abs_download_job_files(id, rows, 8);
+		CHECK(n == 2, "rows %d\n", n);
+		for (int i = 0; i < 2; i++) {
+			CHECK(strcmp(rows[i].state, "complete") == 0, "row %d state %s\n", i, rows[i].state);
+			CHECK(rows[i].final_size == 1200, "row %d size %lld\n", i, rows[i].final_size);
+		}
+	}
+	// Sidecars: both tracks carry .tags with the legacy fields and ordering;
+	// the canned description rode the metadata, so part one carries it.
+	char tags1[1400], tags2[1400], description[1400];
+	snprintf(tags1, sizeof(tags1), "%.1300s.tags", final1);
+	snprintf(tags2, sizeof(tags2), "%.1300s.tags", final2);
+	snprintf(description, sizeof(description), "%.1300s.description", final1);
+	char *bytes = NULL;
+	size_t len = 0;
+	CHECK(read_bytes_abs(tags1, &bytes, &len), "track-one .tags missing\n");
+	CHECK(strstr(bytes, "title=Part 1\n") && strstr(bytes, "artist=Stub Author\n") &&
+			  strstr(bytes, "album=Stub Book\n") && strstr(bytes, "track=1\n") &&
+			  strstr(bytes, "abs_item_id=stub-book\n") && strstr(bytes, "series=\n") &&
+			  strstr(bytes, "series_part=\n"),
+		  "track-one .tags fields wrong: %s\n", bytes);
+	free(bytes);
+	CHECK(read_bytes_abs(tags2, &bytes, &len), "track-two .tags missing\n");
+	CHECK(strstr(bytes, "track=2\n") != NULL, "track-two numbering wrong: %s\n", bytes);
+	free(bytes);
+	CHECK(read_bytes_abs(description, &bytes, &len), "first-track .description missing\n");
+	CHECK(len == strlen("Stub words about the canned book.") &&
+			  memcmp(bytes, "Stub words about the canned book.", len) == 0,
+		  "description bytes differ: %zu\n", len);
+	free(bytes);
+	// The cover is the ONLY nonfatal sidecar: the stub stream refused it, the
+	// book still DONEs, and no cover.jpg may appear.
+	CHECK(cover_stream_seen, "the cover sidecar was never attempted\n");
+	CHECK(strstr(cover_stream_url, "/api/items/stub-book/cover?format=jpeg") != NULL,
+		  "cover url %s\n", cover_stream_url);
+	{
+		char cover_path[1500];
+		snprintf(cover_path, sizeof(cover_path), "%.1300s/cover.jpg", dest_abs);
+		CHECK(!file_exists_abs(cover_path), "a refused cover must not leave a file behind\n");
+	}
+	// The manifest: written LAST, byte shape of the legacy writer.
+	manifest_view_t mv;
+	read_manifest(manifest, &mv);
+	CHECK(mv.present, "the manifest must be on the card\n");
+	CHECK(strcmp(mv.version, "1") == 0, "manifest version %s\n", mv.version);
+	CHECK(strcmp(mv.item_id, STUB_ID) == 0, "manifest item %s\n", mv.item_id);
+	char normalized_server[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(STUB_SERVER, normalized_server, sizeof(normalized_server));
+	CHECK(strcmp(mv.server, normalized_server) == 0, "manifest server %s\n", mv.server);
+	CHECK(strcmp(mv.duration, "200.000") == 0, "manifest duration %s\n", mv.duration);
+	CHECK(strcmp(mv.progress, "13.000") == 0, "manifest progress %s\n", mv.progress);
+	CHECK(strcmp(mv.progress_updated, "1700000000000") == 0, "manifest stamp %s\n",
+		  mv.progress_updated);
+	CHECK(mv.track_count == 2, "manifest tracks %d\n", mv.track_count);
+	CHECK(mv.tracks[0].no == 1 && fabs(mv.tracks[0].offset) < 1e-9 &&
+			  fabs(mv.tracks[0].duration - 10.0) < 1e-9 &&
+			  strcmp(mv.tracks[0].name, "001 - Part 1.mp3") == 0,
+		  "manifest track one: %ld %.3f %.3f %.260s\n", mv.tracks[0].no, mv.tracks[0].offset,
+		  mv.tracks[0].duration, mv.tracks[0].name);
+	CHECK(mv.tracks[1].no == 2 && fabs(mv.tracks[1].offset - 10.0) < 1e-9 &&
+			  fabs(mv.tracks[1].duration - 10.0) < 1e-9 &&
+			  strcmp(mv.tracks[1].name, "002 - Part 2.mp3") == 0,
+		  "manifest track two: %ld %.3f %.3f %.260s\n", mv.tracks[1].no, mv.tracks[1].offset,
+		  mv.tracks[1].duration, mv.tracks[1].name);
+	// The REAL acknowledgement reset: the planted checkpoint row died with it.
+	CHECK(stub_requests == 1, "the engine ran %lld API requests, wanted exactly one fetch\n",
+		  stub_requests);
+	CHECK(!checkpoint_present(abs_book), "the planted acknowledgement row must be reset\n");
+	CHECK(!abs_download_sync_blocked(want_dest), "the DONE transaction must release the barrier\n");
+
+	// Reopen the card: a DONE row is terminal — no re-reset, no extra fetch.
+	queue_stop();
+	checkpoint_plant(abs_book);
+	long long requests_before = stub_requests;
+	queue_init();
+	CHECK(job_state(id) == ABS_DL_DONE, "reopened state %s\n", abs_download_state_name(job_state(id)));
+	CHECK(checkpoint_present(abs_book), "a DONE acknowledgement must never be reset again\n");
+	CHECK(stub_requests == requests_before, "reopening must not touch the server\n");
+	CHECK(!abs_download_sync_blocked(want_dest), "no barrier may linger after DONE\n");
+	queue_stop();
+	printf("ok\n");
+}
+
+// Phase B: manifest close/rename failure -> the job fails at the finalize
+// stage, the barrier releases into the recoverable failed state, and nothing
+// pretends the destination was committed.
+static void offline_phase_manifest_fail(void) {
+	printf("transfer test: offline manifest failure... ");
+	phase_card("fin-manifest-fail");
+	offline_create_media();
+	char want_dest[600], dest_abs[1400], final1[1400], final2[1400];
+	offline_paths(want_dest, sizeof(want_dest), dest_abs, sizeof(dest_abs), final1, sizeof(final1),
+				  final2, sizeof(final2));
+	char manifest[1400];
+	snprintf(manifest, sizeof(manifest), "%.1300s/.audiobookshelf", dest_abs);
+
+	queue_init();
+	long long id = offline_enqueue();
+	pump_to(id, ABS_DL_FINALIZING);
+	// Occupy the temporary-file name: the checked open fails after the
+	// sidecars succeeded, isolating the manifest stage.
+	char tmpdir[1400];
+	snprintf(tmpdir, sizeof(tmpdir), "%.1300s.tmp", manifest);
+	CHECK(mkdir(tmpdir, 0777) == 0, "cannot stage the tmp collision: %s\n", strerror(errno));
+	CHECK(pump_until_terminal(id) == ABS_DL_FAILED, "the manifest failure must fail the job\n");
+	abs_download_job_t j = snapshot_job(id);
+	CHECK(strcmp(j.error_stage, "manifest") == 0, "stage %s\n", j.error_stage);
+	CHECK(strstr(j.error, "manifest") != NULL, "error %s\n", j.error);
+	// Sidecars preceded the manifest and stay; there is no manifest and no
+	// barrier: a progress reconcile may look at a destination with no commit.
+	CHECK(file_exists_abs(manifest) == false, "no manifest on failure\n");
+	{
+		char tags1[1400];
+		snprintf(tags1, sizeof(tags1), "%.1300s.tags", final1);
+		CHECK(file_exists_abs(tags1), "the sidecars that succeeded must stay\n");
+	}
+	// The failure released the barrier: nothing half-finalized is hidden from
+	// a progress reconcile, and Retry redoes finalize only (§8.1: one more
+	// identity fetch, zero media requests).
+	CHECK(!abs_download_sync_blocked(want_dest), "the failure must release the barrier\n");
+	{
+		char tags1[1400];
+		snprintf(tags1, sizeof(tags1), "%.1300s.tags", final1);
+		CHECK(file_exists_abs(tags1), "the sidecars that succeeded must stay\n");
+	}
+	long long requests_before = stub_requests;
+	CHECK(abs_download_retry(id, NULL, 0), "retry refused\n");
+	// The temporary collision is still in place, so the retried finalize hits
+	// the identical checked-open failure (§8.2 step 7: the job never commits).
+	CHECK(pump_until_terminal(id) == ABS_DL_FAILED, "retry state\n");
+	abs_download_job_t j2 = snapshot_job(id);
+	CHECK(strcmp(j2.error_stage, "manifest") == 0, "retry stage %s\n", j2.error_stage);
+	CHECK(!abs_download_sync_blocked(want_dest), "retry failure released the barrier\n");
+	CHECK(stub_requests == requests_before + 1, "the retry must refetch the identity once, got %lld\n",
+		  stub_requests - requests_before);
+	queue_stop();
+	printf("ok\n");
+}
+
+// Phase C: crash AFTER the manifest rename, BEFORE the acknowledgement commit.
+// Recovery re-establishes the barrier, completes from the valid manifest
+// offline (no refetch, no card rewrite), performs the reset and the DONE
+// transaction, then releases the barrier.
+static void offline_phase_crash_valid(void) {
+	printf("transfer test: offline crash before the ack (valid manifest)... ");
+	phase_card("fin-crash-ok");
+	offline_create_media();
+	cover_stream_seen = false;
+	run_crash_child(true, true);
+
+	char want_dest[600], dest_abs[1400], final1[1400], final2[1400];
+	offline_paths(want_dest, sizeof(want_dest), dest_abs, sizeof(dest_abs), final1, sizeof(final1),
+				  final2, sizeof(final2));
+	char manifest[1400];
+	snprintf(manifest, sizeof(manifest), "%.1300s/.audiobookshelf", dest_abs);
+	char bytes_before[4096];
+	size_t bytes_len = 0;
+	{
+		char *b = NULL;
+		CHECK(read_bytes_abs(manifest, &b, &bytes_len), "the crashed manifest is missing\n");
+		CHECK(bytes_len < sizeof(bytes_before), "manifest too big for the probe buffer\n");
+		memcpy(bytes_before, b, bytes_len);
+		free(b);
+	}
+	char tags1[1400];
+	snprintf(tags1, sizeof(tags1), "%.1300s.tags", final1);
+	CHECK(file_exists_abs(tags1), "the crashed sidecars are missing\n");
+
+	// The barrier is re-established by the armed queue itself, before any
+	// worker step runs (§8.2 line 540). The crashed row is already there —
+	// recovery adopts it, nothing is re-enqueued.
+	queue_init();
+	abs_download_snapshot_t snap;
+	CHECK(abs_download_snapshot(&snap) && snap.job_count == 1, "crash rows\n");
+	long long job_id = snap.jobs[0].id;
+	CHECK(job_state(job_id) == ABS_DL_FINALIZING, "crash state %s\n",
+		  abs_download_state_name(job_state(job_id)));
+	CHECK(abs_download_sync_blocked(want_dest), "the recovered barrier must hold\n");
+	char abs_book[1400];
+	snprintf(abs_book, sizeof(abs_book), "%s", dest_abs);
+	checkpoint_plant(abs_book);
+	long long requests_before = stub_requests;
+	CHECK(pump_until_terminal(job_id) == ABS_DL_DONE, "recovery must complete DONE\n");
+
+	abs_download_job_t j = snapshot_job(job_id);
+	CHECK(j.error[0] == '\0', "recovery DONE carries an error: %s\n", j.error);
+	CHECK(j.ack_reset_done == 1 && j.index_pending == 1, "recovery DONE flags\n");
+	CHECK(strcmp(j.resume_file, "002 - Part 2.mp3") == 0, "recovered resume file %.260s\n",
+		  j.resume_file);
+	// §8.2 line 540: the resume mapping rebuilt from the valid manifest and
+	// the row's remote snapshot must equal what the normal mapper computes.
+	CHECK(fabs(j.resume_seconds - 3.0) < 1e-9, "recovered resume seconds %f\n", j.resume_seconds);
+	// Completing the acknowledgement needs no network and no card rewrite.
+	CHECK(stub_requests == requests_before, "recovery fetched the identity %lld times\n",
+		  stub_requests - requests_before);
+	{
+		char *b = NULL;
+		size_t len = 0;
+		CHECK(read_bytes_abs(manifest, &b, &len), "manifest gone after recovery\n");
+		CHECK(len == bytes_len && memcmp(b, bytes_before, len) == 0,
+			  "recovery rewrote the valid manifest\n");
+		free(b);
+	}
+	CHECK(!checkpoint_present(abs_book), "the recovery must perform the acknowledgement reset\n");
+	CHECK(!abs_download_sync_blocked(want_dest), "the recovered barrier must release at DONE\n");
+	// Idempotence: reopen — never a second reset.
+	queue_stop();
+	checkpoint_plant(abs_book);
+	queue_init();
+	CHECK(job_state(job_id) == ABS_DL_DONE, "reopened state %s\n",
+		  abs_download_state_name(job_state(job_id)));
+	CHECK(checkpoint_present(abs_book), "a DONE acknowledgement must never be reset again\n");
+	queue_stop();
+	printf("ok\n");
+}
+
+// Phase D: crash BEFORE the manifest (only files + FINALIZING row). Recovery
+// retries ONLY finalization: one identity refetch (committed audio untouched),
+// the full finalize (sidecars + refused cover + manifest), the reset, DONE.
+static void offline_phase_crash_incomplete(void) {
+	printf("transfer test: offline crash before the manifest (refetch)... ");
+	phase_card("fin-crash-refetch");
+	offline_create_media();
+	cover_stream_seen = false;
+	run_crash_child(false, true);
+
+	char want_dest[600], dest_abs[1400], final1[1400], final2[1400];
+	offline_paths(want_dest, sizeof(want_dest), dest_abs, sizeof(dest_abs), final1, sizeof(final1),
+				  final2, sizeof(final2));
+	char manifest[1400];
+	snprintf(manifest, sizeof(manifest), "%.1300s/.audiobookshelf", dest_abs);
+	CHECK(!file_exists_abs(manifest), "the child wrote no manifest\n");
+
+	queue_init();
+	abs_download_snapshot_t snap;
+	CHECK(abs_download_snapshot(&snap) && snap.job_count == 1, "crash rows\n");
+	long long job_id = snap.jobs[0].id;
+	CHECK(job_state(job_id) == ABS_DL_FINALIZING, "crash state %s\n",
+		  abs_download_state_name(job_state(job_id)));
+	CHECK(abs_download_sync_blocked(want_dest), "the recovered barrier must hold\n");
+	char abs_book[1400];
+	snprintf(abs_book, sizeof(abs_book), "%.1399s", dest_abs);
+	checkpoint_plant(abs_book);
+	char abs_probe[1400];
+	snprintf(abs_probe, sizeof(abs_probe), "%.700s/%.599s", card, want_dest);
+	long long requests_before = stub_requests;
+	CHECK(pump_until_terminal(job_id) == ABS_DL_DONE, "the finalize-only retry must complete\n");
+	CHECK(stub_requests == requests_before + 1, "the recovery must refetch the identity once, got %lld\n",
+		  stub_requests - requests_before);
+	abs_download_job_t jr = snapshot_job(job_id);
+	CHECK(strcmp(jr.resume_file, "002 - Part 2.mp3") == 0, "resume file after retry %.260s\n",
+		  jr.resume_file);
+	CHECK(fabs(jr.resume_seconds - 3.0) < 1e-9, "resume seconds after retry %f\n", jr.resume_seconds);
+	{
+		abs_download_file_t rows[8];
+		CHECK(abs_download_job_files(job_id, rows, 8) == 2, "rows after retry\n");
+		CHECK(strcmp(rows[0].state, "complete") == 0 && strcmp(rows[1].state, "complete") == 0,
+			  "retry must not disturb committed rows\n");
+	}
+	manifest_view_t mv;
+	read_manifest(manifest, &mv);
+	CHECK(mv.present && strcmp(mv.version, "1") == 0 && mv.track_count == 2,
+		  "the retried manifest is invalid\n");
+	{
+		char tags1[1400];
+		snprintf(tags1, sizeof(tags1), "%.1300s.tags", final1);
+		char description[1400];
+		snprintf(description, sizeof(description), "%.1300s.description", final1);
+		CHECK(file_exists_abs(tags1) && file_exists_abs(description),
+			  "the retried finalize must write the sidecars\n");
+	}
+	CHECK(cover_stream_seen, "the retried finalize must have attempted the cover\n");
+	CHECK(!checkpoint_present(abs_book), "the retried job must reset its acknowledgement\n");
+	CHECK(!abs_download_sync_blocked(abs_probe), "the barrier must release at DONE\n");
+	queue_stop();
+	printf("ok\n");
+}
+
+// Phase E: recovery over a recorded file that vanished from the card. §8.2
+// file rules quarantine it for user retry — recovery must not refetch, not
+// finalize, not fake a commit, and must release the barrier.
+static void offline_phase_crash_missing(void) {
+	printf("transfer test: offline crash with a deleted file... ");
+	phase_card("fin-crash-missing");
+	offline_create_media();
+	run_crash_child(false, false); // drops the second file, keeps the row
+
+	char want_dest[600], dest_abs[1400], final1[1400], final2[1400];
+	offline_paths(want_dest, sizeof(want_dest), dest_abs, sizeof(dest_abs), final1, sizeof(final1),
+				  final2, sizeof(final2));
+	queue_init();
+	abs_download_snapshot_t snap;
+	CHECK(abs_download_snapshot(&snap) && snap.job_count == 1, "crash rows\n");
+	long long job_id = snap.jobs[0].id;
+	CHECK(abs_download_sync_blocked(want_dest), "the recovered barrier must hold\n");
+	char abs_probe[1400];
+	snprintf(abs_probe, sizeof(abs_probe), "%.700s/%.599s", card, want_dest);
+	long long requests_before = stub_requests;
+	CHECK(pump_until_terminal(job_id) == ABS_DL_FAILED, "a vanished file must fail the job\n");
+	abs_download_job_t jm = snapshot_job(job_id);
+	CHECK(strcmp(jm.error_stage, "write") == 0, "stage %s\n", jm.error_stage);
+	CHECK(stub_requests == requests_before, "recovery must not refetch over missing audio\n");
+	CHECK(!abs_download_sync_blocked(abs_probe), "the failure must release the barrier\n");
+	queue_stop();
+	printf("ok\n");
+}
 
 // Offline main, inside the same conditional as its shape.
 int main(int argc, char **argv) {
@@ -673,6 +1327,14 @@ int main(int argc, char **argv) {
 	}
 	snprintf(work, sizeof(work), "%.880s", argv[1]);
 	offline_run();
+	// The finalize wave (§8.2 steps 5–8): one phase per fresh card so every
+	// crash child arms a queue nobody has armed in-process before the fork.
+	offline_phase_done();
+	offline_phase_manifest_fail();
+	offline_phase_crash_valid();
+	offline_phase_crash_incomplete();
+	offline_phase_crash_missing();
+	audiobookdb_close();
 	return 0;
 }
 
@@ -819,6 +1481,34 @@ static void live_run(void) {
 	CHECK(plan.remote_progress > 0.0, "remote progress %f\n", plan.remote_progress);
 	CHECK(!plan.remote_finished, "remote finished\n");
 
+	// The resume mapping the DONE rows must carry, captured from the phase-1
+	// fetch snapshot. The plan strings belong to the adapter attempt and die
+	// with auth_release, so every value that outlives phase 1 is copied here,
+	// while it is live.
+	char resume_name[8][ABS_DL_NAME_MAX];
+	double resume_offset[8], resume_duration[8];
+	long long resume_expected[8];
+	int resume_count = plan.file_count;
+	double snap_progress = plan.remote_progress;
+	int snap_finished = plan.remote_finished;
+	abs_download_file_req_t saved_plan[8];
+	CHECK(resume_count >= 1 && resume_count <= 8, "fixture tracks %d\n", resume_count);
+	for (int i = 0; i < resume_count; i++) {
+		snprintf(resume_name[i], sizeof(resume_name[i]), "%s", plan.files[i].final_name);
+		resume_offset[i] = plan.files[i].start_offset;
+		resume_duration[i] = plan.files[i].duration;
+		resume_expected[i] = plan.files[i].expected_size;
+		saved_plan[i].source_url = url1; // unread by the resume mapper
+		saved_plan[i].final_name = resume_name[i];
+		saved_plan[i].start_offset = resume_offset[i];
+		saved_plan[i].duration = resume_duration[i];
+		saved_plan[i].expected_size = resume_expected[i];
+	}
+	char want_resume_name[8][ABS_DL_NAME_MAX];
+	double want_resume_seconds[8];
+	expected_resume(saved_plan, resume_count, snap_progress, snap_finished, want_resume_name[0],
+					sizeof(want_resume_name[0]), &want_resume_seconds[0]);
+
 	abs_download_file_t row1;
 	memset(&row1, 0, sizeof(row1));
 	row1.job_id = direct_job;
@@ -904,22 +1594,39 @@ static void live_run(void) {
 		  "cannot remove the direct-flow row: %s\n", error);
 
 	// ------------------------------------------------------------------
-	// Phase 2 — engine run: retention, honest finalize, finalize-only retry
+	// Phase 2 — engine run: retention, real finalize, DONE end to end
 	// ------------------------------------------------------------------
 	long long items_probe = count_log_lines_with("expanded=1&include=progress,authors");
 	long long media1_probe = count_log_lines_with("/api/items/mock-book/file/1");
 	long long media2_probe = count_log_lines_with("/api/items/mock-book/file/2");
-	CHECK(items_probe == 1 && media1_probe == 2 && media2_probe == 1,
-		  "unexpected baseline: items %lld media1 %lld media2 %lld\n", items_probe, media1_probe,
-		  media2_probe);
+	long long cover_probe = count_log_lines_with("/api/items/mock-book/cover");
+	CHECK(items_probe == 1 && media1_probe == 2 && media2_probe == 1 && cover_probe == 0,
+		  "unexpected baseline: items %lld media1 %lld media2 %lld cover %lld\n", items_probe,
+		  media1_probe, media2_probe, cover_probe);
+
+	// The REAL acknowledgement-reset proof: a planted AUDIOBOOK_ABS_SYNC row.
+	char abs_book[1000];
+	snprintf(abs_book, sizeof(abs_book), "%.990s", dest_abs);
+	audiobook_db_open();
+	checkpoint_plant(abs_book);
 
 	long long job2 = enqueue_book(live_profile, live_server, "mock-book", "The Mock Journey");
-	abs_download_state_t state2 = pump_until_terminal(job2);
-	CHECK(state2 == ABS_DL_FAILED, "phase 2 state %s\n", abs_download_state_name(state2));
+	// §8.2 step 6: the FINALIZING commit holds the sync barrier before the
+	// finalize op exposes anything.
+	pump_to(job2, ABS_DL_FINALIZING);
+	CHECK(abs_download_sync_blocked(want_dest), "the finalize barrier must hold live too\n");
+	CHECK(pump_until_terminal(job2) == ABS_DL_DONE, "phase 2 state %s\n",
+		  abs_download_state_name(job_state(job2)));
 	abs_download_job_t seen2 = snapshot_job(job2);
-	CHECK(strcmp(seen2.error_stage, "manifest") == 0, "stage %s\n", seen2.error_stage);
-	CHECK(strstr(seen2.error, "later wave") != NULL, "not-wired finalize message: %s\n", seen2.error);
+	CHECK(seen2.error[0] == '\0', "DONE carries an error: %s\n", seen2.error);
+	CHECK(seen2.ack_reset_done == 1 && seen2.index_pending == 1, "DONE flags ack %d index %d\n",
+		  seen2.ack_reset_done, seen2.index_pending);
 	CHECK(seen2.file_count == 2, "file count %d\n", seen2.file_count);
+	CHECK(strcmp(seen2.resume_file, want_resume_name[0]) == 0, "resume file %.260s, wanted %.260s\n",
+		  seen2.resume_file, want_resume_name[0]);
+	CHECK(fabs(seen2.resume_seconds - want_resume_seconds[0]) < 0.001,
+		  "resume seconds %f, wanted %f\n", seen2.resume_seconds, want_resume_seconds[0]);
+	CHECK(!checkpoint_present(abs_book), "the DONE job must reset its acknowledgement row\n");
 
 	{
 		char *got = NULL;
@@ -943,6 +1650,57 @@ static void live_run(void) {
 		CHECK(strcmp(rows[0].source_url, url1) == 0 && strcmp(rows[1].source_url, url2) == 0,
 			  "row urls %s / %s\n", rows[0].source_url, rows[1].source_url);
 	}
+	// Sidecars the finalize must have written: tags per track, the description
+	// on the first, the cover (the mock serves one), the manifest LAST.
+	{
+		char tags1[1420], tags2[1420], description[1420];
+		snprintf(tags1, sizeof(tags1), "%.1300s.tags", final1);
+		snprintf(tags2, sizeof(tags2), "%.1300s.tags", final2);
+		snprintf(description, sizeof(description), "%.1300s.description", final1);
+		char *bytes = NULL;
+		size_t len = 0;
+		CHECK(read_bytes_abs(tags1, &bytes, &len), "track-one .tags missing\n");
+		CHECK(strstr(bytes, "title=Part One\n") && strstr(bytes, "artist=Test Author\n") &&
+				  strstr(bytes, "album=The Mock Journey\n") && strstr(bytes, "series=Fixture Series\n") &&
+				  strstr(bytes, "series_part=2\n") && strstr(bytes, "track=1\n") &&
+				  strstr(bytes, "abs_item_id=mock-book\n"),
+			  "track-one .tags fields wrong: %s\n", bytes);
+		free(bytes);
+		CHECK(read_bytes_abs(tags2, &bytes, &len), "track-two .tags missing\n");
+		CHECK(strstr(bytes, "track=2\n") != NULL, "track-two numbering wrong: %s\n", bytes);
+		free(bytes);
+		CHECK(read_bytes_abs(description, &bytes, &len), "first-track .description missing\n");
+		CHECK(memmem(bytes, len, "A downloaded fixture used to prove resume import.",
+					 strlen("A downloaded fixture used to prove resume import.")) != NULL,
+			  "description bytes differ\n");
+		free(bytes);
+		char cover_path[1500];
+		snprintf(cover_path, sizeof(cover_path), "%.1400s/cover.jpg", dest_abs);
+		CHECK(file_exists_abs(cover_path) && file_bytes_abs(cover_path) > 0, "live cover missing\n");
+	}
+	{
+		manifest_view_t mv;
+		char manifest_path[1420];
+		snprintf(manifest_path, sizeof(manifest_path), "%.1300s/.audiobookshelf", dest_abs);
+		read_manifest(manifest_path, &mv);
+		CHECK(mv.present && strcmp(mv.version, "1") == 0, "manifest present/version\n");
+		CHECK(strcmp(mv.item_id, "mock-book") == 0, "manifest item %s\n", mv.item_id);
+		char normalized_live[ABS_SERVER_MAX];
+		abs_profiles_normalize_server(live_server, normalized_live, sizeof(normalized_live));
+		CHECK(strcmp(mv.server, normalized_live) == 0, "manifest server %s\n", mv.server);
+		CHECK(strcmp(mv.duration, "20.000") == 0, "manifest duration %s\n", mv.duration);
+		CHECK(strcmp(mv.progress, "13.000") == 0, "manifest progress %s\n", mv.progress);
+		CHECK(strcmp(mv.progress_updated, "1700000000000") == 0, "manifest stamp %s\n",
+			  mv.progress_updated);
+		CHECK(mv.track_count == 2, "manifest tracks %d\n", mv.track_count);
+		CHECK(mv.tracks[0].no == 1 && strcmp(mv.tracks[0].name, "001 - Part One.mp3") == 0 &&
+				  fabs(mv.tracks[0].offset) < 1e-9 && fabs(mv.tracks[0].duration - 10.0) < 1e-9,
+			  "manifest track one\n");
+		CHECK(mv.tracks[1].no == 2 && strcmp(mv.tracks[1].name, "002 - Part Two.mp3") == 0 &&
+				  fabs(mv.tracks[1].offset - 10.0) < 1e-9 && fabs(mv.tracks[1].duration - 10.0) < 1e-9,
+			  "manifest track two\n");
+	}
+	CHECK(!abs_download_sync_blocked(want_dest), "the DONE transaction must release the barrier\n");
 	CHECK(count_log_lines_with("/api/items/mock-book/file/1") == media1_probe,
 		  "retention must not re-fetch file 1\n");
 	CHECK(count_log_lines_with("/api/items/mock-book/file/2") == media2_probe,
@@ -950,23 +1708,25 @@ static void live_run(void) {
 	CHECK(count_log_lines_with("/api/items/mock-book?expanded") == items_probe + 1,
 		  "the engine fetch is one items request, got %lld\n",
 		  count_log_lines_with("/api/items/mock-book?expanded"));
+	CHECK(count_log_lines_with("/api/items/mock-book/cover") == cover_probe + 1,
+		  "the finalize must fetch the cover once, got %lld\n",
+		  count_log_lines_with("/api/items/mock-book/cover"));
 
-	// Retry of a fully committed job redoes finalize only (§8.1): one more
-	// identity fetch, zero media requests, the same honest refusal.
-	char retry_error[256] = {0};
-	CHECK(abs_download_retry(job2, retry_error, sizeof(retry_error)), "retry failed: %s\n",
-		  retry_error);
-	CHECK(pump_until_terminal(job2) == ABS_DL_FAILED, "retry state\n");
-	CHECK(count_log_lines_with("/api/items/mock-book/file/1") == media1_probe,
-		  "retry re-fetched file 1\n");
-	CHECK(count_log_lines_with("/api/items/mock-book/file/2") == media2_probe,
-		  "retry re-fetched file 2\n");
-	CHECK(count_log_lines_with("/api/items/mock-book?expanded") == items_probe + 2,
-		  "retry fetch missing, got %lld\n", count_log_lines_with("/api/items/mock-book?expanded"));
+	// Reopen the card: a DONE row is terminal — no second reset, no traffic.
+	queue_stop();
+	checkpoint_plant(abs_book);
+	long long items_before_reopen = items_probe + 1;
+	queue_init();
+	CHECK(job_state(job2) == ABS_DL_DONE, "reopened state %s\n", abs_download_state_name(job_state(job2)));
+	CHECK(checkpoint_present(abs_book), "a DONE acknowledgement must never be reset again\n");
+	CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_before_reopen,
+		  "reopening must not touch the server\n");
+	CHECK(!abs_download_sync_blocked(want_dest), "no barrier may linger after DONE\n");
 
 	// ------------------------------------------------------------------
 	// Phase 3 — fresh engine transfer under a mid-transfer §8.1 pause
 	// ------------------------------------------------------------------
+	char retry_error[256] = {0};
 	CHECK(unlink(final1) == 0 && unlink(final2) == 0, "cannot clear the completed files\n");
 	long long job3 = enqueue_book(live_profile, live_server, "mock-book", "The Mock Journey");
 	pause_watcher_t watcher = {.job_id = job3, .threshold = 128 * 1024, .fired = false};
@@ -986,7 +1746,14 @@ static void live_run(void) {
 	retry_error[0] = '\0';
 	CHECK(abs_download_resume(job3, retry_error, sizeof(retry_error)), "resume failed: %s\n",
 		  retry_error);
-	CHECK(pump_until_terminal(job3) == ABS_DL_FAILED, "resumed state\n");
+	CHECK(pump_until_terminal(job3) == ABS_DL_DONE, "resumed state\n");
+	seen3 = snapshot_job(job3);
+	CHECK(seen3.error[0] == '\0', "resumed DONE carries an error: %s\n", seen3.error);
+	CHECK(seen3.ack_reset_done == 1 && seen3.index_pending == 1, "resumed DONE flags\n");
+	CHECK(strcmp(seen3.resume_file, want_resume_name[0]) == 0,
+		  "resumed resume file %.260s, wanted %.260s\n", seen3.resume_file, want_resume_name[0]);
+	CHECK(fabs(seen3.resume_seconds - want_resume_seconds[0]) < 0.001,
+		  "resumed resume seconds %f, wanted %f\n", seen3.resume_seconds, want_resume_seconds[0]);
 	{
 		char *got = NULL;
 		size_t got_len = 0;
@@ -1006,9 +1773,14 @@ static void live_run(void) {
 		  count_log_lines_with("/api/items/mock-book/file/1"));
 	CHECK(count_log_lines_with("/api/items/mock-book/file/2") == media2_probe + 1,
 		  "file 2 once, got %lld\n", count_log_lines_with("/api/items/mock-book/file/2"));
-	CHECK(count_log_lines_with("/api/items/mock-book?expanded") == items_probe + 4,
-		  "identity fetches: job3 + resume, got %lld\n",
+	CHECK(count_log_lines_with("/api/items/mock-book?expanded") == items_probe + 3,
+		  "identity fetches: job3 + resume (job2's was counted), got %lld\n",
 		  count_log_lines_with("/api/items/mock-book?expanded"));
+	// The resumed job's finalize kept the cover (skip-if-exists, no request)
+	// and left a valid manifest.
+	CHECK(count_log_lines_with("/api/items/mock-book/cover") == cover_probe + 1,
+		  "the retained cover must not be re-fetched, got %lld\n",
+		  count_log_lines_with("/api/items/mock-book/cover"));
 
 	// ------------------------------------------------------------------
 	// Phase 4 — negatives
@@ -1020,7 +1792,7 @@ static void live_run(void) {
 	abs_download_job_t seen_ep = snapshot_job(ep_job);
 	CHECK(strcmp(seen_ep.error_stage, "metadata") == 0, "stage %s\n", seen_ep.error_stage);
 	CHECK(strstr(seen_ep.error, "not wired yet") != NULL, "episode refusal: %s\n", seen_ep.error);
-	CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_probe + 4,
+	CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_probe + 3,
 		  "the episode refusal must not fetch anything, got %lld\n",
 		  count_log_lines_with("expanded=1&include=progress,authors"));
 
@@ -1029,7 +1801,7 @@ static void live_run(void) {
 	CHECK(pump_until_terminal(auth_job) == ABS_DL_FAILED, "auth-failure state\n");
 	abs_download_job_t seen_auth = snapshot_job(auth_job);
 	CHECK(strcmp(seen_auth.error_stage, "auth") == 0, "stage %s\n", seen_auth.error_stage);
-	CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_probe + 4,
+	CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_probe + 3,
 		  "a refused auth must not fetch, got %lld\n",
 		  count_log_lines_with("expanded=1&include=progress,authors"));
 
@@ -1057,6 +1829,7 @@ static void live_run(void) {
 	free(part1);
 	free(part2);
 	queue_stop();
+	audiobookdb_close();
 	printf("transfer test: live alias passed\n");
 }
 

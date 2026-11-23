@@ -228,11 +228,14 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 // callback is safe to call only from the queue worker (or a single-threaded
 // host driver); cancellable work polls ctx->cancel between units.
 //
-// WS2 (this wave) wires auth_resolve, fetch_identity and the per-file
-// transfer. The finalize and acknowledgement-reset slots stay until the
-// sidecar/manifest wave lands: the adapter refuses them explicitly, so a
-// queue driven with it fails jobs at FINALIZING with the honest "wired in a
-// later wave" instead of running a fake commit.
+// The finalize op (§8.2 steps 5–7) covers both attempt shapes: the normal
+// window after auth+fetch+files reuses the legacy writers (write_sidecars(),
+// write_description(), local_track_name(), download_file() for the cover,
+// audiobookshelf_resume_target()) and commits the manifest LAST atomically;
+// a FINALIZING job adopted after a crash reconciles from the card instead —
+// a valid manifest completes offline, an incomplete one retries finalization
+// only. The acknowledgement reset (§8.2 step 8) resets book sync state
+// (audiobookdb_abs_reset); episodes are the podcast wave's refusal.
 // ---------------------------------------------------------------------------
 const abs_download_ops_t *audiobookshelf_queue_media_ops(void);
 

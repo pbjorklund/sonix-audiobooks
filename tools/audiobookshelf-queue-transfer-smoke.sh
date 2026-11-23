@@ -53,6 +53,7 @@ LINK=(-Wl,--gc-sections -lm -lpthread -ldl)
 SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
 	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c
 	src/system/streaming/abs_download.c
+	src/system/library/audiobookdb.c src/system/library/library.c
 	src/system/core/config.c src/system/core/json.c src/system/core/pathlimits.c
 	src/system/core/sha256.c src/system/core/utils.c src/system/db/sqlite3_impl.c
 	src/system/core/lang.c)
@@ -128,11 +129,12 @@ PY
 		"$WORK/live" "$ADIR" || fail "$ALIAS: live transfer matrix failed"
 
 	# --- shell-level re-assertions the binary could not see -----------------
-	# The queue database exists and the manifest stays unwritten (the finalize
-	# wave is next, by design).
+	# The queue database exists and the finalize wave committed its artifact
+	# set: manifest (server- and item-bound), tags/description sidecars, cover,
+	# and a DONE row with the acknowledgement flags.
 	[[ -f "$ADIR/card/.local/audiobookshelf-downloads.db" ]] || fail "$ALIAS: queue database missing"
-	if find "$ADIR/card" -name .audiobookshelf | grep -q .; then
-		fail "$ALIAS: a manifest was written although finalize is not wired"
+	if find "$ADIR/card" -name .audiobookshelf | grep -qv .; then
+		fail "$ALIAS: no manifest survived the finalize wave"
 	fi
 	DEST="$ADIR/card/Audiobooks/Audiobookshelf/abs-$(python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])" \
 		"http://127.0.0.1:$PORT")/Test Author/The Mock Journey"
@@ -140,6 +142,31 @@ PY
 	[[ -s "$DEST/002 - Part Two.mp3" ]] || fail "$ALIAS: part two not on the card"
 	cmp -s "$ADIR/media/part1.mp3" "$DEST/001 - Part One.mp3" || fail "$ALIAS: part one bytes differ"
 	cmp -s "$ADIR/media/part2.mp3" "$DEST/002 - Part Two.mp3" || fail "$ALIAS: part two bytes differ"
+	[[ -s "$DEST/001 - Part One.mp3.tags" ]] || fail "$ALIAS: track-one tags missing"
+	grep -aq "abs_item_id=mock-book" "$DEST/001 - Part One.mp3.tags" || fail "$ALIAS: tags unbound"
+	grep -aq "series=Fixture Series" "$DEST/001 - Part One.mp3.tags" || fail "$ALIAS: series metadata missing"
+	grep -aq "track=2" "$DEST/002 - Part Two.mp3.tags" || fail "$ALIAS: track numbering missing"
+	[[ -s "$DEST/001 - Part One.mp3.description" ]] || fail "$ALIAS: description sidecar missing"
+	[[ -s "$DEST/cover.jpg" ]] || fail "$ALIAS: cover sidecar missing"
+	[[ -s "$DEST/.audiobookshelf" ]] || fail "$ALIAS: manifest missing"
+	grep -aq "item_id=mock-book" "$DEST/.audiobookshelf" || fail "$ALIAS: manifest item unbound"
+	grep -aq "server=http://127.0.0.1:$PORT" "$DEST/.audiobookshelf" || fail "$ALIAS: manifest server unbound"
+	grep -aq "version=1" "$DEST/.audiobookshelf" || fail "$ALIAS: manifest version missing"
+	if [[ $(grep -ac "^track=" "$DEST/.audiobookshelf") != 2 ]]; then
+		fail "$ALIAS: manifest track lines != 2"
+	fi
+	# §8.2 step 8: exactly one DONE row, acknowledgement + import flags set.
+	python3 - "$ADIR/card/.local/audiobookshelf-downloads.db" <<PY || fail "$ALIAS: DONE row wrong"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+state, ack, index_pending = db.execute(
+    "SELECT state, ack_reset_done, index_pending FROM DOWNLOAD_JOB WHERE item_id='mock-book'"
+    " ORDER BY id DESC LIMIT 1").fetchone()
+assert (state, ack, index_pending) == ("DONE", 1, 1), (state, ack, index_pending)
+PY
+	if find "$ADIR/card" -name "*.part" | grep -q .; then
+		fail "$ALIAS: a .part survived the finished run"
+	fi
 
 	# Token hygiene, straight from the artifacts the binary produced.
 	if LC_ALL=C grep -aqrF "$TOKEN" "$ADIR/card"; then
@@ -151,11 +178,14 @@ PY
 	if LC_ALL=C grep -aqF "Authorization" "$ADIR/progress.requests"; then
 		fail "$ALIAS: an Authorization header leaked into the request log"
 	fi
-	# §8.2: identity fetches use the expanded API; media went through /file/.
+	# §8.2: identity fetches use the expanded API; media went through /file/;
+	# the finalize fetches the server cover.
 	grep -aq "expanded=1&include=progress,authors" "$ADIR/progress.requests" \
 		|| fail "$ALIAS: no expanded identity request reached the server"
 	[[ $(grep -acF "/api/items/mock-book/file/" "$ADIR/progress.requests") -ge 5 ]] ||
 		fail "$ALIAS: fewer media transfers than the phases require"
+	grep -aq "/api/items/mock-book/cover" "$ADIR/progress.requests" \
+		|| fail "$ALIAS: the finalize never fetched the server cover"
 
 	kill -TERM "$MOCK_PID" 2>/dev/null || true
 	wait "$MOCK_PID" 2>/dev/null || true

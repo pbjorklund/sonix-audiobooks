@@ -164,10 +164,10 @@ typedef struct {
 void abs_download_op_progress(const abs_download_op_ctx_t *ctx, long long done, long long total);
 
 // ---------------------------------------------------------------------------
-// Injected media surface. Foundation: fake implementations in the queue test.
-// Later wave: real implementations from the audiobookshelf_download() split
-// (spec §8.5, modified files). All callbacks return false + set `error` (a
-// short sanitized English message) on failure. `*stage_out` picks the recorded
+// Injected media surface. The queue test injects fakes; production wires the
+// real implementations from the audiobookshelf_download() split (spec §8.2
+// steps 1–8, §8.5). All callbacks return false + set `error` (a short
+// sanitized English message) on failure. `*stage_out` picks the recorded
 // stage: "auth"|"metadata"|"network"|"write"|"sidecar"|"manifest"|"index".
 // Returning stage "network" from a transfer callback sends the job to
 // WAITING_NETWORK; every other failure is terminal FAILED.

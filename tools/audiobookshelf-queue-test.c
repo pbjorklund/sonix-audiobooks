@@ -692,24 +692,78 @@ static void test_crash_finalize(void) {
 	const char *root = mkcard("crash-fin");
 	fork_crash("finalize", root, 80);
 
+	// §8.2 line 540: the FINALIZING row with ack_reset_done=0 is recovered by
+	// re-establishing the sync barrier (the row persists as it crashed) and
+	// re-running the finalize step, whose ops reconcile from the card. The
+	// fake finalize succeeds here (it rewrote the manifest), so the recovery
+	// completes offline: resume rebuild + acknowledgement reset + the DONE
+	// transaction, with no file redownloaded.
 	fake_reset();
 	abs_download_config_t cfg = make_config(root, false);
 	CHECK(abs_download_init(&cfg), "recovery init failed\n");
 	long long id = sole_job();
 	char manifest[1400];
 	card_file(FAKE_DEST "/.audiobookshelf", manifest, sizeof(manifest));
-	// Foundation-bounded behaviour (see report): a FINALIZING row whose ack
-	// commit never landed recovers to a FAILED job with the manifest stage;
-	// the barrier releases and Retry redoes finalize only.
-	CHECK(job_state(id) == ABS_DL_FAILED, "recovered state %s\n", abs_download_state_name(job_state(id)));
+	CHECK(job_state(id) == ABS_DL_FINALIZING, "recovered state %s\n",
+		  abs_download_state_name(job_state(id)));
+	// The barrier is held again the moment the queue is armed, before any
+	// worker step runs: book/episode reconciliation skips this destination
+	// (§8.2 step 6).
+	CHECK(abs_download_sync_blocked(FAKE_DEST), "the recovered barrier must hold\n");
+	run_to_done(id);
+	CHECK(file_writes[1] == 0 && file_writes[2] == 0 && file_writes[3] == 0,
+		  "recovery redownloaded audio (%d/%d/%d)\n", file_writes[1], file_writes[2],
+		  file_writes[3]);
+	CHECK(file_exists(manifest) && file_bytes(manifest) == 96, "manifest not rewritten by recovery\n");
+	abs_download_snapshot_t snap;
+	const abs_download_job_t *j = snap_job(id, &snap);
+	CHECK(strcmp(j->resume_file, "track01.mp3") == 0, "recovered resume file %s\n", j->resume_file);
+	CHECK(j->resume_seconds == 12.5, "recovered resume seconds %f\n", j->resume_seconds);
+	CHECK(ack_resets == 1, "ack reset performed %d times\n", ack_resets);
+	// The recovered attempt never resolved a snapshot (no auth step ran), so
+	// there is nothing for the engine to release here; the real adapter wipes
+	// any self-refetched snapshot in its own auth_forget path.
+	CHECK(!abs_download_sync_blocked(FAKE_DEST), "barrier must release after the DONE transaction\n");
+	// Idempotence: reopening the card never touches a DONE acknowledgement.
+	abs_download_quiesce_storage();
+	cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "second init failed\n");
+	CHECK(ack_resets == 1, "a DONE row must not be reset again (ack %d)\n", ack_resets);
+	CHECK(job_state(id) == ABS_DL_DONE, "second recovery state %s\n",
+		  abs_download_state_name(job_state(id)));
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+static void test_crash_finalize_fail(void) {
+	printf("crash: finalize fails on recovery... ");
+	const char *root = mkcard("crash-fin2");
+	fork_crash("finalize", root, 80);
+
+	// The reconciliation retries only finalization; when the media ops still
+	// cannot finalize, the job records the honest terminal error and the
+	// barrier releases into the recoverable failed state (§8.2 step 7 rule:
+	// manifest failure means the job is not DONE).
+	fake_reset();
+	finalize_fail = true;
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "recovery init failed\n");
+	long long id = sole_job();
+	pump_until(id, ABS_DL_FAILED);
 	abs_download_snapshot_t snap;
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(strcmp(j->error_stage, "manifest") == 0, "error stage %s\n", j->error_stage);
-	CHECK(file_exists(manifest) && file_bytes(manifest) == 32, "crash-written manifest retained\n");
+	CHECK(strstr(j->error, "manifest write failed") != NULL, "error message: %s\n", j->error);
 	CHECK(!abs_download_sync_blocked(FAKE_DEST), "barrier must release on FAILED\n");
+	char manifest[1400];
+	card_file(FAKE_DEST "/.audiobookshelf", manifest, sizeof(manifest));
+	CHECK(file_exists(manifest) && file_bytes(manifest) == 32,
+		  "the crash-written manifest is retained for retry\n");
 	file_record(id, 3, &f_record);
 	CHECK(strcmp(f_record.state, "complete") == 0, "audio record kept\n");
 
+	// Retry redoes finalize only (§8.1): fetch reuses every completed record.
+	finalize_fail = false;
 	char err[128] = {0};
 	CHECK(abs_download_retry(id, err, sizeof(err)), "retry: %s\n", err);
 	run_to_done(id);
@@ -1245,6 +1299,7 @@ int main(int argc, char **argv) {
 	test_crash_pause();
 	test_crash_cancel();
 	test_crash_finalize();
+	test_crash_finalize_fail();
 
 	test_schema();
 	test_capacity_dedup();

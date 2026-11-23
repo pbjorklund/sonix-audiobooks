@@ -1858,7 +1858,12 @@ static bool read_local_manifest(const char *local_book, bool *version_ok,
 	while (fgets(line, sizeof(line), f)) {
 		line[strcspn(line, "\r\n")] = '\0';
 		if (strncmp(line, "item_id=", 8) == 0) {
-			if (item_id && item_id_size) snprintf(item_id, item_id_size, "%s", line + 8);
+			// Same bounded copy as the server line below: item_id_size is the
+			// caller's column ceiling, and the line itself is attacker-free
+			// never. (Precision form also keeps -Wformat-truncation quiet when
+			// the reader is inlined into larger callers.)
+			if (item_id && item_id_size)
+				snprintf(item_id, item_id_size, "%.*s", (int)item_id_size - 1, line + 8);
 		} else if (strncmp(line, "server=", 7) == 0 && (!bound_server || !bound_server[0])) {
 			if (bound_server) snprintf(bound_server, bound_size, "%.*s", (int)bound_size - 1, line + 7);
 		} else if (strcmp(line, "version=1") == 0) {
@@ -2246,12 +2251,13 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 // its job is the active one and dies with the attempt snapshot (§8.2
 // steps 2, 8: freed before the next job starts).
 //
-// Cancel/pause reach every op through ctx->cancel (§8.1): the transfer polls
-// it between read units and the identity fetch polls it while waiting for the
-// shared catalog mutex. Finalize and the acknowledgement reset are the §8.2
-// steps 5–8 wave: they report explicit "not wired yet" refusals so a queue
-// driven with this adapter fails FINALIZING honestly instead of faking a
-// commit.
+// Cancel/pause reach every op through ctx->cancel (§8.1): the transfer and
+// the finalize's identity refetch poll it between units, and the identity
+// fetch polls it while waiting for the shared catalog mutex. The finalize and
+// acknowledgement-reset ops are the §8.2 steps 5–8 commit: sidecars, cover,
+// resume mapping and the manifest (written LAST, atomic), then the
+// audiobookdb reset and the queue's DONE transaction — books only; episode
+// jobs are the podcast wave's documented refusals.
 // ---------------------------------------------------------------------------
 
 typedef struct {
@@ -2889,32 +2895,498 @@ static bool abs_queue_file_transfer(void *user, const abs_download_op_ctx_t *ctx
 	return true;
 }
 
-// §8.2 steps 5–8 (sidecars, cover, manifest, resume mapping, acknowledgement
-// reset) are the next transfer wave. The slots report an explicit refusal so
-// a queue driven with this adapter fails FINALIZING honestly — and Retry can
-// redo finalize only — instead of pretending a manifest was committed.
-static bool abs_queue_finalize_not_wired(void *user, const abs_download_op_ctx_t *ctx,
-										 const abs_download_job_t *job,
+// A recorded-complete file must still be on the card: a final file whose
+// on-disk size no longer matches its commit record is a §8.2 file-rule
+// anomaly, quarantined for user retry — never "valid content" by accident.
+// Returns the first offending ordinal (0-based), -1 when every file checks.
+static int abs_queue_file_on_disk(const abs_download_job_t *job, const abs_download_file_t *files,
+								  int file_count, char *bad_name, size_t bad_size) {
+	for (int i = 0; i < file_count; i++) {
+		// Basename sanity for a row a foreign writer may have touched.
+		const char *name = files[i].final_name;
+		if (!name[0] || strlen(name) >= ABS_DL_NAME_MAX || strchr(name, '/') || strchr(name, '\\')) {
+			snprintf(bad_name, bad_size, "%.255s", name ? name : "");
+			return i;
+		}
+		if (strcmp(files[i].state, "complete") != 0) {
+			snprintf(bad_name, bad_size, "%.255s", files[i].final_name);
+			return i;
+		}
+		char path[SONIX_LINKED_SIDECAR_PATH_MAX];
+		char rel[ABS_DL_DEST_MAX + ABS_DL_NAME_MAX + 2];
+		if ((size_t)snprintf(rel, sizeof(rel), "%.511s/%.255s", job->destination, files[i].final_name) >=
+				sizeof(rel) ||
+			!abs_download_card_path(rel, path, sizeof(path))) {
+			snprintf(bad_name, bad_size, "%.255s", files[i].final_name);
+			return i;
+		}
+		struct stat st;
+		if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+			snprintf(bad_name, bad_size, "%.255s", files[i].final_name);
+			return i;
+		}
+		if (files[i].final_size >= 0 && (long long)st.st_size != files[i].final_size) {
+			snprintf(bad_name, bad_size, "%.255s", files[i].final_name);
+			return i;
+		}
+	}
+	return -1;
+}
+
+// Reads the destination's .audiobookshelf manifest and validates it against
+// THIS job's identity and file records (§8.2 recovery table line 540: a
+// manifest proves file finalization, so recovery trusts it only when it
+// really is ours and really describes these rows). Same format family the
+// finalize writes and local_progress() reads: "version=1", "item_id=",
+// "server=" and tab-separated "track=<no>\t<offset>\t<duration>\t<name>".
+// Offsets/durations are written with %.3f, so the comparison carries the
+// same 0.001 tolerance resume_target uses.
+static bool abs_queue_manifest_matches(const char *dest_abs, const abs_download_job_t *job,
+									   const abs_download_file_t *files, int file_count) {
+	char path[SONIX_LINKED_SIDECAR_PATH_MAX];
+	if ((size_t)snprintf(path, sizeof(path), "%.1300s/.audiobookshelf", dest_abs) >= sizeof(path)) {
+		return false;
+	}
+	struct stat st;
+	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+		return false;
+	}
+	char normalized_job[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(job->server, normalized_job, sizeof(normalized_job));
+	if (!normalized_job[0]) {
+		return false;
+	}
+	bool version_ok = false;
+	bool server_ok_line = false;
+	bool item_ok_line = false;
+	int tracks = 0;
+	double want_offset = 0, want_duration = 0;
+	const char *want_name = NULL;
+	char line[ABS_SERVER_MAX + 32];
+	FILE *f = fopen(path, "r");
+	if (!f) {
+		return false;
+	}
+	while (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (strncmp(line, "version=", 8) == 0) {
+			version_ok = strcmp(line + 8, "1") == 0;
+		} else if (strncmp(line, "server=", 7) == 0) {
+			char normalized_bound[ABS_SERVER_MAX];
+			abs_profiles_normalize_server(line + 7, normalized_bound, sizeof(normalized_bound));
+			server_ok_line = normalized_bound[0] != '\0' &&
+							 strcmp(normalized_bound, normalized_job) == 0;
+		} else if (strncmp(line, "item_id=", 8) == 0) {
+			item_ok_line = line[8] != '\0' && strcmp(line + 8, job->item_id) == 0;
+		} else if (strncmp(line, "track=", 6) == 0) {
+			if (tracks >= file_count) {
+				tracks++; // too many lines: the count check below fails either way
+				continue;
+			}
+			char *second = strchr(line + 6, '\t');
+			char *third = second ? strchr(second + 1, '\t') : NULL;
+			char *fourth = third ? strchr(third + 1, '\t') : NULL;
+			if (!second || !third || !fourth) {
+				fclose(f);
+				return false;
+			}
+			int ordinal = atoi(line + 6);
+			want_offset = strtod(second + 1, NULL);
+			want_duration = strtod(third + 1, NULL);
+			want_name = files[tracks].final_name;
+			bool ok = ordinal == tracks + 1 && !strchr(fourth + 1, '\t') &&
+					  strcmp(fourth + 1, want_name) == 0 && isfinite(want_offset) &&
+					  want_offset >= 0 && fabs(want_offset - files[tracks].start_offset) <= 0.001 &&
+					  isfinite(want_duration) && want_duration >= 0 &&
+					  (files[tracks].duration < 0 || fabs(want_duration - files[tracks].duration) <= 0.001);
+			if (!ok) {
+				fclose(f);
+				return false;
+			}
+			tracks++;
+		}
+	}
+	fclose(f);
+	// §11.5: a manifest with no resolvable server is a foreign claim, never
+	// ours. The track-line count must cover every file record exactly.
+	return version_ok && server_ok_line && item_ok_line && tracks == file_count;
+}
+
+// The crash-recovery resume mapping (§8.2 line 540: rebuild offsets/durations
+// + resume_file/resume_seconds from the valid manifest and the row's remote
+// whole-book progress). Same algorithm as audiobookshelf_resume_target() over
+// the row model the manifest was validated against: finished books map to
+// part one at 0 s, an unknown position falls back to the book start, the
+// selected part is the last one whose whole-book offset the position covers,
+// and the stored seconds are part-relative. audiobookshelf_resume_target()
+// itself stays the §8.2 step 5 mapper for the normal finalize (it needs the
+// expanded book, which a fresh process legitimately no longer holds).
+static void abs_queue_resume_from_rows(const abs_download_job_t *job, const abs_download_file_t *files,
+									   int file_count, abs_download_resume_t *resume_out) {
+	double whole = job->remote_finished ? 0.0 : job->remote_progress;
+	if (!(whole > 0)) {
+		whole = 0; // -1 unknown and 0 both start the book
+	}
+	if (file_count > 0 && files[file_count - 1].duration > 0) {
+		double total = files[file_count - 1].start_offset + files[file_count - 1].duration;
+		if (total > 0 && whole > total) {
+			whole = total;
+		}
+	}
+	int selected = 0;
+	for (int i = 1; i < file_count; i++) {
+		if (files[i].start_offset <= whole + 0.001) {
+			selected = i;
+		} else {
+			break;
+		}
+	}
+	double relative = whole - files[selected].start_offset;
+	if (relative < 0) {
+		relative = 0;
+	}
+	if (files[selected].duration > 0 && relative > files[selected].duration) {
+		relative = files[selected].duration;
+	}
+	snprintf(resume_out->resume_file, sizeof(resume_out->resume_file), "%.255s",
+			 files[selected].final_name);
+	resume_out->resume_seconds = relative;
+}
+
+// §8.2 steps 5–7 for an attempt that holds the expanded book (the normal
+// finalize window): sidecars, cover, the resume mapping and — LAST — the
+// manifest, so a manifest's existence proves the sidecar phase completed.
+// Every helper here is the legacy audiobookshelf_download() writer reused
+// verbatim (§8.5): write_sidecars(), write_description(), local_track_name(),
+// download_file() for the cover, audiobookshelf_resume_target() for step 5.
+static bool abs_queue_finalize_full(const abs_download_op_ctx_t *ctx, const abs_download_job_t *job,
+									const abs_download_file_t *files, int file_count,
+									abs_download_resume_t *resume_out, const char **stage_out,
+									char *error, size_t error_size) {
+	*stage_out = "manifest";
+	if (!abs_queue_attempt_ok(ctx, job, error, error_size)) {
+		*stage_out = "auth";
+		return false;
+	}
+	if (strcmp(job->kind, ABS_DL_KIND_BOOK) != 0) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "Podcast episode downloads are not wired yet.");
+		return false;
+	}
+	audiobookshelf_book_t *book = &queue_media.book;
+	if (!queue_media.destination[0] || strcmp(queue_media.destination, job->destination) != 0 ||
+		book->track_count != file_count) {
+		// The fetch computed and gated the destination from this very book;
+		// anything else is a caller/adapter disagreement, never a guess.
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The download destination does not match this item's identity.");
+		return false;
+	}
+	char dest_abs[SONIX_LINKED_PATH_MAX];
+	if (!abs_download_card_path(queue_media.destination, dest_abs, sizeof(dest_abs))) {
+		abs_queue_fail(stage_out, error, error_size, "write", "The audiobook download path is too long.");
+		return false;
+	}
+	// The directory arrives with the first file normally; after a quiesce or
+	// a card cycle it is remade here so finalize alone still works (§8.1).
+	if (!make_dirs(dest_abs)) {
+		int dir_errno = errno;
+		abs_queue_fail(stage_out, error, error_size, "write",
+					   dir_errno == ENOSPC ? "The SD card is full."
+										   : "The audiobook download folder could not be created.");
+		return false;
+	}
+
+	// Audio first, then its sidecars, in track order (§8.2 step 5: audio and
+	// required sidecars must succeed; they are the job's fatal floor).
+	for (int i = 0; i < file_count; i++) {
+		char numbered[280];
+		if (!local_track_name(&book->tracks[i], i, numbered, sizeof(numbered)) ||
+			strcmp(numbered, files[i].final_name) != 0) {
+			abs_queue_fail(stage_out, error, error_size, "metadata",
+						   "The audiobook changed on the server; remove and download it again.");
+			return false;
+		}
+		char audio[SONIX_LINKED_SIDECAR_PATH_MAX];
+		if ((size_t)snprintf(audio, sizeof(audio), "%.1300s/%.255s", dest_abs, files[i].final_name) >=
+			sizeof(audio)) {
+			abs_queue_fail(stage_out, error, error_size, "write", "The audiobook download path is too long.");
+			return false;
+		}
+		struct stat st;
+		if (stat(audio, &st) != 0 || !S_ISREG(st.st_mode) ||
+			(files[i].final_size >= 0 && (long long)st.st_size != files[i].final_size)) {
+			abs_queue_fail(stage_out, error, error_size, "write",
+						   "A downloaded file is missing or the wrong size on the card; remove and download it again.");
+			return false;
+		}
+		if (!write_sidecars(audio, book, &book->tracks[i], i + 1)) {
+			abs_queue_fail(stage_out, error, error_size, "sidecar",
+						   "The audiobook metadata could not be written.");
+			return false;
+		}
+		if (i == 0 && !write_description(audio, book->description)) {
+			abs_queue_fail(stage_out, error, error_size, "sidecar",
+						   "The audiobook description could not be written.");
+			return false;
+		}
+	}
+
+	// Embedded artwork remains the first choice (legacy comment retained):
+	// the server cover is a fallback for books whose files carry none, asked
+	// for as JPEG. A missing cover must never turn a successful audio
+	// download into a failed book download — cover failure is the ONLY
+	// nonfatal sidecar (§8.2 step 5).
+	if (book->item.cover[0]) {
+		char encoded[ABS_URL_MAX * 2];
+		encode_content_path(book->item.cover, encoded, sizeof(encoded));
+		char cover_url[ABS_URL_MAX * 2 + 544];
+		if (encoded[0] == '/') {
+			snprintf(cover_url, sizeof(cover_url), "%s%s?format=jpeg", queue_media.server, encoded);
+		} else {
+			snprintf(cover_url, sizeof(cover_url), "%s/%s?format=jpeg", queue_media.server, encoded);
+		}
+		char cover_path[ABS_LOCAL_PATH_MAX];
+		if ((size_t)snprintf(cover_path, sizeof(cover_path), "%s/cover.jpg", dest_abs) < sizeof(cover_path)) {
+			(void)download_file(cover_url, queue_media.auth.token, cover_path, 1, 1, NULL, NULL);
+		}
+	}
+
+	// §8.2 step 5: the resume mapping from the remote whole-book progress,
+	// persisted by the queue (still inside the barrier) before completion.
+	{
+		char mapped[SONIX_LINKED_PATH_MAX + 64];
+		double seconds = 0;
+		bool finished = false;
+		if (!audiobookshelf_resume_target(book, queue_media.destination, mapped, sizeof(mapped),
+										  &seconds, &finished)) {
+			abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+			return false;
+		}
+		const char *base = strrchr(mapped, '/');
+		// The mapping is a local_track_name() basename (<= 240 bytes); the
+		// precision is the same bounded-copy idiom the file records use, and
+		// a longer string can only come from a corrupt book model.
+		snprintf(resume_out->resume_file, sizeof(resume_out->resume_file), "%.255s",
+				 base ? base + 1 : mapped);
+		resume_out->resume_seconds = seconds;
+	}
+
+	// §8.2 step 7: the manifest goes LAST, through a temporary file, a CHECKED
+	// close and a CHECKED rename. Its presence is what recovery trusts, and
+	// the lines are byte-identical to the legacy download's (§8.5).
+	char manifest[SONIX_LINKED_SIDECAR_PATH_MAX];
+	char temporary[ABS_TEMP_PATH_MAX];
+	if ((size_t)snprintf(manifest, sizeof(manifest), "%.1300s/.audiobookshelf", dest_abs) >=
+			sizeof(manifest) ||
+		(size_t)snprintf(temporary, sizeof(temporary), "%.1310s.tmp", manifest) >= sizeof(temporary)) {
+		abs_queue_fail(stage_out, error, error_size, "manifest", "The audiobook download path is too long.");
+		return false;
+	}
+	FILE *f = fopen(temporary, "w");
+	if (!f) {
+		abs_queue_fail(stage_out, error, error_size, "manifest",
+					   errno == ENOSPC ? "The SD card is full."
+									   : "The audiobook manifest could not be written.");
+		return false;
+	}
+	fprintf(f, "version=1\nitem_id=%s\nserver=%s\nduration=%.3f\nprogress=%.3f\nprogress_updated=%lld\n",
+			book->item.id, queue_media.server, book->item.duration, book->item.progress,
+			book->progress_updated_ms);
+	for (int i = 0; i < book->track_count; i++) {
+		char local_name[280];
+		if (!local_track_name(&book->tracks[i], i, local_name, sizeof(local_name))) {
+			continue;
+		}
+		fprintf(f, "track=%d\t%.3f\t%.3f\t%s\n", i + 1, book->tracks[i].start_offset,
+				book->tracks[i].duration, local_name);
+	}
+	if (fclose(f) != 0) {
+		remove(temporary);
+		abs_queue_fail(stage_out, error, error_size, "manifest",
+					   errno == ENOSPC ? "The SD card is full."
+									   : "The audiobook manifest could not be written.");
+		return false;
+	}
+	if (rename(temporary, manifest) != 0) {
+		remove(temporary);
+		abs_queue_fail(stage_out, error, error_size, "manifest",
+					   errno == ENOSPC ? "The SD card is full."
+									   : "The audiobook manifest could not be moved into place.");
+		return false;
+	}
+	set_error("");
+	return true;
+}
+
+// §8.2 recovery-table FINALIZING line: the acknowledgement for a job whose
+// manifest (may) already be committed runs WITHOUT rewriting the card. The
+// fresh process holds no expanded book, so first the card state decides:
+//
+//   recorded files missing/wrong size  -> fatal write (§8.2 file rules: only
+//                                         matching final files are valid)
+//   manifest absent/invalid/foreign    -> files are intact, so ONLY
+//                                         finalization is retried: the
+//                                         identity is re-fetched (auth
+//                                         re-resolved here; the queue sees
+//                                         one atomic finalize op) and the
+//                                         full finalize runs over the held
+//                                         book — committed audio is reused
+//                                         without one media byte
+//   manifest valid and ours            -> rebuild the resume mapping from
+//                                         the row's remote progress and
+//                                         succeed; the engine persists the
+//                                         mapping and runs the acknowledgement
+//                                         reset + DONE transaction (§8.2
+//                                         steps 5, 8)
+static bool abs_queue_finalize_reconcile(const abs_download_op_ctx_t *ctx, const abs_download_job_t *job,
 										 const abs_download_file_t *files, int file_count,
 										 abs_download_resume_t *resume_out, const char **stage_out,
 										 char *error, size_t error_size) {
-	(void)user;
-	(void)ctx;
-	(void)job;
-	(void)files;
-	(void)file_count;
-	(void)resume_out;
-	abs_queue_fail(stage_out, error, error_size, "manifest",
-				   "Finalization (sidecars, manifest) is wired in a later wave.");
-	return false;
+	*stage_out = "manifest";
+	if (strcmp(job->kind, ABS_DL_KIND_BOOK) != 0) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "Podcast episode downloads are not wired yet.");
+		return false;
+	}
+	if (!job->destination[0]) {
+		abs_queue_fail(stage_out, error, error_size, "manifest",
+					   "The interrupted download has no destination on the card.");
+		return false;
+	}
+	if (file_count <= 0) {
+		abs_queue_fail(stage_out, error, error_size, "manifest", "The download has no file records.");
+		return false;
+	}
+	// The offending basename is deliberately not echoed into the row's
+	// bounded English error (§8.4): it is server-derived data, and the
+	// recovery table wants an actionable, path-free message.
+	char bad_name[ABS_DL_NAME_MAX];
+	if (abs_queue_file_on_disk(job, files, file_count, bad_name, sizeof(bad_name)) >= 0) {
+		abs_queue_fail(stage_out, error, error_size, "write",
+					   "A downloaded file is missing or the wrong size on the card; remove and download it again.");
+		return false;
+	}
+	char dest_abs[SONIX_LINKED_PATH_MAX];
+	if (!abs_download_card_path(job->destination, dest_abs, sizeof(dest_abs))) {
+		abs_queue_fail(stage_out, error, error_size, "manifest", "The audiobook download path is too long.");
+		return false;
+	}
+	if (abs_queue_manifest_matches(dest_abs, job, files, file_count)) {
+		// The manifest is valid and describes exactly these file records: the
+		// sidecar phase finished before the manifest (it writes last), so the
+		// card is final — complete the acknowledgement from the row snapshot.
+		abs_queue_resume_from_rows(job, files, file_count, resume_out);
+		return true;
+	}
+
+	// Manifest incomplete/invalid/foreign: §8.2 line 540 — retry ONLY
+	// finalization. Re-resolve this job's auth (a fresh process holds no
+	// snapshot), re-fetch the expanded identity under the shared catalog
+	// mutex (cancellable, like the normal fetch) and run the full finalize.
+	// plan_ingest is not involved: the file records stay exactly as committed.
+	{
+		abs_auth_snapshot_t snapshot;
+		memset(&snapshot, 0, sizeof(snapshot));
+		if (!audiobookshelf_queue_auth_resolve(job->profile_id, job->server, &snapshot, error,
+											   error_size)) {
+			*stage_out = "auth";
+			return false;
+		}
+		char normalized[ABS_SERVER_MAX];
+		abs_profiles_normalize_server(job->server, normalized, sizeof(normalized));
+		if (!normalized[0]) {
+			*stage_out = "auth";
+			snprintf(error, error_size, "%s", "The download's server does not match its login snapshot.");
+			return false;
+		}
+		memset(&queue_media, 0, sizeof(queue_media)); // a fresh attempt's state
+		snprintf(queue_media.server, sizeof(queue_media.server), "%s", normalized);
+		queue_media.auth = snapshot;
+		queue_media.held = true;
+	}
+	abs_download_plan_t plan;
+	memset(&plan, 0, sizeof(plan));
+	if (!abs_queue_fetch_identity(NULL, ctx, job, &plan, stage_out, error, error_size)) {
+		// The fetch reports its own honest stage (network stalls into
+		// WAITING_NETWORK, permanent refusals fail the job §8.4).
+		return false;
+	}
+	// The identity must still name the destination and tracks this job
+	// committed — anything else is a changed item, a user Remove + re-download.
+	if (!plan.destination || strcmp(plan.destination, job->destination) != 0) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The audiobook changed on the server; remove and download it again.");
+		return false;
+	}
+	return abs_queue_finalize_full(ctx, job, files, file_count, resume_out, stage_out, error, error_size);
 }
 
-static bool abs_queue_ack_not_wired(void *user, const abs_download_job_t *job, char *error,
-									size_t error_size) {
+// §8.2 steps 5–7 dispatcher. A held attempt (the normal window after
+// auth+fetch+files) runs the full finalize; a finalizing job adopted after a
+// crash has no attempt state at all and reconciles from the card instead.
+static bool abs_queue_finalize(void *user, const abs_download_op_ctx_t *ctx,
+							   const abs_download_job_t *job, const abs_download_file_t *files,
+							   int file_count, abs_download_resume_t *resume_out, const char **stage_out,
+							   char *error, size_t error_size) {
 	(void)user;
-	(void)job;
-	snprintf(error, error_size, "%s", "The progress acknowledgement reset is wired in a later wave.");
-	return false;
+	*stage_out = "manifest";
+	if (error_size) {
+		error[0] = '\0';
+	}
+	if (resume_out) {
+		memset(resume_out, 0, sizeof(*resume_out));
+		resume_out->resume_seconds = -1;
+	}
+	if (!ctx || !job || !files || file_count <= 0 || !resume_out) {
+		abs_queue_fail(stage_out, error, error_size, "manifest",
+					   "The queue handed the finalize an incomplete request.");
+		return false;
+	}
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(job ? job->server : "", normalized, sizeof(normalized));
+	bool held_attempt = queue_media.held && queue_media.auth.token[0] && normalized[0] &&
+						strcmp(normalized, queue_media.server) == 0 &&
+						(queue_media.job_id == 0 || queue_media.job_id == ctx->job_id);
+	if (held_attempt) {
+		// The full finalize is terminal for the attempt: a failure leaves the
+		// recovery untouched (the §8.2 manifest rules already applied).
+		return abs_queue_finalize_full(ctx, job, files, file_count, resume_out, stage_out, error,
+									   error_size);
+	}
+	// No held attempt: a FINALIZING row adopted straight from the recovered
+	// database (§8.2 recovery table line 540).
+	return abs_queue_finalize_reconcile(ctx, job, files, file_count, resume_out, stage_out, error,
+										error_size);
+}
+
+// §8.2 step 8: the acknowledgement reset. Books reset durable ABS sync state
+// (audiobookdb_abs_reset) for the card-relative destination the job names,
+// resolved through the ONE card path builder the queue owns (§8.5), the same
+// absolute folder path the scanner keys AUDIOBOOK_ABS_SYNC rows by — exactly
+// like the legacy download's commit reset. The delete is idempotent, which is
+// what makes repeating it after a crash-before-flag-commit safe (§8.2 line
+// 540). Episodes are the podcast wave's: the slot stays a documented refusal
+// (and episode jobs never reach finalize in 0.6.0 anyway).
+static bool abs_queue_ack_reset(void *user, const abs_download_job_t *job, char *error,
+								size_t error_size) {
+	(void)user;
+	if (!job) {
+		snprintf(error, error_size, "%s", "The queue handed the reset an incomplete request.");
+		return false;
+	}
+	error[0] = '\0';
+	if (strcmp(job->kind, ABS_DL_KIND_BOOK) != 0) {
+		snprintf(error, error_size, "%s", "The episode acknowledgement reset is wired with the podcast wave.");
+		return false;
+	}
+	char dest_abs[SONIX_LINKED_PATH_MAX];
+	if (!abs_download_card_path(job->destination, dest_abs, sizeof(dest_abs))) {
+		snprintf(error, error_size, "%s", "The SD card for downloads is not available.");
+		return false;
+	}
+	audiobookdb_abs_reset(dest_abs);
+	return true;
 }
 
 // Populated at call time, not as a file-scope initializer: a const table of
@@ -2928,8 +3400,8 @@ const abs_download_ops_t *audiobookshelf_queue_media_ops(void) {
 	queue_media_ops.user = NULL;
 	queue_media_ops.fetch_identity = abs_queue_fetch_identity;
 	queue_media_ops.file_download = abs_queue_file_transfer;
-	queue_media_ops.finalize = abs_queue_finalize_not_wired;
-	queue_media_ops.ack_reset = abs_queue_ack_not_wired;
+	queue_media_ops.finalize = abs_queue_finalize;
+	queue_media_ops.ack_reset = abs_queue_ack_reset;
 	queue_media_ops.auth_acquire = abs_queue_auth_acquire;
 	queue_media_ops.auth_release = abs_queue_auth_release;
 	return &queue_media_ops;
