@@ -51,6 +51,9 @@ jobs:
       - name: Run the browse query and search-contract tests (§10.3)
         working-directory: ${{ github.workspace }}
         run: bash tools/audiobookshelf-browse-test.sh
+      - name: Run the download-queue foundation tests (§8.1–8.2)
+        working-directory: ${{ github.workspace }}
+        run: bash tools/audiobookshelf-queue-test.sh
       - name: Upload audiobook smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7
