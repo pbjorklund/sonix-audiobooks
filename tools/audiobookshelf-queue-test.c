@@ -6,7 +6,11 @@
 // runs under ASan/UBSan exactly as bob §8.5's test row asks: schema, no-token
 // persistence, capacity and dedup, pause/resume/cancel/remove/retry, the
 // FINALIZING sync barrier, bounded network waiting with the FIFO suspension,
-// the card-generation guard, and crash/restart recovery.
+// the card-generation guard, crash/restart recovery, and the §8.5 storage
+// lifecycle this wave wires: boot-shape init (worker on, no page anywhere)
+// running real jobs, quiesce of an active blocked op without a deadlock, the
+// competing-quiesce shapes of the three lifecycle callers, and the
+// card-reopen generation over a stale racing response.
 //
 // Crash simulation forks: the child drives the queue to a chosen point and
 // then _exit()s without quiescing (no cleanup, no flush — the closest a test
@@ -1560,6 +1564,178 @@ static void test_wake_cancel_next_job_ordering(void) {
 }
 
 // ---------------------------------------------------------------------------
+// 9. Busy gate: abs_download_busy() is the §8.3/§8.5 power-decision input
+//    (power.c consults it for the Wi-Fi radio and the shutdown/standby
+//    timer). This is its exact truth table over the active states, asserted
+//    deterministically in pump mode. The wiring consult itself is proven
+//    structurally in audiobookshelf-queue-test.sh (power.c compiles no
+//    standalone unit; see that script).
+// ---------------------------------------------------------------------------
+
+static void test_busy_gate(void) {
+	printf("busy gate (the power decision's input)... ");
+	const char *root = mkcard("busy");
+	fake_reset();
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "init\n");
+	char err[128] = {0};
+
+	// The pause lands from the op callback at ordinal 2, so the run passes
+	// through every active state once, with a real ack between.
+	pause_mid_file = true;
+	long long id = enqueue_book("bg1", "Busy Gate");
+	CHECK(!abs_download_busy(), "a fresh QUEUED job must not hold the power busy bit\n");
+
+	pump_until(id, ABS_DL_FETCHING);
+	CHECK(abs_download_busy(), "FETCHING must hold the power decisions (identity fetch on the server)\n");
+	pump_until(id, ABS_DL_DOWNLOADING);
+	CHECK(abs_download_busy(), "DOWNLOADING must hold the power decisions (file transfer on the card)\n");
+	pump_until(id, ABS_DL_PAUSING);
+	CHECK(abs_download_busy(), "PAUSING is the honest Stopping state and must stay busy\n");
+	pump_until(id, ABS_DL_PAUSED);
+	CHECK(!abs_download_busy(), "a fully acknowledged pause must release the power decisions\n");
+
+	CHECK(abs_download_resume(id, err, sizeof(err)), "resume: %s\n", err);
+	pump_until(id, ABS_DL_DOWNLOADING);
+	CHECK(abs_download_busy(), "the resumed run is active again\n");
+	bool reached_finalizing = false;
+	for (int i = 0; i < MAX_STEPS && !reached_finalizing; i++) {
+		reached_finalizing = job_state(id) == ABS_DL_FINALIZING;
+		if (!reached_finalizing) {
+			CHECK(abs_download_pump(), "pump must have work left before DONE\n");
+		}
+	}
+	CHECK(reached_finalizing, "the FINALIZING window never appeared\n");
+	CHECK(abs_download_busy(), "FINALIZING (sidecars/manifest commit) must stay busy\n");
+
+	run_to_done(id);
+	CHECK(!abs_download_busy(), "a terminal drain must release the power decisions\n");
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// ---------------------------------------------------------------------------
+// 10. Storage lifecycle (§8.5: main.c/system.c/usb.c wiring). Production
+//     shape: the worker thread is enabled and no page exists anywhere in the
+//     process -- the queue runs from init exactly as boot runs it now. Proven
+//     here: quiesce during an active blocked op (wake, worker ack, disarm,
+//     no deadlock, and the op's racing classification discarded), quiesce
+//     before any init and after an earlier one (the guard shapes), two
+//     lifecycle threads racing the same quiesce, and the card-reopen cycle
+//     (generation + stale-generation refusal).
+// ---------------------------------------------------------------------------
+
+// A lifecycle thread that only calls abs_download_quiesce_storage(): the
+// system.c/usb.c/main.c caller shape. Returns through pthread_join.
+static void *quiesce_thread(void *arg) {
+	(void)arg;
+	abs_download_quiesce_storage();
+	return NULL;
+}
+
+static void test_storage_lifecycle(void) {
+	printf("storage lifecycle (boot, quiesce active op, card cycle)... ");
+	const char *root = mkcard("storage");
+	fake_reset();
+	wake_reset();
+	const unsigned gen0 = abs_download_card_generation();
+
+	// Boot shape: worker on, media ops armed, nobody driving pumps -- this
+	// test never calls abs_download_pump() in thread mode.
+	abs_download_config_t cfg = make_config(root, true);
+	CHECK(abs_download_init(&cfg), "boot init\n");
+	CHECK(abs_download_card_generation() == gen0 + 1, "boot init must raise the generation once\n");
+	CHECK(!abs_download_busy(), "an armed but idle queue is not busy\n");
+
+	// A job the enqueue hands the queue completes by the worker alone, with
+	// no page present: this binary has no GUI of any kind. It blocks inside
+	// the first transfer like a stalled server so the teardown below has an
+	// op in flight to wake.
+	wake_put_bool(&block_stream_next, true);
+	long long id1 = enqueue_book("lc1", "Lifecycle 1");
+	wait_flag(&blocked_seen, "the worker to reach the blocked transfer");
+	wait_state(id1, ABS_DL_DOWNLOADING, "the active transfer owns the job");
+	CHECK(abs_download_busy(), "a blocked op is exactly the busy state the power gate exists for\n");
+	char part[1400];
+	fake_paths("track01.mp3", ".part", part, sizeof(part));
+	CHECK(file_exists(part), "the blocked attempt owns its .part\n");
+
+	// §8.5 system.c/usb.c shape: before the card and its databases are taken
+	// away, storage quiesces. The blocked op must be woken through its slot
+	// (not waited out), the worker must acknowledge, and this call must
+	// return -- bounded, deadlocks would hang below.
+	abs_download_quiesce_storage();
+	wait_flag(&unblocked_seen, "the teardown to wake the blocked op");
+	CHECK(op_thread_closed, "the op thread alone closed its woken stream\n");
+	CHECK(!abs_download_busy(), "quiesce must leave the power decisions idle\n");
+	abs_download_snapshot_t snap;
+	CHECK(!abs_download_snapshot(&snap) && snap.generation == 0,
+		  "the queue must be disarmed after quiesce\n");
+	CHECK(abs_download_card_generation() == gen0 + 1, "quiesce must not move the generation\n");
+	char err[128] = {0};
+	abs_download_enqueue_t after = book_req("lc2", "Lifecycle 2", FAKE_DEST);
+	CHECK(!abs_download_enqueue_book(&after, NULL, NULL, err, sizeof(err)),
+		  "enqueue must refuse while quiesced\n");
+	CHECK(strstr(err, "not available") != NULL, "wrong quiesced error: %s\n", err);
+	CHECK(file_exists(part), "a STOP_NONE quiesce leaves the orphaned .part for the next attempt\n");
+
+	// The guard shapes: a second quiesce after an earlier one, and one that
+	// arrives before any init in this lifecycle (the card-detach event racing
+	// the boot init, or a shutdown quiesce behind a detach). Both were unsafe
+	// (the wake slot would be destroyed twice) before the quiesce guard.
+	abs_download_quiesce_storage();
+
+	// The stale-op answer, deterministically: the job's next attempt is
+	// blocked inside the transfer BEFORE the queue is re-armed, then storage
+	// tears down twice at once. The op's own classification after the wake
+	// says "network" -- a WAITING_NETWORK job -- but the teardown must win
+	// over the racing response: the durable row comes back QUEUED, and the
+	// reopened generation accepts nothing of the pre-removal attempt. The
+	// flag goes up before the re-init so the worker cannot finish the book
+	// out underneath the test.
+	wake_reset();
+	wake_put_bool(&block_stream_next, true);
+	CHECK(abs_download_init(&cfg), "re-init after the double quiesce\n");
+	CHECK(abs_download_card_generation() == gen0 + 2, "re-init after the card return\n");
+	const abs_download_job_t *j = snap_job(id1, &snap);
+	CHECK(j->state == ABS_DL_QUEUED, "the quiesce had to persist the active job restart-clean, is %s\n",
+		  abs_download_state_name(j->state));
+	CHECK(j->error[0] == '\0', "a quiesce must not invent an error: %s\n", j->error);
+	abs_download_file_t rows[8];
+	CHECK(abs_download_job_files(id1, rows, 8) == 3, "file rows\n");
+	CHECK(strcmp(rows[0].state, "pending") == 0, "the writing row must reset for the next attempt\n");
+
+	wait_state(id1, ABS_DL_DOWNLOADING, "the resumed attempt reaches the blocked file");
+	wait_flag(&blocked_seen, "the second blocked transfer");
+	pthread_t q1, q2;
+	CHECK(pthread_create(&q1, NULL, quiesce_thread, NULL) == 0, "quiesce thread 1\n");
+	CHECK(pthread_create(&q2, NULL, quiesce_thread, NULL) == 0, "quiesce thread 2\n");
+	CHECK(pthread_join(q1, NULL) == 0 && pthread_join(q2, NULL) == 0, "both quiesces must return\n");
+	CHECK(abs_download_snapshot(&snap) != true && snap.generation == 0, "quiesced after the joint teardown\n");
+	CHECK(abs_download_card_generation() == gen0 + 2, "the joint teardown must not move the generation\n");
+
+	CHECK(abs_download_init(&cfg), "re-init after the joint teardown\n");
+	CHECK(abs_download_card_generation() == gen0 + 3, "the third init\n");
+	j = snap_job(id1, &snap);
+	CHECK(j->state == ABS_DL_QUEUED,
+		  "the racing op's network classification must be rejected by the reopen (stopping wins), is %s\n",
+		  abs_download_state_name(j->state));
+
+	// The reopened queue finishes the job: the orphaned .part is truncated
+	// and the book completes on the new generation.
+	wait_state(id1, ABS_DL_DONE, "the reopened queue must finish the resumed book");
+	char final1[1400];
+	fake_paths("track01.mp3", "", final1, sizeof(final1));
+	CHECK(file_bytes(final1) == 42, "the restarted file must be committed whole (%lld bytes)\n",
+		  file_bytes(final1));
+	CHECK(!file_exists(part), "no .part may survive the committed file\n");
+	CHECK(!abs_download_busy(), "busy again false after the drain\n");
+
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
 	if (argc != 2 || !argv[1][0]) {
@@ -1587,6 +1763,8 @@ int main(int argc, char **argv) {
 	test_worker_thread();
 	test_wake_pause_during_fetch();
 	test_wake_cancel_next_job_ordering();
+	test_busy_gate();
+	test_storage_lifecycle();
 
 	printf("audiobookshelf-queue-test: queue foundation passed\n");
 	return 0;

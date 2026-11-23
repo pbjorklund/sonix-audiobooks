@@ -144,6 +144,14 @@ static const char *const FILE_COMPLETE = "complete";
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t work_cv = PTHREAD_COND_INITIALIZER;
+// Serializes quiesce itself. §8.5 hands this wave three callers on three
+// threads (usb.c export, system.c card detach, main.c shutdown), and quiesce
+// deliberately releases `lock` across the worker join -- so `lock` cannot make
+// two quiesces one-after-another, and a second one in the join window would
+// see worker_alive still true and join the same thread a second time, which is
+// undefined. quiesce_lock covers the whole body; nothing else ever takes it,
+// so it cannot form a cycle with the join wait inside.
+static pthread_mutex_t quiesce_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static abs_download_config_t cfg;       // string members deep-copied below
 static char cfg_sd_root[512];
@@ -2480,7 +2488,20 @@ bool abs_download_init(const abs_download_config_t *config) {
 }
 
 void abs_download_quiesce_storage(void) {
+	// One quiesce at a time, for §8.5's three lifecycle callers (see the
+	// quiesce_lock note). A second call that arrives while the first is inside
+	// the join waits here, then finds the queue already torn down and returns.
+	// The body has no early exit between here and the unlock at the end.
+	pthread_mutex_lock(&quiesce_lock);
 	pthread_mutex_lock(&lock);
+	// Whether the wake slot was ever created: only an armed (or worker-running)
+	// queue owns an initialized slot. The lifecycle now permits quiesce before
+	// any init (a card-detach event racing the boot init: system_start_services
+	// starts the card supervisor before main.c reaches the DB-open block) and
+	// a second quiesce after an earlier one; clearing or destroying a zeroed
+	// -- worse, destroyed -- mutex is undefined. The guard keeps those shapes
+	// honest no-ops.
+	bool was_armed = armed || worker_alive || db != NULL;
 	// Order per §8.5 (system.c/usb.c): stop the worker first, publish the stop
 	// to the in-flight op, then wait for its acknowledgement before touching
 	// the database. Well-behaved ops must observe the cancel flag between
@@ -2533,8 +2554,13 @@ void abs_download_quiesce_storage(void) {
 	active_auth_done = false;
 	active_stop = STOP_NONE;
 	op_cancel_store(0);
-	http_op_clear(&queue_http_op);
-	http_op_destroy(&queue_http_op);
+	if (was_armed) {
+		// The slot belonged to the queue just torn down. When quiesce runs
+		// without the queue ever having been armed (or a second time after
+		// that), destroying the zeroed static slot -- twice -- is undefined.
+		http_op_clear(&queue_http_op);
+		http_op_destroy(&queue_http_op);
+	}
 	if (db) {
 		sqlite3_close(db);
 		db = NULL;
@@ -2545,6 +2571,9 @@ void abs_download_quiesce_storage(void) {
 	wait_blocked = false;
 	cv_signal();
 	pthread_mutex_unlock(&lock);
+	// Released only now, so a waiting quiesce cannot start its teardown while
+	// this one's sqlite close is still running behind it.
+	pthread_mutex_unlock(&quiesce_lock);
 }
 
 unsigned abs_download_card_generation(void) {

@@ -43,6 +43,7 @@
 #include "src/system/audio/headset.h"
 #include "src/system/input/keymap.h"
 #include "src/system/streaming/abs_profiles.h"
+#include "src/system/streaming/abs_download.h"
 #include "src/system/streaming/audiobookshelf.h"
 #include "src/system/streaming/qobuz.h"
 #include "src/system/streaming/tidal.h"
@@ -2188,6 +2189,35 @@ int main(int argc, char **argv) {
 
 		// And the radio's own: the starred stations and the last few played.
 		radio_store_open(db_root);
+
+		// §8.5 main.c row: the Audiobookshelf download queue starts here, at
+		// the same lifecycle boundary as the storage it shares -- not from any
+		// stream/settings page, which would order it after the very first
+		// frame and after every other card database. With the real media ops
+		// and the worker enabled it is fully live this early: a job left
+		// QUEUED by the last session resumes before the interface has drawn
+		// anything, exactly like the scan and the caches, and every page that
+		// enqueues later on finds the queue already running.
+		//
+		// The root is the card itself, not the library databases' fallback:
+		// their /tmp park exists so a READ-ONLY card keeps browsing, while
+		// the queue needs the card for both halves of its contract -- the
+		// durable intent database AND the media it writes there. init refuses
+		// when the card cannot host it, the queue stays disarmed, and every
+		// entry point reports "not available" until a card-attach re-init.
+		abs_download_config_t queue_cfg = {
+			.sd_root = gui_cfg.sd_root_path,
+			.ops = audiobookshelf_queue_media_ops(),
+			.enable_worker_thread = true,
+		};
+		if (!abs_download_init(&queue_cfg)) {
+			// One unstartable queue must not take the player's boot down with
+			// it: init disarms, every entry point reports "not available"
+			// until a reopen (a re-init after quiesce, or the next card-attach)
+			// can repair it, and the device keeps everything else it has.
+			fprintf(stderr, "main: the Audiobookshelf download queue did not start on %s\n",
+					gui_cfg.sd_root_path);
+		}
 	}
 
 	// TLS, so an https:// station can be opened at all. Warmed up here rather
@@ -2444,6 +2474,18 @@ int main(int argc, char **argv) {
 			}
 		}
 	}
+
+	// The loop exit is the host simulator's stop path (on the device the
+	// power goes while the process is still running), so this is the formal
+	// matching shutdown boundary for the queue lifecycle opened at the DB
+	// block above: the worker acknowledges and joins, the queue database
+	// closes, and nothing of the queue keeps running into process exit --
+	// the same teardown card_databases_detach() and storage_export() run on
+	// their paths (§8.5). Idempotent and safe when the queue was never
+	// armed, or was already taken down by a card detach; a killed process
+	// loses this step by definition, which is what the §8.2 recovery table
+	// is for.
+	abs_download_quiesce_storage();
 
 	printf("\n");
 

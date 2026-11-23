@@ -14,6 +14,8 @@
 #include <strings.h>
 #include <unistd.h>
 
+#include "src/system/streaming/abs_download.h"
+#include "src/system/streaming/audiobookshelf.h"
 #include "src/system/library/audiobookdb.h"
 #include "src/system/library/library.h"
 #include "src/system/core/logging.h"
@@ -705,6 +707,16 @@ static void storage_export(void) {
 	// of play would otherwise read as "the track ended, start it again".
 	device_state_note_storage_gone();
 	audio_stop();
+
+	// §8.5, this wave: the export is a deliberate card removal. The download
+	// queue stops first: the active media op is woken through its slot, the
+	// worker acknowledges -- the engine holds no queue mutex across that join
+	// and we hold only storage_lock here, which the worker never takes -- and
+	// the queue's database closes before the library and audiobook databases
+	// below it do. The unmount then cannot fail on a queue descriptor, and
+	// storage_restore() re-arms the queue when the card comes back.
+	abs_download_quiesce_storage();
+
 	library_close();
 	audiobookdb_close();
 	logging_suspend_for_usb();
@@ -849,6 +861,22 @@ static void storage_restore(void) {
 	library_open(db_path);
 	snprintf(db_path, sizeof(db_path), "%s/.local/audiobooks.db", sd_mount);
 	audiobookdb_open(db_path);
+
+	// §8.5 line 561: the queue re-arms with the card, exactly like
+	// card_databases_attach() on the hot-plug path -- new card generation,
+	// pre-removal snapshots and any racing response rejected. On a card whose
+	// queue database will not open, the queue stays disarmed and says so.
+	{
+		abs_download_config_t queue_cfg = {
+			.sd_root = sd_mount,
+			.ops = audiobookshelf_queue_media_ops(),
+			.enable_worker_thread = true,
+		};
+		if (!abs_download_init(&queue_cfg)) {
+			fprintf(stderr, "abs-download: the queue did not reopen after the USB export at %s\n", sd_mount);
+		}
+	}
+
 	logging_resume_after_usb();
 	btlog_card_attach(sd_mount);
 

@@ -24,6 +24,7 @@
 #include "src/system/playback/device_state.h"
 #include "src/system/remote/dlna.h"
 #include "src/system/remote/sonixlink.h"
+#include "src/system/streaming/abs_download.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/podcastdl.h"
@@ -641,7 +642,15 @@ static bool wifi_in_use(void) {
 		   wifitransfer_get_enabled() || qobuzcache_downloading_id() > 0 ||
 		   qobuzcache_network_wanted() || tidalcache_downloading_id() > 0 || tidalcache_network_wanted() ||
 		   podcastcache_downloading_id() > 0 || podcastcache_network_wanted() || podcastdl_busy() ||
-		   lastfm_network_wanted() || ota_busy();
+		   lastfm_network_wanted() || ota_busy() ||
+		   // §8.3/§8.5, this wave: the Audiobookshelf download queue is the
+		   // same kind of network work as those *_downloading_id()>0 halves --
+		   // one FETCHING/DOWNLOADING/FINALIZING job at a time, each waiting
+		   // on the server like a cached-track fetch would. A queue in
+		   // WAITING_NETWORK/PAUSED holds no network activity and counts as
+		   // nothing here, which is honest: it resumes when the radio comes
+		   // back anyway.
+		   abs_download_busy();
 }
 
 // Pushes the next suspend attempt out by the anti-hammer delay. A radio that has
@@ -698,7 +707,12 @@ static bool player_is_busy(bool playing, uint32_t input_idle) {
 		   audiobookdb_scan_running() || wifitransfer_running() || dlna_running() || airplay_running() ||
 		   sonixlink_is_connected() || // a phone driving the player, not a switch left on
 		   qobuzcache_downloading_id() > 0 || tidalcache_downloading_id() > 0 || podcastcache_downloading_id() > 0 ||
-		   ota_busy(); // a firmware update being fetched
+		   // §8.3/§8.5, this wave: an Audiobookshelf download in flight is
+		   // work on the card and against the server, exactly the doing that
+		   // holds the shutdown timer at zero -- and it must not be interrupted
+		   // by a standby that suspends the SoC out from under the transfer.
+		   abs_download_busy() || // an active queue job, on the card and the network
+		   ota_busy();			   // a firmware update being fetched
 }
 
 static void park_bluetooth_now(void) {

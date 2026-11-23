@@ -36,6 +36,8 @@
 #include "src/system/input/hookclicks.h"
 #include "src/system/input/keymap.h"
 #include "src/system/core/panel.h"
+#include "src/system/streaming/abs_download.h"
+#include "src/system/streaming/audiobookshelf.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/podcastsubs.h"
@@ -811,6 +813,18 @@ static void card_databases_detach(void) {
 	// of play would otherwise read as "the track ended, start it again".
 	device_state_note_storage_gone();
 	audio_stop();
+
+	// §8.5, this wave: before any card database closes and before the mount is
+	// taken down, the download queue is asked for quiescence: the active media
+	// op is woken through its slot, the worker acknowledges, and the queue's
+	// database closes beside the others. Nothing held along this path is a
+	// lock the waiting worker or its acknowledgement needs (the engine releases
+	// its own queue mutex across the join; card_lock, taken by our callers, is
+	// a card-state mutex the worker never touches -- not a UI or SQLite lock).
+	// On the card-reopen path card_databases_attach() re-arms the queue, so no
+	// snapshot from before the removal can survive the cycle.
+	abs_download_quiesce_storage();
+
 	podcaststate_set_root(NULL);
 
 	logging_suspend_for_usb(); // closes the on-card log file
@@ -837,6 +851,24 @@ static void card_databases_attach(const char *root) {
 	library_open(path);
 	snprintf(path, sizeof(path), "%.*s/.local/audiobooks.db", room, root);
 	audiobookdb_open(path);
+
+	// §8.5 line 561: the queue comes back with the card, re-armed the same
+	// way boot arms it (real media ops, worker on) and with a bumped card
+	// generation, so any response or snapshot that raced the removal belongs
+	// to a generation nobody accepts any more. Started after the audiobook
+	// database it resets acknowledgement through; a card whose queue database
+	// is unusable arms nothing and reports through the engine instead
+	// (init fails loudly in the log, the device carries on).
+	{
+		abs_download_config_t queue_cfg = {
+			.sd_root = root,
+			.ops = audiobookshelf_queue_media_ops(),
+			.enable_worker_thread = true,
+		};
+		if (!abs_download_init(&queue_cfg)) {
+			fprintf(stderr, "abs-download: the queue did not reopen with the card at %s\n", root);
+		}
+	}
 
 	// The card may have been written somewhere else while it was out: looked
 	// over in the background, as soon as the index is open.
