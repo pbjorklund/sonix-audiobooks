@@ -296,6 +296,9 @@ static bool api_request(const char *path, const http_req_t *request, char **body
 	}
 	if (!path || (size_t)snprintf(url, sizeof(url), "%s%s", server, path) >= sizeof(url)) {
 		memset(token, 0, sizeof(token));
+		// Bounded APIs (§10.3) refuse over-long queries before asking the
+		// network; here the joined URL itself is over the ABS_URL_MAX ceiling.
+		set_error("The request is too long for this server address.");
 		return false;
 	}
 	char headers[ABS_TOKEN_MAX + 32];
@@ -807,6 +810,25 @@ static void read_item(const json_doc_t *doc, int object, audiobookshelf_item_t *
 	if (!item->title[0]) snprintf(item->title, sizeof(item->title), "Untitled");
 }
 
+// One server items page into the caller's bounded array. `total` is the
+// server's overall count for the current sort/filter (§10.1 page controls).
+static int abs_read_items_page(const char *body, audiobookshelf_item_t *out, int max,
+							   int *total_out, const char *invalid_error) {
+	json_doc_t doc;
+	if (!body || !json_parse(body, &doc)) {
+		set_error(invalid_error);
+		return -1;
+	}
+	int root = json_root(&doc);
+	if (total_out) *total_out = (int)json_obj_long(&doc, root, "total", 0);
+	int results = json_get(&doc, root, "results");
+	int count = json_len(&doc, results);
+	if (count > max) count = max;
+	for (int i = 0; i < count; i++) read_item(&doc, json_at(&doc, results, i), &out[i]);
+	json_free(&doc);
+	return count;
+}
+
 int audiobookshelf_libraries(audiobookshelf_library_t *out, int max) {
 	if (!out || max <= 0) return 0;
 	char *body = NULL;
@@ -841,6 +863,10 @@ int audiobookshelf_items(const char *library_id, int page, audiobookshelf_item_t
 	return audiobookshelf_filtered_items(library_id, page, "", out, max, total_out);
 }
 
+// Legacy M1 entry point, kept for the un-migrated GUI (§10.3). The request
+// below is byte-for-byte what 0.6.0 M1 sends (no `desc`, `sort=sequence` for
+// series filters) so the mock-log and GUI-smoke assertions keep their meaning;
+// the general contract lives in audiobookshelf_browse() above.
 int audiobookshelf_filtered_items(const char *library_id, int page, const char *filter,
 	 audiobookshelf_item_t *out, int max, int *total_out) {
 	if (!library_id || !library_id[0] || !out || max <= 0) return 0;
@@ -857,66 +883,245 @@ int audiobookshelf_filtered_items(const char *library_id, int page, const char *
 		free(body);
 		return -1;
 	}
-	json_doc_t doc;
-	if (!json_parse(body, &doc)) {
-		free(body);
-		set_error("Audiobookshelf returned invalid book data.");
-		return -1;
-	}
-	int root = json_root(&doc);
-	if (total_out) *total_out = (int)json_obj_long(&doc, root, "total", 0);
-	int results = json_get(&doc, root, "results");
-	int count = json_len(&doc, results);
-	if (count > max) count = max;
-	for (int i = 0; i < count; i++) read_item(&doc, json_at(&doc, results, i), &out[i]);
-	json_free(&doc);
+	int count = abs_read_items_page(body, out, max, total_out,
+									"Audiobookshelf returned invalid book data.");
 	free(body);
 	return count;
 }
 
-void audiobookshelf_group_filter(bool series, const char *id, char *out, size_t size) {
-	static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	char encoded[ABS_ID_MAX * 2];
-	size_t n = strlen(id), k = 0;
-	if (n >= ABS_ID_MAX) { if (size) out[0] = 0; return; }
-	for (size_t i = 0; i < n; i += 3) {
-		unsigned value = (unsigned char)id[i] << 16;
-		if (i + 1 < n) value |= (unsigned char)id[i + 1] << 8;
-		if (i + 2 < n) value |= (unsigned char)id[i + 2];
-		encoded[k++] = alphabet[(value >> 18) & 63];
-		encoded[k++] = alphabet[(value >> 12) & 63];
-		encoded[k++] = i + 1 < n ? alphabet[(value >> 6) & 63] : '=';
-		encoded[k++] = i + 2 < n ? alphabet[value & 63] : '=';
+// Standard padded Base64 (§10.1): the "authors./series./genres./tags." filter
+// values are built with the STANDARD alphabet -- "+" and "/" -- and "="-padded,
+// explicitly not the URL-safe variant. URL encoding below is what carries "+",
+// "/" and "=" through the query string. False when `len`'s output would not
+// fit `size` bytes with the terminator.
+static bool abs_b64_encode(const char *in, size_t len, char *out, size_t size) {
+	static const char alphabet[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	if (!out || size == 0 || !in || (len + 2) / 3 * 4 + 1 > size) return false;
+	size_t k = 0;
+	for (size_t i = 0; i < len; i += 3) {
+		unsigned value = (unsigned char)in[i] << 16;
+		if (i + 1 < len) value |= (unsigned char)in[i + 1] << 8;
+		if (i + 2 < len) value |= (unsigned char)in[i + 2];
+		out[k++] = alphabet[(value >> 18) & 63];
+		out[k++] = alphabet[(value >> 12) & 63];
+		out[k++] = i + 1 < len ? alphabet[(value >> 6) & 63] : '=';
+		out[k++] = i + 2 < len ? alphabet[value & 63] : '=';
 	}
-	encoded[k] = 0;
-	snprintf(out, size, "%s.%s", series ? "series" : "authors", encoded);
+	out[k] = '\0';
+	return true;
+}
+
+// The value prefix for one group filter (§10.1). NULL for no group or an
+// out-of-range input.
+static const char *abs_filter_prefix(abs_browse_filter_t group) {
+	switch (group) {
+	case ABS_FILTER_AUTHOR: return "authors";
+	case ABS_FILTER_SERIES: return "series";
+	case ABS_FILTER_GENRE: return "genres";
+	case ABS_FILTER_TAG: return "tags";
+	case ABS_FILTER_NONE: break;
+	}
+	return NULL;
+}
+
+bool abs_browse_query_default_desc(abs_browse_sort_t sort) {
+	// §10.1 default direction: only "recently added" opens newest-first; the
+	// duration toggle permits longest first, and everything else reads ascending.
+	return sort == ABS_SORT_ADDED_AT;
+}
+
+const char *abs_browse_sort_field(abs_browse_sort_t sort) {
+	switch (sort) {
+	case ABS_SORT_TITLE: return "media.metadata.title";
+	case ABS_SORT_AUTHOR: return "media.metadata.authorNameLF"; // last-name-first
+	case ABS_SORT_ADDED_AT: return "addedAt";
+	case ABS_SORT_DURATION: return "media.duration";
+	case ABS_SORT_SERIES_POSITION: return "sequence";
+	}
+	return NULL; // out-of-range enum cast: caller error, never guess
+}
+
+bool abs_browse_query_build_filter(abs_browse_filter_t group, const char *value,
+								   char *out, size_t size) {
+	if (!out || size == 0) return false;
+	out[0] = '\0';
+	const char *prefix = value ? abs_filter_prefix(group) : NULL;
+	if (!prefix || !value[0]) return false;
+	char encoded[(ABS_NAME_MAX + 2) / 3 * 4 + 1];
+	if (!abs_b64_encode(value, strlen(value), encoded, sizeof(encoded))) return false;
+	// The whole "<prefix>.<base64>" value is URL-encoded (§10.1). Compute the
+	// encoded length first: http_url_encode() truncates silently and a cut
+	// filter would look like a valid but wrong query to the server.
+	char raw[8 + sizeof(encoded)];
+	size_t raw_len = (size_t)snprintf(raw, sizeof(raw), "%s.%s", prefix, encoded);
+	if (raw_len >= sizeof(raw)) return false;
+	// Same safe-set decision http_url_encode() makes: unreserved ASCII takes
+	// one byte, everything else expands to %XX.
+	size_t need = 1;
+	for (size_t i = 0; i < raw_len; i++) {
+		unsigned char c = (unsigned char)raw[i];
+		need += ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+				 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+				 c == '~') ? 1 : 3;
+	}
+	if (need > size) return false;
+	http_url_encode(raw, out, size);
+	return out[0] != '\0';
+}
+
+// Fills and validates a bounded browse query. Series-position sort is refused
+// without a series filter (§10.1: "series-filter default only") -- a guess
+// would silently order series-less rows by a field they do not carry.
+bool abs_browse_query_init(abs_browse_query_t *query, const char *library_id,
+						   abs_browse_sort_t sort, abs_browse_filter_t group,
+						   const char *group_value, int page, bool descending) {
+	if (!query || !library_id || !library_id[0]) return false;
+	memset(query, 0, sizeof(*query));
+	if (!abs_browse_sort_field(sort)) return false;
+	if (group != ABS_FILTER_NONE && !abs_filter_prefix(group)) return false;
+	if (sort == ABS_SORT_SERIES_POSITION && group != ABS_FILTER_SERIES) return false;
+	if (strlen(library_id) >= sizeof(query->library_id)) return false;
+	snprintf(query->library_id, sizeof(query->library_id), "%s", library_id);
+	query->sort = sort;
+	query->descending = descending;
+	query->filter = group;
+	if (group != ABS_FILTER_NONE) {
+		// Author/series take an object id; genre/tag take the string itself
+		// (§10.1). Both arrive as filter_value; the builder knows the shape.
+		char empty = '\0';
+		const char *value = group_value ? group_value : &empty;
+		if (!value[0] || strlen(value) >= sizeof(query->filter_value)) return false;
+		snprintf(query->filter_value, sizeof(query->filter_value), "%s", value);
+	}
+	query->page = page < 0 ? 0 : page; // §10.1 pages are zero-based
+	return true;
+}
+
+// The §10.1 request template, byte for byte: limit, page, sort, desc,
+// minified, collapseseries, filter. `filter=` is present even when empty --
+// the template always carries it, and an empty value is a valid "no filter"
+// to the reviewed route (the mock decodes "" to no filter as well).
+static bool abs_browse_request_path(const abs_browse_query_t *query, char *path, size_t size) {
+	if (!query || !path || size == 0) return false;
+	const char *field = abs_browse_sort_field(query->sort);
+	if (!field) return false;
+	if (query->filter != ABS_FILTER_NONE && !abs_filter_prefix(query->filter)) return false;
+	if (query->sort == ABS_SORT_SERIES_POSITION && query->filter != ABS_FILTER_SERIES) return false;
+	// Worst URL-encoded filter: "authors." (8) + Base64 of a 255-byte value
+	// (ceil(255/3)*4 = 340) + terminator, with every byte at %XX (3x) ≈ 1048.
+	char id[ABS_ID_MAX * 3], filter[1050];
+	http_url_encode(query->library_id, id, sizeof(id));
+	if (query->filter == ABS_FILTER_NONE) {
+		filter[0] = '\0';
+	} else if (!abs_browse_query_build_filter(query->filter, query->filter_value,
+												 filter, sizeof(filter))) {
+		return false;
+	}
+	int page = query->page < 0 ? 0 : query->page;
+	int written = snprintf(path, size,
+						   "/api/libraries/%s/items?limit=%d&page=%d&sort=%s&desc=%s&minified=0&collapseseries=0&filter=%s",
+						   id, ABS_BROWSE_PAGE_LIMIT, page, field,
+						   query->descending ? "1" : "0", filter);
+	return written > 0 && (size_t)written < size;
+}
+
+int audiobookshelf_browse(const abs_browse_query_t *query, audiobookshelf_item_t *out,
+						  int max, int *total_out) {
+	if (!query || !out || max <= 0) return 0;
+	char path[1600];
+	if (!abs_browse_request_path(query, path, sizeof(path))) {
+		// A genre/tag string close to the name ceiling can outgrow one URL;
+		// refusing beats shipping a server-rewriting truncated value.
+		set_error("The browse query is too long for this server address.");
+		return 0;
+	}
+	char *body = NULL;
+	if (!api_request(path, NULL, &body, NULL, NULL)) {
+		free(body);
+		return -1;
+	}
+	int count = abs_read_items_page(body, out, max, total_out,
+									"Audiobookshelf returned invalid book data.");
+	free(body);
+	return count;
 }
 
 static int group_compare(const void *a, const void *b) {
 	return strcasecmp(((const audiobookshelf_library_t *)a)->name, ((const audiobookshelf_library_t *)b)->name);
 }
 
-int audiobookshelf_groups(const char *library_id, bool series, audiobookshelf_library_t **out) {
+// filterdata choices for one group (§10.1). Authors and series arrive as
+// {id,name} objects and need both fields. Genres and tags carry "the string
+// itself": reviewed servers send bare strings while the checked-in fixtures
+// model them as {id,name} objects -- either way the FILTER VALUE is the name,
+// never an object id, so it goes into `name` alone and `id` stays empty.
+static const char *abs_group_key(abs_browse_filter_t group) {
+	switch (group) {
+	case ABS_FILTER_AUTHOR: return "authors";
+	case ABS_FILTER_SERIES: return "series";
+	case ABS_FILTER_GENRE: return "genres";
+	case ABS_FILTER_TAG: return "tags";
+	case ABS_FILTER_NONE: break;
+	}
+	return NULL;
+}
+
+static bool abs_group_name_only(abs_browse_filter_t group) {
+	return group == ABS_FILTER_GENRE || group == ABS_FILTER_TAG;
+}
+
+int audiobookshelf_groups_ex(const char *library_id, abs_browse_filter_t group,
+							 audiobookshelf_library_t **out) {
+	const char *key = abs_group_key(group);
+	if (out) *out = NULL;
+	if (!library_id || !key || !out) return 0;
 	char id[ABS_ID_MAX * 3], path[384], *body = NULL;
-	*out = NULL;
 	http_url_encode(library_id, id, sizeof(id));
 	snprintf(path, sizeof(path), "/api/libraries/%s/filterdata", id);
 	if (!api_request(path, NULL, &body, NULL, NULL)) { free(body); return -1; }
 	json_doc_t doc;
 	if (!json_parse(body, &doc)) { free(body); set_error("Invalid library filters."); return -1; }
-	int array = json_get(&doc, json_root(&doc), series ? "series" : "authors");
+	int array = json_get(&doc, json_root(&doc), key);
 	int count = json_len(&doc, array), written = 0;
 	audiobookshelf_library_t *groups = count > 0 ? calloc(count, sizeof(*groups)) : NULL;
 	if (count > 0 && !groups) { json_free(&doc); free(body); set_error("Not enough memory for library filters."); return -1; }
 	for (int i = 0; i < count; i++) {
 		int entry = json_at(&doc, array, i);
-		json_obj_str(&doc, entry, "id", groups[written].id, sizeof(groups[written].id));
-		json_obj_str(&doc, entry, "name", groups[written].name, sizeof(groups[written].name));
-		if (groups[written].id[0] && groups[written].name[0]) written++;
+		audiobookshelf_library_t *slot = &groups[written];
+		if (!abs_group_name_only(group)) {
+			json_obj_str(&doc, entry, "id", slot->id, sizeof(slot->id));
+			json_obj_str(&doc, entry, "name", slot->name, sizeof(slot->name));
+			// An author/series choice needs id and name.
+			if (slot->id[0] && slot->name[0]) written++;
+			continue;
+		}
+		// §10.1: a genre/tag choice's value is the string itself. The checked-
+		// in fixtures model the entries as {id,name} objects, reviewed servers
+		// as bare strings -- the name is what the filter encodes either way.
+		char text[ABS_NAME_MAX];
+		if (json_str(&doc, entry, text, sizeof(text)) && text[0])
+			snprintf(slot->name, sizeof(slot->name), "%s", text);
+		else
+			json_obj_str(&doc, entry, "name", slot->name, sizeof(slot->name));
+		if (slot->name[0]) written++;
 	}
 	if (written > 1) qsort(groups, written, sizeof(*groups), group_compare);
 	json_free(&doc); free(body); *out = groups;
 	return written;
+}
+
+int audiobookshelf_groups(const char *library_id, bool series, audiobookshelf_library_t **out) {
+	return audiobookshelf_groups_ex(library_id, series ? ABS_FILTER_SERIES : ABS_FILTER_AUTHOR, out);
+}
+
+void audiobookshelf_group_filter(bool series, const char *id, char *out, size_t size) {
+	if (!out || size == 0) return;
+	out[0] = '\0';
+	if (!id || strlen(id) >= ABS_ID_MAX) return;
+	char encoded[ABS_ID_MAX * 2];
+	if (!abs_b64_encode(id, strlen(id), encoded, sizeof(encoded))) return;
+	snprintf(out, size, "%s.%s", series ? "series" : "authors", encoded);
 }
 
 int audiobookshelf_search(const char *library_id, const char *query, audiobookshelf_item_t *out, int max) {
@@ -943,6 +1148,54 @@ int audiobookshelf_search(const char *library_id, const char *query, audiobooksh
 	}
 	json_free(&doc);
 	free(body);
+	return written;
+}
+
+// §10.1 search: the reviewed route has no offset/page/total and does not
+// accept the item-query sort/filter contract, so there is nothing to page
+// through -- the whole ceiling is asked for in one request and the 101st
+// usable match becomes `has_more` evidence. `q=` is URL-encoded by
+// http_url_encode(); retention is min(max, ABS_SEARCH_DISPLAY_LIMIT) in
+// server-returned order (ABS does not document a relevance order, and no
+// local re-sort may claim otherwise).
+int audiobookshelf_search_ex(const char *library_id, const char *query, audiobookshelf_item_t *out,
+							 int max, bool *has_more) {
+	if (has_more) *has_more = false;
+	if (!library_id || !library_id[0] || !query || !query[0] || !out || max <= 0) return 0;
+	int keep = max > ABS_SEARCH_DISPLAY_LIMIT ? ABS_SEARCH_DISPLAY_LIMIT : max;
+	char id[ABS_ID_MAX * 3], encoded[ABS_NAME_MAX * 3], path[1200];
+	http_url_encode(library_id, id, sizeof(id));
+	// A query over ABS_NAME_MAX - 1 bytes would be silently truncated by the
+	// encoder into a different search; refuse instead. (The legacy entry point
+	// keeps its old silent truncation for the un-migrated GUI.)
+	if (strlen(query) >= ABS_NAME_MAX) {
+		set_error("The search text is too long.");
+		return 0;
+	}
+	http_url_encode(query, encoded, sizeof(encoded));
+	snprintf(path, sizeof(path), "/api/libraries/%s/search?q=%s&limit=%d", id, encoded,
+			 ABS_SEARCH_REQUEST_LIMIT);
+	char *body = NULL;
+	if (!api_request(path, NULL, &body, NULL, NULL)) { free(body); return -1; }
+	json_doc_t doc;
+	if (!json_parse(body, &doc)) {
+		free(body);
+		set_error("Audiobookshelf returned invalid search data.");
+		return -1;
+	}
+	int results = json_get(&doc, json_root(&doc), "book");
+	int count = json_len(&doc, results), written = 0;
+	bool probe = false;
+	for (int i = 0; i < count && !probe; i++) {
+		audiobookshelf_item_t item;
+		read_item(&doc, json_get(&doc, json_at(&doc, results, i), "libraryItem"), &item);
+		if (!item.id[0]) continue; // malformed entries are not probe evidence
+		if (written < keep) out[written++] = item;
+		else probe = true; // the 101st usable match: honest overflow (§10.1)
+	}
+	json_free(&doc);
+	free(body);
+	if (has_more) *has_more = probe;
 	return written;
 }
 

@@ -109,6 +109,15 @@ bool abs_profiles_server_valid(const char *server, char *normalized_out, size_t 
 		set_reason(reason_out, reason_size, "missing host");
 		return false;
 	}
+	// An authority that starts with ':' has no host at all -- "http://:40703"
+	// is a port with a missing host, not a numeric one. RFC 3986 puts the port
+	// AFTER the colon, so "http://40703" stays a legal reg-name host and is
+	// accepted; the colon-first form would send requests to an empty Host and
+	// is refused here, before any profile is stored.
+	if (*rest == ':') {
+		set_reason(reason_out, reason_size, "missing host");
+		return false;
+	}
 	for (const char *p = normalized; *p; p++) {
 		if (*p == '@') {
 			set_reason(reason_out, reason_size, "userinfo not allowed");

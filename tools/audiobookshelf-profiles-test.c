@@ -129,6 +129,14 @@ static void validation_tests(void) {
 	// the behavior so a later "fix" must either justify a contract change or
 	// keep the acceptance.
 	assert(valid("http://40703", "http://40703"));
+
+	// The M2 query work exposed the genuinely empty-host shape: an authority
+	// that begins with ':' carries a port but no host at all ("http://:40703"),
+	// which would put an empty Host header on the wire. Unlike the reg-name
+	// above, the colon has nothing to its left here -- refused.
+	assert(valid("http://:40703", NULL));
+	assert(valid("https://:/", NULL));
+	assert(valid("http://:9999/path", NULL));
 }
 
 // ---------------------------------------------------------------------------
