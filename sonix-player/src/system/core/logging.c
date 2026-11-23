@@ -444,6 +444,10 @@ static int relay_write = -1;
 static void relay_line(const char *line, size_t len) {
 	if (len > 0) {
 		fprintf(stderr, "%.*s\n", (int)len, line);
+		// The re-write rides on the log file's stdio buffer; without a flush
+		// here the last of a quiet stretch (a calibration dump on an otherwise
+		// idle screen) would surface only when the process exits.
+		fflush(stderr);
 	}
 }
 

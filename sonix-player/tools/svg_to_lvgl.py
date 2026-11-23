@@ -232,6 +232,8 @@ ICONS = [
     # The bin in a file's action menu. Not icon_delete, which despite the name
     # is the keyboard's backspace arrow.
     ("trash.svg", "trash", 34),
+    # The edit button at the right of a profile row (audiobookshelf picker).
+    ("pencil.svg", "pencil", 30),
     ("folder-new.svg", "folder_new", 34),
     # The grip at the right of a draggable row, in the keyboard layout page.
     ("grip-horizontal.svg", "grip", 36),

@@ -131,6 +131,7 @@ extern const lv_image_dsc_t icon_files_update;
 extern const lv_image_dsc_t icon_files_game;
 extern const lv_image_dsc_t icon_files_book;
 extern const lv_image_dsc_t icon_trash;
+extern const lv_image_dsc_t icon_pencil;
 extern const lv_image_dsc_t icon_folder_new;
 extern const lv_image_dsc_t icon_grip;
 extern const lv_image_dsc_t icon_reorder;

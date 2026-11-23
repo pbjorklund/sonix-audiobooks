@@ -1,5 +1,7 @@
 #include "confirm.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "src/gui/fonts/fonts.h"
@@ -169,6 +171,27 @@ static void refresh_theme(void) {
 	}
 }
 
+#ifdef HOST_BUILD
+static void confirm_dump_timer_cb(lv_timer_t *timer) {
+	(void)timer;
+	if (!veil || lv_obj_is_hidden(veil)) return;
+	const struct {
+		const char *name;
+		lv_obj_t *obj;
+	} buttons[] = {{"ok", ok_btn}, {"cancel", cancel_btn}};
+	for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+		if (!buttons[i].obj || lv_obj_is_hidden(buttons[i].obj)) continue;
+		lv_area_t a;
+		lv_obj_get_coords(buttons[i].obj, &a);
+		fprintf(stderr, "CONFIRMDUMP %s x=%ld y=%ld\n", buttons[i].name, (long)((a.x1 + a.x2) / 2),
+				(long)((a.y1 + a.y2) / 2));
+	}
+	// The harness polls this file with nothing else logging before it reads;
+	// leave the lines there at once instead of in the stdio buffer.
+	fflush(stderr);
+}
+#endif
+
 void confirm_show(const char *title, const char *message, const char *ok_text, void (*on_ok)(void *user),
 				  void *user) {
 	if (!veil) {
@@ -196,6 +219,15 @@ void confirm_show(const char *title, const char *message, const char *ok_text, v
 
 	lv_obj_set_hidden(veil, false);
 	lv_obj_move_foreground(veil);
+
+#ifdef HOST_BUILD
+	// Calibration aid for the UI smoke tests: while SONIX_CONFIRM_DUMP is set,
+	// print the button centres a moment after layout settles. Host builds only;
+	// inert on the device.
+	if (getenv("SONIX_CONFIRM_DUMP") && getenv("SONIX_CONFIRM_DUMP")[0]) {
+		lv_timer_create(confirm_dump_timer_cb, 600, NULL);
+	}
+#endif
 }
 
 void confirm_notice(const char *title, const char *message) {

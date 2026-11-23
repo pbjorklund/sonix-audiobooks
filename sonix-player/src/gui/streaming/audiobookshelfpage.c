@@ -38,11 +38,6 @@ lv_obj_t *audiobookshelf_screen;
 static gui_config_t *config;
 static lv_obj_t *content;
 static lv_obj_t *page_title;
-static lv_obj_t *setup_screen;
-static lv_obj_t *server_field;
-static lv_obj_t *token_field;
-static lv_obj_t *token_eye_icon;
-static keyboard_t *setup_keyboard;
 static lv_obj_t *search_screen, *search_field;
 static keyboard_t *search_keyboard;
 static char search_query[ABS_NAME_MAX];
@@ -141,42 +136,14 @@ static void show_note(const char *message) {
 	lv_obj_set_style_pad_ver(note, 22, 0);
 }
 
-static void open_setup_cb(lv_event_t *e) {
-	(void)e;
-	lv_textarea_set_text(server_field, audiobookshelf_server());
-	lv_textarea_set_text(token_field, "");
-	lv_textarea_set_password_mode(token_field, true);
-	lv_image_set_src(token_eye_icon, &icon_eye);
-	keyboard_refresh_password(token_field);
-	keyboard_reset(setup_keyboard);
-	keyboard_set_field(setup_keyboard, server_field);
-	lv_obj_add_state(server_field, LV_STATE_FOCUSED);
-	lv_obj_remove_state(token_field, LV_STATE_FOCUSED);
-	keyboard_show_caret(server_field, true);
-	keyboard_show_caret(token_field, false);
-	switch_screen(setup_screen);
-}
-
-// The profile picker's add-a-server row: the same setup screen the top row
-// used before the picker existed. Its conversion into the profile Add/Edit
-// editor (§11.6) is a later piece; saving here still routes through the
-// committed legacy-config path.
-static void picker_setup_cb(void *user) {
-	(void)user;
-	open_setup_cb(NULL);
-}
-
-// A profile was selected in the picker and the store has already persisted it.
-// §11.4: the switch increments the browse generation, clears remote list/detail
-// state, and loads the new active profile's libraries; queue jobs and manifests
-// are untouched, and the next browse request resolves its credentials against
-// the newly active profile. The bump happens before the clear so an in-flight
-// result from the old profile is stale by the time it lands: job_done_async
-// discards it instead of repainting this page with another server's data (and a
-// tap on a stale row could never send that item id to the active server), and
-// the reload below queues behind it rather than being dropped while busy.
-static void profile_selected_cb(void *user) {
-	(void)user;
+// The shared half of every "the browsing session changed" path (§11.4): a
+// profile switch, a newly added active profile, or the last one removed. The
+// generation bump happens before the clear so an in-flight result from the old
+// profile is stale by the time it lands: job_done_async discards it instead of
+// repainting this page with another server's data (and a tap on a stale row
+// could never send that item id to the active server). Queue jobs and manifests
+// are untouched -- they resolve their own credentials.
+static void clear_browse_state(void) {
 	pthread_mutex_lock(&job_lock);
 	browse_generation++; // invalidate every in-flight or queued old-profile result
 	view = VIEW_LIBRARIES;
@@ -192,11 +159,38 @@ static void profile_selected_cb(void *user) {
 	selected_item = -1;
 	selected_local_book[0] = '\0';
 	pthread_mutex_unlock(&job_lock);
+}
 
+// A profile was selected in the picker and the store has already persisted it:
+// clear remote state and load the newly active profile's libraries. The reload
+// queues behind any in-flight job rather than being dropped while busy.
+static void profile_selected_cb(void *user) {
+	(void)user;
+	clear_browse_state();
 	draw_libraries();
 	if (!audiobookshelf_configured() || !wifi_connected()) return;
 	job_t job = {.kind = JOB_LIBRARIES};
 	run_loading(&job);
+}
+
+// The editor saved an edit to the ACTIVE profile -- possibly with a new token:
+// check it against GET /api/libraries while the editor stays up (§11.4). On
+// success job_done_async steps back from the editor and toasts; on failure the
+// error popup lands over the fields so the value can be corrected in place, as
+// the setup screen used to allow.
+static void validate_profile_cb(void *user) {
+	(void)user;
+	job_t job = {.kind = JOB_TEST};
+	run_loading(&job);
+}
+
+// The active profile was removed (other profiles may remain): clear remote
+// state and show the unconfigured view, as a fresh store would. Selecting one
+// of the remaining profiles is a deliberate tap from the picker.
+static void active_lost_cb(void *user) {
+	(void)user;
+	clear_browse_state();
+	draw_libraries();
 }
 
 static void open_profiles_cb(lv_event_t *e) {
@@ -454,14 +448,16 @@ static void draw_libraries(void) {
 	lv_label_set_text(page_title, tr("audiobookshelf"));
 	lv_obj_clean(content);
 
-	// §11.4: the current profile is the page's top row and opens the picker.
-	// While no profile is active (0.5.0 store, migration window) the row keeps
-	// its old meaning -- the legacy server display, opening setup directly.
+	// §11.4: the current profile is the page's top row and opens the picker --
+	// which also holds the Add row, so a store with no profiles yet leads there
+	// too (through "Add a server") instead of the retired setup screen. While
+	// no profile is active (0.5.0 store, migration window) the value keeps its
+	// old meaning: the legacy server display.
 	char label[ABS_SERVER_MAX];
 	bool have_active = abs_profiles_active(NULL, 0);
 	lv_obj_t *server_value = NULL;
 	settingsrow_add(content, have_active ? "audiobookshelf_profile" : "audiobookshelf_server",
-					&server_value, have_active ? open_profiles_cb : open_setup_cb, NULL);
+					&server_value, open_profiles_cb, NULL);
 	top_row_label(label, sizeof(label));
 	if (server_value) {
 		lv_label_set_text(server_value, label);
@@ -763,7 +759,10 @@ static void job_done_async(void *user) {
 
 	switch (done.kind) {
 	case JOB_TEST:
-		if (lv_screen_active() == setup_screen) back_btn_cb(NULL);
+		// A validation that succeeded while the editor was up steps back to
+		// the picker; a failure already popped over it, where the value can be
+		// corrected and re-saved.
+		if (lv_screen_active() == audiobookshelfprofiles_editor_screen()) back_btn_cb(NULL);
 		toast_success("audiobookshelf_connected");
 		draw_libraries();
 		break;
@@ -933,53 +932,9 @@ static void page_loaded_cb(lv_event_t *e) {
 	run_loading(&job);
 }
 
-static void field_focus_cb(lv_event_t *e) {
-	lv_obj_t *field = lv_event_get_target(e);
-	lv_obj_t *other = field == server_field ? token_field : server_field;
-	keyboard_set_field(setup_keyboard, field);
-	lv_obj_add_state(field, LV_STATE_FOCUSED);
-	lv_obj_remove_state(other, LV_STATE_FOCUSED);
-	keyboard_show_caret(field, true);
-	keyboard_show_caret(other, false);
-}
-
-static void token_eye_cb(lv_event_t *e) {
-	(void)e;
-	bool hidden = !lv_textarea_get_password_mode(token_field);
-	lv_textarea_set_password_mode(token_field, hidden);
-	lv_image_set_src(token_eye_icon, hidden ? &icon_eye : &icon_eye_off);
-	keyboard_refresh_password(token_field);
-}
-
-static void setup_accept_cb(lv_event_t *e) {
-	(void)e;
-	const char *server = lv_textarea_get_text(server_field);
-	const char *token = lv_textarea_get_text(token_field);
-	if (!server || !server[0]) {
-		toast_error("audiobookshelf_server_required");
-		return;
-	}
-	// An empty token means keep the saved one while correcting only the URL.
-	if ((!token || !token[0]) && !audiobookshelf_configured()) {
-		toast_error("audiobookshelf_token_required");
-		return;
-	}
-	if (!wifi_connected()) {
-		toast_error("enable_wi_fi_first");
-		return;
-	}
-	if (token && token[0]) audiobookshelf_set_credentials(server, token);
-	else {
-		// The API intentionally does not expose the saved token. Keep it by
-		// changing only the server through the existing config value.
-		const char *saved = config_get("audiobookshelf", "token", "");
-		audiobookshelf_set_credentials(server, saved);
-	}
-	lv_textarea_set_text(token_field, "");
-	job_t job = {.kind = JOB_TEST};
-	run_loading(&job);
-}
-
+// The search field's shape: one line, card fill, caret styled for the keyboard.
+// No focus callback is attached here -- each screen wires its own, since a tap
+// must point that screen's keyboard at the field, not another screen's.
 static lv_obj_t *make_field(lv_obj_t *parent, const char *placeholder, int y) {
 	lv_obj_t *field = lv_textarea_create(parent);
 	lv_textarea_set_one_line(field, true);
@@ -995,43 +950,7 @@ static lv_obj_t *make_field(lv_obj_t *parent, const char *placeholder, int y) {
 	lv_obj_set_style_pad_all(field, 14, 0);
 	lv_obj_set_style_text_font(field, &font_ui_22, 0);
 	keyboard_style_caret(field);
-	lv_obj_add_event_cb(field, field_focus_cb, LV_EVENT_CLICKED, NULL);
 	return field;
-}
-
-static void build_setup(void) {
-	setup_screen = lv_obj_create(NULL);
-	lv_obj_add_style(setup_screen, &theme_style_screen, 0);
-	settingsrow_title(setup_screen, config, "audiobookshelf_setup");
-	int top = settingsrow_content_top(config);
-	server_field = make_field(setup_screen, "audiobookshelf_server_address", top);
-	token_field = make_field(setup_screen, "audiobookshelf_access_token", top + 78);
-	keyboard_style_password(token_field, 0);
-	lv_obj_set_style_pad_right(token_field, 60, 0);
-
-	lv_obj_t *eye = lv_btn_create(setup_screen);
-	lv_obj_set_size(eye, 56, 56);
-	lv_obj_align(eye, LV_ALIGN_TOP_RIGHT, -config->padding - 4, top + 81);
-	lv_obj_set_style_bg_opa(eye, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_shadow_width(eye, 0, 0);
-	lv_obj_set_style_border_width(eye, 0, 0);
-	lv_obj_add_event_cb(eye, token_eye_cb, LV_EVENT_CLICKED, NULL);
-	token_eye_icon = lv_image_create(eye);
-	lv_obj_add_style(token_eye_icon, &theme_style_icon, 0);
-	lv_image_set_src(token_eye_icon, &icon_eye);
-	lv_obj_center(token_eye_icon);
-
-	lv_obj_t *note = lv_label_create(setup_screen);
-	lv_label_set_text(note, tr("audiobookshelf_token_note"));
-	lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(note, config->screen_width - 2 * config->padding);
-	lv_obj_align(note, LV_ALIGN_TOP_LEFT, config->padding, top + 154);
-	lv_obj_add_style(note, &theme_style_text_dim, 0);
-	lv_obj_set_style_text_font(note, &font_ui_18, 0);
-
-	setup_keyboard = keyboard_create(setup_screen, config->screen_width, 316, server_field, NULL, "connect",
-									 setup_accept_cb, NULL);
-	switcher_attach_back_gesture(setup_screen);
 }
 
 void audiobookshelfpage_init(gui_config_t *cfg) {
@@ -1039,10 +958,14 @@ void audiobookshelfpage_init(gui_config_t *cfg) {
 	audiobookshelf_screen = lv_obj_create(NULL);
 	content = settingsrow_page(audiobookshelf_screen, cfg, "audiobookshelf");
 	page_title = settingsrow_page_title(audiobookshelf_screen);
-	build_setup();
+	// The picker owns the profile editor too (§11.6): its delegate tells this
+	// page when a selection or new active profile needs remote state cleared and
+	// libraries loaded, when an edit to the active profile must be validated in
+	// place, and when the last profile was removed.
 	audiobookshelfprofiles_delegate_t profiles_delegate = {
 		.on_selected = profile_selected_cb,
-		.on_setup = picker_setup_cb,
+		.on_validate = validate_profile_cb,
+		.on_active_lost = active_lost_cb,
 		.user = NULL,
 	};
 	audiobookshelfprofiles_init(cfg, &profiles_delegate);
@@ -1050,7 +973,6 @@ void audiobookshelfpage_init(gui_config_t *cfg) {
 	lv_obj_add_style(search_screen, &theme_style_screen, 0);
 	settingsrow_title(search_screen, config, "search");
 	search_field = make_field(search_screen, "Search library", settingsrow_content_top(config));
-	lv_obj_remove_event_cb(search_field, field_focus_cb);
 	lv_textarea_set_max_length(search_field, ABS_NAME_MAX - 1);
 	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
 	search_keyboard = keyboard_create(search_screen, config->screen_width, 316, search_field,

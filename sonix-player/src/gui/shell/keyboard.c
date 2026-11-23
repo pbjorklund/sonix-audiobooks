@@ -1333,6 +1333,43 @@ static void kb_variants_cb(lv_event_t *e) {
 // construction
 // ---------------------------------------------------------------------------
 
+#ifdef HOST_BUILD
+// The calibration dump (SONIX_KB_DUMP): one line per visible key, its label and
+// the centre point a click would need. The letter keys carry whatever page is
+// showing -- letters on QWERTY, digits and marks on the symbol pages -- so the
+// log of a session that walks the pages gives every key's coordinates.
+static void kb_dump_timer_cb(lv_timer_t *timer) {
+	keyboard_t *kb = lv_timer_get_user_data(timer);
+	if (!kb || !kb->tray || lv_obj_is_hidden(kb->tray)) return;
+	// Only dump while the keyboard's own screen is up: an unloaded screen has
+	// no layout yet -- every key reads (7,7) -- and would log megabytes of
+	// noise between screen switches.
+	if (lv_obj_get_screen(kb->tray) != lv_screen_active()) return;
+
+	fprintf(stderr, "KBDUMP begin\n");
+	for (int i = 0; i < kb->key_count; i++) {
+		const char *txt = kb->letter_label[i] ? lv_label_get_text(kb->letter_label[i]) : "";
+		if (!kb->letter_btn[i] || lv_obj_is_hidden(kb->letter_btn[i]) || !txt[0]) continue;
+		lv_area_t a;
+		lv_obj_get_coords(kb->letter_btn[i], &a);
+		fprintf(stderr, "KBDUMP key %s x=%ld y=%ld\n", txt, (long)((a.x1 + a.x2) / 2), (long)((a.y1 + a.y2) / 2));
+	}
+	lv_obj_t *mode_btn = kb->mode_label ? lv_obj_get_parent(kb->mode_label) : NULL;
+	const struct {
+		const char *name;
+		lv_obj_t *obj;
+	} specials[] = {{"delete", kb->delete_btn}, {"shift", kb->shift_btn}, {"mode", mode_btn}, {"accept", kb->accept_btn}};
+	for (size_t i = 0; i < sizeof(specials) / sizeof(specials[0]); i++) {
+		if (!specials[i].obj || lv_obj_is_hidden(specials[i].obj)) continue;
+		lv_area_t a;
+		lv_obj_get_coords(specials[i].obj, &a);
+		fprintf(stderr, "KBDUMP %s x=%ld y=%ld\n", specials[i].name, (long)((a.x1 + a.x2) / 2), (long)((a.y1 + a.y2) / 2));
+	}
+	fprintf(stderr, "KBDUMP end\n");
+	fflush(stderr); // land on disk at once: the harness greps the file live
+}
+#endif
+
 static lv_obj_t *kb_make_row(lv_obj_t *parent, int height) {
 	lv_obj_t *row = lv_obj_create(parent);
 	lv_obj_set_size(row, lv_pct(100), height);
@@ -1908,6 +1945,16 @@ keyboard_t *keyboard_create(lv_obj_t *parent, int width, int height, lv_obj_t *f
 	if (screen) {
 		lv_obj_add_event_cb(screen, kb_screen_left_cb, LV_EVENT_SCREEN_UNLOADED, kb);
 	}
+
+#ifdef HOST_BUILD
+	// Calibration aid for the UI smoke tests: while SONIX_KB_DUMP is set, print
+	// every visible key's centre twice a second so click coordinates can be read
+	// off the log instead of eyeballed. Host builds only; inert on the device.
+	if (getenv("SONIX_KB_DUMP") && getenv("SONIX_KB_DUMP")[0]) {
+		lv_timer_create(kb_dump_timer_cb, 2000, kb);
+	}
+#endif
+
 	return kb;
 }
 
