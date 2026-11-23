@@ -47,6 +47,12 @@ static __thread long long last_server_time_ms;
 
 long long http_last_server_time_ms(void) { return last_server_time_ms; }
 
+// Whether this thread's last response was cut at the caller's body limit; see
+// http_last_truncated() in http.h.
+static __thread bool last_truncated;
+
+bool http_last_truncated(void) { return last_truncated; }
+
 static void clear_last_error(void) {
 	last_error[0] = '\0';
 }
@@ -540,6 +546,7 @@ typedef struct {
 	size_t used;
 	size_t cap;
 	size_t limit;
+	bool truncated; // the caller's limit cut a body that had more coming
 } body_t;
 
 static bool body_reserve(body_t *b, size_t extra) {
@@ -547,7 +554,8 @@ static bool body_reserve(body_t *b, size_t extra) {
 		return true;
 	}
 	if (b->cap >= b->limit) {
-		return false; // at the ceiling: truncate rather than eat the heap
+		b->truncated = true; // at the ceiling, with more of the body arriving
+		return false;        // truncate rather than eat the heap
 	}
 
 	size_t want = b->cap ? b->cap : 16 * 1024;
@@ -884,8 +892,15 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 			// Beyond the caller's limit every reading is the deliberate
 			// truncation case below, so clamping the claim there is
 			// behavior-identical and keeps the loop counters in size_t.
+			// A claim over the limit is itself the truncation signal: the
+			// framing can never deliver what the header promised, whatever
+			// the socket then carries (this parse is long long end to end,
+			// so a 3000000000-byte claim stays 3000000000 on a 32-bit long).
 			size_t content_length =
 				claimed >= (long long)body.limit ? (size_t)body.limit : (size_t)claimed;
+			if (claimed > (long long)body.limit) {
+				body.truncated = true;
+			}
 			if (!read_length(&conn, &body, content_length, op)) {
 				// Less than promised: the response is broken, not short.
 				// Delivering it anyway means half a JPEG or, worse, an audio
@@ -905,6 +920,12 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 	}
 
 	conn_close_op(&conn, op);
+
+	// Publish this hop's truncation outcome before anything else inspects the
+	// body: a redirect hop overwrites it with the next hop's, and a failed hop
+	// leaves the reset value from http_request(). Callers only consult it
+	// after a success, so the exact state after a failure is not a contract.
+	last_truncated = body.truncated;
 
 	if (!body.data) {
 		// An empty 200 is not an answer to anything asked here, except for
@@ -957,6 +978,9 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 	}
 
 	clear_last_error();
+	// The truncation signal is per request, like last_error: get_once()
+	// publishes its hop's outcome, and a new request starts from "not cut".
+	last_truncated = false;
 
 	char current[2600];
 	snprintf(current, sizeof(current), "%s", url);

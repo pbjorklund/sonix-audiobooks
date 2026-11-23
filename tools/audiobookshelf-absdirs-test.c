@@ -52,6 +52,7 @@ int http_stream_read(http_stream_t *st, void *buf, int len) {
 void http_stream_close(http_stream_t *st) { (void)st; }
 
 const char *http_last_error(void) { return ""; }
+bool http_last_truncated(void) { return false; }
 
 // audiobookdb registers this collation at open; no card database is opened in
 // this harness, but the symbol must exist for the link (same as the outbox test).

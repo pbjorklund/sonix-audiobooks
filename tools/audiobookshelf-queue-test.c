@@ -109,6 +109,16 @@ static bool file_exists(const char *path) {
 	return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
+// A sparse card file: exact size on stat, near-zero blocks on disk. What the
+// §8.8 >2 GiB oracle checks is the counter arithmetic, not the bytes, so the
+// giant transfer stages sparse files instead of writing real ones.
+static void write_sparse(const char *path, long long size) {
+	FILE *f = fopen(path, "wb");
+	CHECK(f != NULL, "cannot create %s: %s\n", path, strerror(errno));
+	CHECK(ftruncate(fileno(f), size) == 0, "sparse %s: %s\n", path, strerror(errno));
+	CHECK(fclose(f) == 0, "close %s: %s\n", path, strerror(errno));
+}
+
 static long long file_bytes(const char *path) {
 	struct stat st;
 	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -204,6 +214,9 @@ static bool block_fetch_next;        // wake tests: the identity fetch blocks li
 static bool block_stream_next;       // wake tests: the file transfer blocks the same way
 static bool probe_cancelled_prev;    // wake tests: the NEXT fetch must see the previous job acknowledged
 static long long prev_job_probe;
+static long long fetch_size_override; // §8.8: track 1's size is a >2 GiB value
+static bool giant_pause_next;         // the first giant transfer publishes mid-file bytes, then pauses
+static long long giant_pause_at;      // the mid-file counter value the giant pause reports
 
 // Per-row import-coordinator knobs (§8.3): every DONE row must carry its OWN
 // values, so tests stamp distinct plan/resume values per queued job and the
@@ -263,6 +276,9 @@ static void fake_reset(void) {
 	block_stream_next = false;
 	probe_cancelled_prev = false;
 	prev_job_probe = 0;
+	fetch_size_override = 0;
+	giant_pause_next = false;
+	giant_pause_at = 0;
 	// The §8.3 import-coordinator surface: same defaults every section saw
 	// before the knobs existed, so prior assertions are unchanged.
 	fake_plan_progress = 0.5;
@@ -470,6 +486,11 @@ static bool op_fetch_identity(void *user, const abs_download_op_ctx_t *ctx,
 		plan_files[i].duration = 300.0;
 		plan_files[i].expected_size = 42 + i;
 	}
+	if (fetch_size_override && count >= 1) {
+		// §8.8 >2 GiB: a size no 32-bit long can hold rides the plan; every
+		// counter, record and database column below must carry it exactly.
+		plan_files[0].expected_size = fetch_size_override;
+	}
 	if (fetch_foreign_url && count > 1) {
 		snprintf(plan_url[1], sizeof(plan_url[1]), "http://evil.invalid/track02.mp3");
 		plan_files[1].source_url = plan_url[1];
@@ -526,6 +547,39 @@ static bool op_file_download(void *user, const abs_download_op_ctx_t *ctx, const
 	CHECK(ordinal >= 1 && ordinal < (int)(sizeof(file_writes) / sizeof(file_writes[0])), "ordinal %d\n",
 		  ordinal);
 	file_writes[ordinal]++;
+
+	if (fetch_size_override && ordinal == 1 && giant_pause_next) {
+		// The giant file's real shape: the counter is published mid-file and
+		// the user pauses there. The published pair (done > 2^31, total
+		// > 2^31) is the exact arithmetic §8.8 pins.
+		giant_pause_next = false;
+		char part[1400];
+		fake_paths(file->final_name, ".part", part, sizeof(part));
+		mkpath(plan_dest_buf);
+		// The mid-file counter value the scenario pinned, no 32-bit long
+		// among them: done > 2^31 with total > 2^31.
+		write_sparse(part, giant_pause_at);
+		abs_download_op_progress(ctx, giant_pause_at, file->expected_size);
+		char err[128] = {0};
+		CHECK(!abs_download_op_cancelled(ctx->cancel), "the giant pause was armed over a cancelled op\n");
+		bool ok = abs_download_pause(ctx->job_id, err, sizeof(err));
+		CHECK(ok, "the giant pause request failed: %s\n", err);
+		return false; // the queue records the PAUSED transition with these counters
+	}
+	if (fetch_size_override && ordinal == 1) {
+		// Resume/completion of the giant file: restart from byte zero per
+		// §8.1 and finish as the exact sparse size, counters included.
+		char final_path[1400];
+		char part[1400];
+		fake_paths(file->final_name, "", final_path, sizeof(final_path));
+		fake_paths(file->final_name, ".part", part, sizeof(part));
+		mkpath(plan_dest_buf);
+		write_sparse(part, file->expected_size);
+		CHECK(rename(part, final_path) == 0, "sparse rename %s: %s\n", final_path, strerror(errno));
+		abs_download_op_progress(ctx, file->expected_size, file->expected_size);
+		*final_size_out = file->expected_size;
+		return true;
+	}
 
 	if (wake_take_bool(&block_stream_next)) {
 		// Cancel during a blocked STREAMING body read (§8.5 line 1157): a
@@ -2308,6 +2362,123 @@ static void test_queue_diagnostics(void) {
 }
 
 // ---------------------------------------------------------------------------
+// §8.8 minimum test list / §14.8 WS2 oracle: counters remain correct above
+// 2 GiB. The counters are long long by construction; on the target -- a
+// 32-bit-`long` MIPS -- only the exact round trip of values no long can hold
+// is proof. One giant file through the real state machine: the queue's RAM
+// counter is published mid-file above 2^31, the user pauses there, the pause
+// persists the pair to the durable row unchanged, the resume restarts the
+// file from byte zero, and the DONE commit carries the full size in the file
+// record and on the card (the job row's own counters are the queue's §8.1
+// terminal reset at that point).
+// ---------------------------------------------------------------------------
+static void test_giant_byte_counters(void) {
+	printf(">2 GiB byte counters: mid-file pause, durable row, resume... ");
+	const long long GIANT = 3000000000LL; // > 2^31; no 32-bit long holds it
+	const long long PAUSE_AT = 2500000000LL;
+	const char *root = mkcard("giant-counters");
+	fake_reset();
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "init failed\n");
+	fetch_size_override = GIANT;
+	giant_pause_next = true;
+	giant_pause_at = PAUSE_AT;
+
+	char err[128] = {0};
+	abs_download_enqueue_t e = episode_req("giant-item", "ep-1", "Giant Item");
+	long long id = 0;
+	CHECK(abs_download_enqueue_episode(&e, &id, NULL, err, sizeof(err)), "giant enqueue: %s\n", err);
+
+	// The op publishes PAUSE_AT above 2^31 and issues the pause itself; the
+	// queue records the PAUSED transition with that exact counter pair.
+	pump_until(id, ABS_DL_PAUSED);
+	abs_download_snapshot_t snap;
+	const abs_download_job_t *j = snap_job(id, &snap);
+	CHECK(j->bytes_done == PAUSE_AT,
+		  "the RAM counter read %lld, wanted %lld: a wrapped or truncated >2 GiB counter\n",
+		  j->bytes_done, PAUSE_AT);
+	CHECK(j->bytes_total == GIANT,
+		  "the RAM total read %lld, wanted %lld: a wrapped or truncated >2 GiB counter\n",
+		  j->bytes_total, GIANT);
+	CHECK(j->bytes_done > 0 && j->bytes_total > (long long)0x7fffffff,
+		  "the giant pair stopped being giant\n");
+
+	// The durable mirror: the pause persisted the >2 GiB pair exactly.
+	char db[700];
+	card_file(".local/audiobookshelf-downloads.db", db, sizeof(db));
+	CHECK(file_exists(db), "queue database missing\n");
+	sqlite3 *raw = NULL;
+	CHECK(sqlite3_open(db, &raw) == SQLITE_OK, "cannot open raw db\n");
+	long long done_db = 0, total_db = 0;
+	{
+		sqlite3_stmt *stmt = NULL;
+		// The newest row for the item: the enqueue path may retry internally,
+		// so the identity is what the query keys on.
+		CHECK(sqlite3_prepare_v2(raw, "SELECT bytes_done, bytes_total FROM DOWNLOAD_JOB"
+									 " WHERE item_id='giant-item' AND kind='" ABS_DL_KIND_EPISODE "'"
+									 " ORDER BY id DESC LIMIT 1",
+								 -1, &stmt, NULL) == SQLITE_OK,
+			  "durable counter query failed\n");
+		CHECK(sqlite3_step(stmt) == SQLITE_ROW, "no durable row for the giant job\n");
+		done_db = sqlite3_column_int64(stmt, 0);
+		total_db = sqlite3_column_int64(stmt, 1);
+		sqlite3_finalize(stmt);
+	}
+	CHECK(done_db == PAUSE_AT,
+		  "the durable byte counter read %lld, wanted %lld: the >2 GiB pair did not survive the row\n",
+		  done_db, PAUSE_AT);
+	CHECK(total_db == GIANT,
+		  "the durable byte total read %lld, wanted %lld: the >2 GiB pair did not survive the row\n",
+		  total_db, GIANT);
+
+	// Resume: §8.1 restart from zero, the exact sparse size as the committed
+	// file record, and the DONE row carrying the full pair.
+	CHECK(abs_download_resume(id, err, sizeof(err)), "resume: %s\n", err);
+	run_to_done(id);
+	abs_download_file_t f1;
+	file_record(id, 1, &f1);
+	CHECK(f1.final_size == GIANT, "the committed file size is %lld, wanted %lld\n", f1.final_size,
+		  GIANT);
+	CHECK(f1.expected_size == GIANT, "the file record lost its giant expected size (%lld)\n",
+		  f1.expected_size);
+
+	// The RAM counter at DONE: the queue's own §8.1 terminal reset (the
+	// counters start each attempt at 0/-1 the way begin_next_locked() does),
+	// so the >2 GiB evidence lives in the PAUSED row above and the committed
+	// file record, not in the terminal row.
+	j = snap_job(id, &snap);
+	CHECK(j->bytes_done == 0 && j->bytes_total == -1,
+		  "the DONE-state counters read %lld/%lld, wanted the terminal reset 0/-1\n",
+		  j->bytes_done, j->bytes_total);
+	{
+		// And the durable row agrees with the reset it persisted.
+		sqlite3_stmt *stmt = NULL;
+		CHECK(sqlite3_prepare_v2(raw, "SELECT bytes_done, bytes_total FROM DOWNLOAD_JOB"
+									 " WHERE item_id='giant-item' AND kind='" ABS_DL_KIND_EPISODE "'"
+									 " ORDER BY id DESC LIMIT 1",
+								 -1, &stmt, NULL) == SQLITE_OK,
+			  "durable DONE query failed\n");
+		CHECK(sqlite3_step(stmt) == SQLITE_ROW, "the giant row vanished at DONE\n");
+		CHECK(sqlite3_column_int64(stmt, 0) == 0 && sqlite3_column_int64(stmt, 1) == -1,
+			  "the durable DONE counters are not the §8.1 reset shape\n");
+		sqlite3_finalize(stmt);
+	}
+
+	// The card's file itself: sparse, but exactly the giant size.
+	char final_path[1400];
+	// The episode fetch computes its own destination (§8.2): the fake's
+	// "Podcasts/abs-4b1f/Show/<title>" shape, file name ep01.mp3.
+	snprintf(final_path, sizeof(final_path), "%.580s/%.500s", sd,
+			 "Podcasts/abs-4b1f/Show/Giant Item/ep01.mp3");
+	CHECK(file_bytes(final_path) == GIANT,
+		  "the card file is %lld bytes, wanted the exact %lld\n", file_bytes(final_path), GIANT);
+
+	CHECK(sqlite3_close(raw) == SQLITE_OK, "raw db close\n");
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
 	if (argc != 2 || !argv[1][0]) {
@@ -2328,6 +2499,7 @@ int main(int argc, char **argv) {
 	test_crash_finalize_fail();
 
 	test_schema();
+	test_giant_byte_counters();
 	test_capacity_dedup();
 	test_remove_paused_part();
 	test_lifecycle();

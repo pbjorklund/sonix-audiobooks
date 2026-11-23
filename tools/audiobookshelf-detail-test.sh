@@ -50,6 +50,7 @@ for key in audiobookshelf_detail audiobookshelf_detail_loading audiobookshelf_de
 	audiobookshelf_detail_about audiobookshelf_detail_no_description audiobookshelf_detail_summary \
 	audiobookshelf_detail_chapters audiobookshelf_detail_chapters_none \
 	audiobookshelf_detail_chapters_overflow audiobookshelf_detail_queue \
+	audiobookshelf_detail_too_large \
 	audiobookshelf_detail_play_local audiobookshelf_link audiobookshelf_downloads \
 	audiobookshelf_detail_cover_unavailable; do
 	grep -q "^$key = " "$INIFILE" || fail "English.ini lost detail key $key"
@@ -94,9 +95,19 @@ if [[ -n "${SONIX_ABS_FIXTURE:-}" ]]; then
 	esac
 fi
 
+# §14.7: SONIX_SANITIZER selects the sanitizer build. The functional default is
+# address+undefined; thread is a DISTINCT TSan build (never combined with
+# ASan). An unknown mode fails the run.
+SAN_MODE="${SONIX_SANITIZER:-address,undefined}"
+case "$SAN_MODE" in
+	address,undefined) SANITIZERS=(-fsanitize=address,undefined -fno-omit-frame-pointer) ;;
+	thread) SANITIZERS=(-fsanitize=thread -fno-omit-frame-pointer) ;;
+	*) fail "unknown SONIX_SANITIZER: $SAN_MODE (address,undefined|thread)" ;;
+esac
+
 COMPILE_FLAGS=(-O1 -g -DHOST_BUILD=1 -D_FILE_OFFSET_BITS=64 -I. -Ilvgl
 	-DLV_CONF_INCLUDE_SIMPLE=1 -ffunction-sections -fdata-sections
-	-fsanitize=address,undefined -fno-omit-frame-pointer)
+	"${SANITIZERS[@]}")
 LINK_FLAGS=(-Wl,--gc-sections -lm -lpthread -ldl)
 
 cd "$PLAYER"

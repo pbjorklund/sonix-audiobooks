@@ -754,6 +754,10 @@ const char *http_last_error(void) {
 	return "offline stub: the stream refused to open";
 }
 
+// §9.5 plumbing: the offline stub never truncates anything, so its signal is
+// a permanent false; the real http.c provides it in the live build.
+bool http_last_truncated(void) { return false; }
+
 static abs_auth_snapshot_t held;
 static volatile int offline_cancel;
 static abs_download_plan_t offline_plan_out;
@@ -2007,6 +2011,41 @@ static void live_run(void) {
 	media_path_for(card, want_dest, "002 - Part Two.mp3", final2, sizeof(final2));
 	snprintf(part1_file, sizeof(part1_file), "%.1300s.part", final1);
 	snprintf(part2_file, sizeof(part2_file), "%.1300s.part", final2);
+
+	// ------------------------------------------------------------------
+	// §8.8 >2 GiB Content-Length probe (forge-m6 fixes wave): the mock
+	// stages a header no 32-bit long can hold on /file/gi2g. The framing must
+	// parse the claim as long long end to end -- a 32-bit-`long` MIPS strtol
+	// would wrap it -- then read exactly what arrived and end the read
+	// honestly at the staged close. Every byte counter further down the
+	// transfer contract leans on this never wrapping.
+	// ------------------------------------------------------------------
+	{
+		char giant_url[ABS_DL_URL_MAX];
+		snprintf(giant_url, sizeof(giant_url), "%s/api/items/mock-book/file/gi2g", live_server);
+		// The session's own Bearer: the mock answers 401 to an anonymous
+		// probe, exactly as the ops' real transfers would hit.
+		char giant_headers[128];
+		snprintf(giant_headers, sizeof(giant_headers), "Authorization: Bearer %s\r\n", mock_token);
+		http_stream_t giant;
+		CHECK(http_stream_open_ex(&giant, giant_url, giant_headers, 30),
+			  "the staged >2 GiB probe stream did not open\n");
+		CHECK(giant.content_length == 3000000000LL,
+			  "the >2 GiB Content-Length parsed as %lld, wanted exactly 3000000000: a 32-bit-long wrap\n",
+			  giant.content_length);
+		char giant_buf[8192];
+		int giant_total = 0, giant_got;
+		while ((giant_got = http_stream_read(&giant, giant_buf, sizeof(giant_buf))) > 0) {
+			CHECK(giant_total + giant_got <= 4096,
+				  "the staged prefix grew past its exact 4096 bytes (read %d at %d)\n", giant_got,
+				  giant_total);
+			giant_total += giant_got;
+		}
+		CHECK(giant_total == 4096,
+			  "the staged prefix delivered %d bytes, wanted the exact 4096\n", giant_total);
+		http_stream_close(&giant);
+		printf("live: >2 GiB Content-Length probe ok\n");
+	}
 
 	// ------------------------------------------------------------------
 	// Phase 1 — direct driver (§8.2 steps 1–4, engine-not-involved)

@@ -20,6 +20,10 @@ EXISTING=${SONIX_ABS_EXISTING:-0}
 LOCAL_PROGRESS=${SONIX_ABS_LOCAL_PROGRESS:-0}
 OFFLINE_RESTART=${SONIX_ABS_OFFLINE_RESTART:-0}
 CONFLICTS=${SONIX_ABS_CONFLICTS:-0}
+# §14.3/§14.9 (forge-m6 fixes wave): SONIX_ABS_LARGE_TEXT=1 runs this whole
+# smoke with [ui] text_size=1 -- the fonts re-point globally, so the new ABS
+# views render at the large size inside their fixed 112 px row pitch.
+LARGE_TEXT=${SONIX_ABS_LARGE_TEXT:-0}
 fail() { printf 'Audiobookshelf smoke test: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"; }
 
@@ -35,6 +39,7 @@ case "$SONIX_ABS_FIXTURE" in
 	*) printf 'Audiobookshelf smoke test: unknown SONIX_ABS_FIXTURE: %s\n' "$SONIX_ABS_FIXTURE" >&2; exit 2 ;;
 esac
 printf 'Audiobookshelf smoke test: fixture %s (mock enforces full commit provenance)\n' "$SONIX_ABS_FIXTURE"
+printf 'Audiobookshelf smoke test: %s English text mode\n' "$([[ "$LARGE_TEXT" == 1 ]] && echo large || echo normal)"
 
 cleanup() {
 	for pid in "$PLAYER_PID" "$SERVER_PID" "$XVFB_PID"; do
@@ -173,6 +178,11 @@ volume = 40
 remember_track = 1
 [ui]
 language = English
+EOF
+if [[ "$LARGE_TEXT" == 1 ]]; then
+	printf 'text_size = 1\n' >>"$CONFIG"
+fi
+cat >>"$CONFIG" <<EOF
 [power]
 screen_off_seconds = 0
 [clock]
@@ -209,6 +219,38 @@ for ((i = 0; i < 100; i++)); do
 done
 [[ -n "$WINDOW" ]] || fail "the simulator window did not appear"
 sleep 1
+
+# §14.3: the layout stays the R1 panel shape in both text modes, and the fonts
+# module runs the mode the config asked for -- large text re-points the whole
+# set, so the ABS views below render at the large size. (The app's stderr is
+# relayed into SONIX_LOG.)
+wait_for "the 480x800 layout line" 100 grep -q "panel: laying the interface out at 480x800" \
+	"$WORK/player.log"
+if [[ "$LARGE_TEXT" == 1 ]]; then
+	wait_for "the large-text font set" 100 grep -q "large text" "$WORK/player.log"
+	# The shipped font's large-text metrics, pinned so the fixed-pitch card fit
+	# is visible in the run and a font or LARGE_STEPS change fails loudly here:
+	# the two-line cards (browse books, queue) hold 112 - 2x10 px of interior,
+	# and the raw font-derived content 2x33 + 2 + 28 = 96 px exceeds it, which
+	# is exactly what abslist's pitch-aware title ceiling absorbs (F4) -- the
+	# title cuts to dotted lines inside the card, the subtitle stays whole.
+	wait_for "large lh(18)=28" 100 grep -q "fonts: size 18 line height 28 (large text)" "$WORK/player.log"
+	wait_for "large lh(22)=33" 100 grep -q "fonts: size 22 line height 33 (large text)" "$WORK/player.log"
+else
+	if grep -q "large text" "$WORK/player.log"; then
+		fail "a normal-text run resolved the large-text font set"
+	fi
+	# The normal-text side of the same fit: 2x29 + 2 + 24 = 84 px of content in
+	# the 92 px interior -- the pitch-aware ceiling is a no-op here.
+	wait_for "lh(18)=24" 100 grep -q "fonts: size 18 line height 24$" "$WORK/player.log"
+	wait_for "lh(22)=29" 100 grep -q "fonts: size 22 line height 29$" "$WORK/player.log"
+fi
+
+# §11.5: the server-qualified download/cover cache root hash. The mock server
+# URL is already in normalized form, so this shell's hash matches the player's
+# byte for byte -- it is both the download destination prefix and the cover
+# cache file name's server half.
+ABS_HASH=$(printf '%s' "http://127.0.0.1:$PORT" | sha256sum | cut -c1-12)
 
 if [[ "$EXISTING" == 1 ]]; then
 	wait_for "existing local catalog" 100 local_catalog_ready
@@ -247,10 +289,26 @@ grep -q 'sort=sequence.*filter=series.c2VyaWVzLTE' "$WORK/progress.requests" || 
 click 43 88 1         # search results -> libraries
 click 280 419 2       # reopen full library (one row below the new Downloads row)
 scrot "$WORK/action-confirm.png"
+# The books list view, for the row-geometry evidence: the two-line 112 px
+# cards with their font-derived label heights (checked-in archive for both
+# text modes).
+scrot "$WORK/books-rows.png"
 # §9.2: the tap opens the book detail now; the primary action (Link existing
 # for the pre-linked local copy, Queue download otherwise) sits at the
 # detail's bottom, below the description.
 open_book_detail
+# F1 regression, integrated into every run of this smoke: the detail MUST
+# fetch its cover into the cache on the SIMULATED card. Both halves are
+# asserted -- the authenticated request on the wire, and the hashed
+# `<server-hash>-<item-hash>.jpg` file the §9.3 cache then serves -- so the
+# text-only fallback can never silently hide a mis-directed cache root again
+# (the old build pointed HOST_BUILD at /mnt/sd_0 every run without a word).
+wait_for "the detail cover request on the wire" 100 \
+	grep -q 'GET /api/items/.*/cover?format=jpeg&width=900&height=1280 ' "$WORK/progress.requests"
+COVER_ITEM=$(sed -n 's/^GET \/api\/items\/\([^/?]*\)?expanded=1.*/\1/p' "$WORK/progress.requests" | head -n 1)
+[[ -n "$COVER_ITEM" ]] || fail "no detail request to hash for the cover cache"
+COVER_FILE="$SD/.local/abs-cover-cache/$ABS_HASH-$(printf '%s' "$COVER_ITEM" | sha256sum | cut -c1-12).jpg"
+wait_for "the cover cache file on the simulated card" 100 test -s "$COVER_FILE"
 if [[ "$EXISTING" == 1 ]]; then
 	click 240 622 1   # Link existing copy (the §11.5 link job)
 else
@@ -273,10 +331,10 @@ if [[ "$EXISTING" != 1 ]]; then
 	wait_for "durable queue DONE" 900 queue_done
 fi
 wait_for "downloaded resume import" 900 resume_ready
+# The queue screen with the finished row (row-geometry evidence, both modes).
+scrot "$WORK/queue.png"
 # §11.5: new downloads land in the server-qualified abs-<sha256(server)[0:12]>
-# root. The mock server URL is already in normalized form, so this shell's
-# hash matches the player's destination hash byte for byte.
-ABS_HASH=$(printf '%s' "http://127.0.0.1:$PORT" | sha256sum | cut -c1-12)
+# root.
 if [[ "$EXISTING" == 1 ]]; then
 	[[ -s "$SD/Audiobooks/Test Author/The Mock Journey/.audiobookshelf" ]] || fail "local link manifest missing"
 	[[ ! -e "$SD/Audiobooks/Audiobookshelf/abs-$ABS_HASH" ]] || fail "linked book was downloaded again"

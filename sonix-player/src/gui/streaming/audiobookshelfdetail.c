@@ -452,7 +452,16 @@ static void draw(void) {
 		return;
 	}
 
-	title_label(model->item.title);
+	// §9.5: a detail cut at the 3 MiB cap arrives as a model with no parsed
+	// fields (the JSON never terminated) -- the tapped row's own title then
+	// names the screen, with the note below.
+	title_label(model->item.title[0] ? model->item.title : open_title);
+	if (model->details_too_large) {
+		// The note sits with the metadata it qualifies, before the toggle
+		// rebuilds the content: visible in both the summary and the chapter
+		// view, exactly §9.5's "list metadata/action and a visible note".
+		note("audiobookshelf_detail_too_large");
+	}
 
 	char value[ABS_NAME_MAX + 40];
 	if (model->item.author[0]) meta_row("audiobookshelf_detail_author", model->item.author);

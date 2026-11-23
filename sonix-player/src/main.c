@@ -2245,7 +2245,18 @@ int main(int argc, char **argv) {
 	podcastcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	// §9.3: the authenticated Audiobookshelf cover cache lives beside the
 	// other streaming caches, on the same card with the same lifecycle.
+#ifdef HOST_BUILD
+	// The simulator's card is gui_cfg.sd_root_path (SONIX_SD_ROOT); the device
+	// mount candidate /mnt/sd_0 that storage_sd_root() resolves is never
+	// attached on the host, so pointing the cache there failed every cover
+	// fetch's directory creation and every GUI smoke silently ran text-only
+	// detail covers. On the device the two are the same (see how gui_cfg is
+	// filled in above), so this branch differs from the device one only on
+	// the simulator -- which is the point.
+	abs_cover_set_root(gui_cfg.sd_root_path);
+#else
 	abs_cover_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
+#endif
 	podcastsubs_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	podcaststate_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	// And where a track arriving over DLNA lands: same card, same reason.

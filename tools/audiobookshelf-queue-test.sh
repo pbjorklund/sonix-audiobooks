@@ -6,19 +6,66 @@
 # coexistence, abandon-table and §8.4 timer-backoff wave runs against the REAL
 # primitives, with a 300 ms per-job backoff for a bounded harness (production
 # never defines ABS_DL_WAIT_BACKOFF_MS).
+#
+# §14.7: SONIX_SANITIZER selects the sanitizer build. The functional default is
+# address+undefined; thread is a DISTINCT TSan build (never combined with
+# ASan). An unknown mode fails the run.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+SAN_MODE="${SONIX_SANITIZER:-address,undefined}"
+case "$SAN_MODE" in
+	address,undefined) SANITIZERS=(-fsanitize=address,undefined -fno-omit-frame-pointer) ;;
+	thread) SANITIZERS=(-fsanitize=thread -fno-omit-frame-pointer) ;;
+	*) printf 'audiobookshelf-queue-test.sh: unknown SONIX_SANITIZER: %s (address,undefined|thread)\n' "$SAN_MODE" >&2
+		exit 2 ;;
+esac
 WORK=$(mktemp -d)
 trap 'rm -rf -- "$WORK"' EXIT
 cd "$ROOT/sonix-player"
 gcc -O1 -g -DHOST_BUILD=1 -D_FILE_OFFSET_BITS=64 -I. -Ilvgl -DLV_CONF_INCLUDE_SIMPLE=1 \
-    -ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -ffunction-sections -fdata-sections "${SANITIZERS[@]}" \
     -DABS_DL_WAIT_BACKOFF_MS=300 \
     "$ROOT/tools/audiobookshelf-queue-test.c" src/system/streaming/abs_download.c \
     src/system/streaming/streamturn.c \
     src/system/core/pathlimits.c src/system/core/utils.c src/system/db/sqlite3_impl.c \
     -Wl,--gc-sections -lpthread -lm -ldl -o "$WORK/test"
 "$WORK/test" "$WORK/card"
+
+# §8.8/§14.8 WS2: the >2 GiB counter oracle is the runtime test above; this
+# compile-time gate pins the target ABI it must survive. Every counter and
+# byte-size field that can exceed 2^31 is 8 bytes wide on the 32-bit-`long`
+# mipsel ABI, and the file offsets (the resume .part) keep 64-bit off_t. A
+# regression to any 32-bit type fails the build, exactly like the detail
+# suite's §9.5 sizeof gate.
+CROSS_GCC="$ROOT/sonix-player/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-gcc"
+fail_assert() { printf 'audiobookshelf-queue-test.sh: %s\n' "$*" >&2; exit 1; }
+if [[ -x "$CROSS_GCC" ]]; then
+	cat >"$WORK/counters_abi.c" <<'EOF'
+#include "src/system/net/http.h"
+#include "src/system/streaming/abs_download.h"
+#include "src/system/db/sqlite3.h"
+#include <sys/types.h>
+_Static_assert(sizeof(long long) == 8, "the target lost 64-bit long long");
+_Static_assert(sizeof(((abs_download_job_t *)0)->bytes_done) == 8,
+			   "the §8.8 byte counter no longer 64-bit on the target ABI");
+_Static_assert(sizeof(((abs_download_job_t *)0)->bytes_total) == 8,
+			   "the §8.8 byte total no longer 64-bit on the target ABI");
+_Static_assert(sizeof(((abs_download_file_t *)0)->expected_size) == 8,
+			   "the per-file expected size no longer 64-bit on the target ABI");
+_Static_assert(sizeof(((http_stream_t *)0)->content_length) == 8,
+			   "the framing Content-Length is no longer long long on the target ABI");
+#if defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS >= 64
+_Static_assert(sizeof(off_t) == 8, "the resume offsets left 64-bit off_t");
+#endif
+_Static_assert(sizeof(sqlite3_int64) == 8, "the queue rows lost their int64 columns");
+EOF
+	"$CROSS_GCC" -march=mips32r2 -I. -D_FILE_OFFSET_BITS=64 -c "$WORK/counters_abi.c" \
+		-o "$WORK/counters_abi.o" ||
+		fail_assert "the mipsel target lost a 64-bit >2 GiB counter type (compile-time)"
+	printf 'audiobookshelf-queue-test.sh: mipsel >2 GiB counter ABI verified (compile-time)\n'
+else
+	printf 'audiobookshelf-queue-test.sh: cross toolchain absent; the mipsel counter ABI gate is skipped\n'
+fi
 
 # §8.3/§8.5 busy gate: the Wi-Fi-in-use and player-busy decisions in power.c
 # must consult the queue's busy bit directly. power.c compiles no standalone

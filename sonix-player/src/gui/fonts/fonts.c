@@ -350,6 +350,17 @@ bool fonts_init(void) {
 		*ui_fonts[i].font = sets[large_text][i];
 	}
 
+#ifdef HOST_BUILD
+	// The line heights the simulator's pages are laid out against, so a UI
+	// smoke can pin the font-derived geometry (the large-text fit of the
+	// fixed-pitch list cards depends on exactly these numbers) from the same
+	// resolved set the interface draws with. Quiet on the device.
+	for (size_t i = 0; i < UI_FONT_COUNT; i++) {
+		fprintf(stderr, "fonts: size %d line height %d%s\n", ui_fonts[i].size,
+				lv_font_get_line_height(ui_fonts[i].font), large_text ? " (large text)" : "");
+	}
+#endif
+
 	// Records the actual file names, so the log shows which container this
 	// firmware ships.
 	int len = snprintf(summary, sizeof(summary), "%s%s%s", basename_of(regular_file), bold_file ? ", " : "",

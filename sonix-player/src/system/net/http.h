@@ -259,6 +259,17 @@ const char *http_last_final_url(void);
 // HTTP Date from the latest response on this thread, in UTC milliseconds (0 if absent).
 long long http_last_server_time_ms(void);
 
+// Whether the caller's body limit cut the last buffered response short: a
+// Content-Length that promised more than `limit`, or a body that grew past
+// `limit` mid-response, delivers exactly `limit` bytes and sets this -- per
+// thread, reset by every http_get()/http_request() on the calling thread, like
+// http_last_error(). The deliberate truncation is not a failure (radio
+// playlists rely on their URL arriving first); callers whose whole document
+// matters -- the Audiobookshelf detail parse is the one that must not silently
+// read a cut JSON document -- consult this to tell a bounded cap cut from a
+// server that really sent invalid data.
+bool http_last_truncated(void);
+
 // ---------------------------------------------------------------------------
 // Requests that are not GET
 //

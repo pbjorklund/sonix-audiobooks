@@ -154,6 +154,11 @@ typedef struct {
 	abs_detail_chapter_t *chapters; // exact heap allocation, <= 400
 	int chapter_count;
 	bool chapters_overflow;
+	// §9.5: the detail's JSON exceeded the shared 3 MiB body cap and arrived
+	// truncated (http_last_truncated()). The model then carries the list-row
+	// identity and actions with a visible "Details too large" note instead of
+	// refusing the screen; the cap is never raised.
+	bool details_too_large;
 } audiobookshelf_detail_t;
 
 // Fetches one item's expanded detail (GET /api/items/{id}?expanded=1&include=
@@ -162,7 +167,9 @@ typedef struct {
 // generation accepts it, and cancelled/stale completions free it (§9.3).
 // NULL on any failure with audiobookshelf_last_error() set. Like
 // audiobookshelf_book(), this buffers a large JSON body and belongs on a
-// worker thread; it holds abs_catalog_lock for the duration (§8.3).
+// worker thread; it holds abs_catalog_lock for the duration (§8.3). A detail
+// body cut at the 3 MiB cap is not a failure: it returns the model with
+// details_too_large set, for §9.5's note-and-actions presentation.
 audiobookshelf_detail_t *audiobookshelf_detail(const char *item_id);
 
 // Releases the chapters and the object. NULL is allowed.

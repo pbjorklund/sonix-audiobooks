@@ -31,6 +31,11 @@
 static const char *work;          // argv[1]
 #define STUB_SERVER "http://stub.invalid"
 
+// The documented ABS_BODY_LIMIT (audiobookshelf.c's shared 3 MiB cap) spelled
+// here so the cap tests pin the whole handoff: every buffered request must
+// pass exactly this bound down to the transport.
+#define ABS_BODY_LIMIT (3u * 1024u * 1024u)
+
 // The real connectivity wake lives in the queue module, which this harness
 // deliberately does not link (§8.5 keeps the queue engine out of the browse
 // surface). The §12.4 diagnostics tests below root
@@ -61,10 +66,45 @@ static struct {
 // the diagnostics' network class).
 static int spy_fail_status;
 
+// §10.3 3-MiB cap shapes (F3): when armed, the stub emulates the exact two
+// oversize deliveries the real transport produces at ABS_BODY_LIMIT — a
+// Content-Length that claims more than the caller's cap, and a close-delimited
+// body at cap+1 — both of which deliver exactly `limit` bytes of a longer body
+// and set the http-layer truncation signal. One delivery per request, like
+// spy_fail_status.
+static bool spy_oversize;
+static bool spy_truncated;
+static size_t spy_delivered; // bytes the stub actually handed out for the last request
+
+bool http_last_truncated(void) { return spy_truncated; }
+
 bool http_request(const char *url, const http_req_t *req, char **out, size_t *out_len,
 				  size_t limit, int timeout_secs, int *status_out) {
-	(void)limit; (void)timeout_secs;
+	(void)timeout_secs;
 	snprintf(spy.url, sizeof(spy.url), "%s", url ? url : "");
+	if (spy_oversize && limit > 0) {
+		// The cap-cut delivery: exactly `limit` bytes of the canned body
+		// extended with filler past the cap (both oversize shapes clamp to
+		// the same wire result). The API must refuse the cut document on its
+		// own error path — never grow past the cap itself.
+		spy_oversize = false;
+		spy_truncated = true;
+		spy_delivered = limit;
+		char *body = malloc(limit + 1);
+		assert(body);
+		size_t prefix = strlen(spy.body);
+		if (prefix > limit) prefix = limit;
+		memcpy(body, spy.body, prefix);
+		memset(body + prefix, 'x', limit - prefix);
+		body[limit] = '\0';
+		*out = body;
+		if (out_len) *out_len = limit;
+		if (status_out) *status_out = 200;
+		assert(req && req->extra_headers &&
+			   strncmp(req->extra_headers, "Authorization: Bearer ", 21) == 0);
+		return true;
+	}
+	spy_truncated = false;
 	if (spy_fail_status) {
 		int status = spy_fail_status;
 		spy_fail_status = 0;
@@ -83,6 +123,7 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 	}
 	if (status_out) *status_out = 200;
 	size_t len = strlen(spy.body);
+	spy_delivered = len;
 	char *body = malloc(len + 1);
 	assert(body);
 	memcpy(body, spy.body, len + 1);
@@ -730,6 +771,54 @@ static void profile_diagnostics_tests(void) {
 			   audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1), 0);
 }
 
+// §10.3/§10.6 (F3): the ABS_BODY_LIMIT 3 MiB refusal path, from both oversize
+// shapes the transport can produce. The API layer never sees raw headers, so
+// the stub stands in for the transport: it clamps the delivery at the caller's
+// own cap and sets the http-layer truncation signal, byte for byte what
+// http.c does for an oversize Content-Length and for a body that grows past
+// the cap. Assertions: the refusal stays bounded at the cap (the stub's
+// delivered-length record is the bound), the parse refusal is the exact
+// bounded error (never a crash, hang or grown buffer), and the truncation
+// signal is set -- then cleared by a normal body again.
+static void browse_cap_tests(void) {
+	abs_browse_query_t q;
+	int total = 0;
+	assert(abs_browse_query_init(&q, "lib-1", ABS_SORT_TITLE, ABS_FILTER_NONE, NULL, 0, false));
+
+	// The oversize-Content-Length shape: the header claims more than the cap
+	// and the framing delivers cap bytes of the longer body.
+	spy_items(1, 1, 1);
+	spy_oversize = true;
+	expect_int("oversize-claim refusal is bounded",
+			   audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total), -1);
+	expect_str("oversize-claim error", audiobookshelf_last_error(),
+			   "Audiobookshelf returned invalid book data.");
+	expect_bool("oversize-claim truncation signal", http_last_truncated(), true);
+	expect_bool("oversize-claim delivery stayed at the cap", spy_delivered == ABS_BODY_LIMIT, true);
+
+	// The close-delimited body-at-cap+1 shape, on the search surface: the
+	// canned document plus one byte over the cap. Reload the persisted store
+	// first — earlier tests reshaped it, and any profile bound to the stub
+	// server works for this search.
+	assert(abs_profiles_init() >= 1);
+	spy_search(2, 1);
+	spy_oversize = true;
+	audiobookshelf_item_t extra[1];
+	int count = audiobookshelf_search_ex("lib-1", "overflow", extra, 1, NULL);
+	expect_int("at-cap+1 search refusal is bounded", count, -1);
+	expect_str("at-cap+1 error", audiobookshelf_last_error(),
+			   "Audiobookshelf returned invalid search data.");
+	expect_bool("at-cap+1 truncation signal", http_last_truncated(), true);
+	expect_bool("at-cap+1 delivery stayed at the cap", spy_delivered == ABS_BODY_LIMIT, true);
+
+	// A normal body clears the signal again: the refusal above must not leak
+	// into the next request's answer.
+	spy_items(1, 1, 1);
+	expect_int("normal body after the refusals",
+			   audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total), 1);
+	expect_bool("signal cleared by a normal body", http_last_truncated(), false);
+}
+
 int main(int argc, char **argv) {
 	if (argc != 2) {
 		fprintf(stderr, "usage: %s <workdir>\n", argv[0]);
@@ -742,6 +831,7 @@ int main(int argc, char **argv) {
 	build_filter_tests();
 	browse_construction_tests();
 	browse_response_tests();
+	browse_cap_tests();
 	search_tests();
 	groups_tests();
 	legacy_compat_tests();

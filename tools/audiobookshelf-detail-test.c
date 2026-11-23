@@ -74,12 +74,43 @@ static struct {
 	char body[98304]; // 401 chapters plus metadata must fit
 } spy;
 
+// §9.5 cap-shape emulation (F3): when armed, the stub answers with exactly
+// the caller's cap in bytes of the canned body extended with filler — the
+// wire result of an oversize Content-Length (and of a close-delimited body at
+// cap+1) — with the http-layer truncation signal set. One delivery per
+// request, like the fail-status stub.
+static bool spy_oversize;
+static bool spy_truncated;
+static size_t spy_delivered;
+
+bool http_last_truncated(void) { return spy_truncated; }
+
 bool http_request(const char *url, const http_req_t *req, char **out, size_t *out_len,
 				  size_t limit, int timeout_secs, int *status_out) {
-	(void)limit; (void)timeout_secs;
+	(void)timeout_secs;
 	snprintf(spy.url, sizeof(spy.url), "%s", url ? url : "");
+	if (spy_oversize && limit > 0) {
+		spy_oversize = false;
+		spy_truncated = true;
+		spy_delivered = limit;
+		char *body = malloc(limit + 1);
+		assert(body);
+		size_t prefix = strlen(spy.body);
+		if (prefix > limit) prefix = limit;
+		memcpy(body, spy.body, prefix);
+		memset(body + prefix, 'x', limit - prefix);
+		body[limit] = '\0';
+		*out = body;
+		if (out_len) *out_len = limit;
+		if (status_out) *status_out = 200;
+		assert(req && req->extra_headers &&
+			   strncmp(req->extra_headers, "Authorization: Bearer ", 21) == 0);
+		return true;
+	}
+	spy_truncated = false;
 	if (status_out) *status_out = 200;
 	size_t len = strlen(spy.body);
+	spy_delivered = len;
 	char *body = malloc(len + 1);
 	assert(body);
 	memcpy(body, spy.body, len + 1);
@@ -704,6 +735,41 @@ static void failure_tests(void) {
 	audiobookshelf_detail_free(NULL); // the free contract is NULL-safe
 }
 
+// §9.5 (F3): a detail body cut at the 3 MiB cap is a bounded display outcome,
+// not a parse failure. The stub delivers cap bytes of a longer body with the
+// truncation signal set — byte for byte what http.c does for an oversize
+// Content-Length — and the detail becomes the note model: non-NULL, flagged,
+// no invented fields, no refusal error. A complete body under the cap keeps
+// its generic refusal (the two must never be confused).
+static void detail_overflow_tests(void) {
+	// The cap-cut shape: the truncation signal, then the note model. The API
+	// layer passes the shared 3 MiB bound down; the stub's delivered record
+	// pins that handoff.
+	spy_delivered = 0;
+	spy_oversize = true;
+	audiobookshelf_detail_t *d = audiobookshelf_detail("it-overflow");
+	expect_true("§9.5 cap cut delivers the note model", d != NULL);
+	expect_bool("details_too_large set", d->details_too_large, true);
+	expect_bool("no refusal error on the note model", audiobookshelf_last_error()[0] == '\0', true);
+	// The JSON never terminated, so nothing was invented: the fields stay
+	// empty and the GUI falls back to the list row identity.
+	expect_str("no parsed title on the note model", d->item.title, "");
+	expect_int("no fabricated chapter rows", d->chapter_count, 0);
+	expect_bool("no chapters allocated on the note model", d->chapters == NULL, true);
+	expect_bool("cap handoff: the transport got exactly the documented bound",
+				spy_delivered == 3u * 1024u * 1024u, true);
+	audiobookshelf_detail_free(d);
+
+	// The generic refusal for a COMPLETE invalid body is unchanged: the two
+	// outcomes stay distinguishable.
+	snprintf(spy.body, sizeof(spy.body), "{\"id\":\"it-bad\",\"media\":");
+	d = audiobookshelf_detail("it-bad");
+	expect_bool("complete invalid body still refused", d == NULL, true);
+	expect_str("still the generic error", audiobookshelf_last_error(),
+			   "Audiobookshelf returned invalid book details.");
+	expect_bool("generic refusal carries no truncation signal", http_last_truncated(), false);
+}
+
 // What the detail view never carries: no inline track array, and the heap
 // the chapters use is a single exact block of the §9.3 record size.
 static void ownership_tests(void) {
@@ -1044,6 +1110,7 @@ int main(int argc, char **argv) {
 	chapter_tests();
 	long_string_tests();
 	failure_tests();
+	detail_overflow_tests();
 	ownership_tests();
 	decode_base64(COVER_JPEG_B64, cover_jpeg, sizeof(cover_jpeg), &cover_jpeg_len);
 	cover_basic_tests();

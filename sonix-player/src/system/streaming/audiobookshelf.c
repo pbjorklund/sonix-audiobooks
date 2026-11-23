@@ -1683,6 +1683,17 @@ static bool abs_parse_detail_chapter(const json_doc_t *doc, int object, abs_deta
 static bool abs_parse_detail(const char *body, audiobookshelf_detail_t *out) {
 	json_doc_t doc;
 	if (!json_parse(body, &doc)) {
+		// §9.5: the shared 3 MiB body cap cuts the largest detail responses at
+		// the http layer. That is a bounded display outcome -- "the list
+		// metadata/action and a visible 'Details too large' note", the cap
+		// never raised automatically -- not a broken server body. The
+		// http-layer truncation signal is what tells the two apart: a cut body
+		// becomes the note model, a complete invalid one stays the refusal
+		// below.
+		if (http_last_truncated()) {
+			out->details_too_large = true;
+			return true;
+		}
 		set_error("Audiobookshelf returned invalid book details.");
 		return false;
 	}

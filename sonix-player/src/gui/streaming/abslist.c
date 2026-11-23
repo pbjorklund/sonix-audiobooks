@@ -148,9 +148,23 @@ static lv_obj_t *make_row(abs_list_t *list) {
 	lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(title, lv_pct(100));
 	lv_obj_add_style(title, &theme_style_text, 0);
+	int interior = list->row_height - 2 * 10; // pad_ver 10, top and bottom
+	// The subtitle's line height first: the two-line shape's title ceiling has
+	// to leave room for it and the 2 px flex gap, even though this label is
+	// only bound (and made visible) per row.
+	int subtitle_height = lv_font_get_line_height(&font_ui_18);
 	if (list->two_line) {
 		lv_obj_set_style_text_font(title, &font_ui_22, 0);
-		lv_obj_set_style_max_height(title, 2 * lv_font_get_line_height(&font_ui_22), 0);
+		// The row pitch is caller-fixed while these heights follow the fonts,
+		// which re-point globally in large-text mode: the raw two-line ceiling
+		// (2 x line height) can spill the card there. Capping it at what the
+		// pitch actually holds is a no-op at normal text and keeps the large
+		// text inside the row -- LV_LABEL_LONG_DOT cuts the title, never the
+		// subtitle or the card.
+		int title_ceiling = 2 * lv_font_get_line_height(&font_ui_22);
+		int card_hold = interior - subtitle_height - 2; // minus the pad_row gap
+		if (title_ceiling > card_hold) title_ceiling = card_hold;
+		lv_obj_set_style_max_height(title, title_ceiling, 0);
 	} else {
 		lv_obj_set_style_text_font(title, &font_ui_20, 0);
 	}
@@ -161,7 +175,7 @@ static lv_obj_t *make_row(abs_list_t *list) {
 	lv_obj_set_width(subtitle, lv_pct(100));
 	lv_obj_add_style(subtitle, &theme_style_text_dim, 0);
 	if (list->two_line) {
-		lv_obj_set_height(subtitle, lv_font_get_line_height(&font_ui_18));
+		lv_obj_set_height(subtitle, subtitle_height);
 		lv_obj_set_style_text_font(subtitle, &font_ui_18, 0);
 	} else {
 		lv_obj_set_height(subtitle, 0); // collapses; the line stays centred

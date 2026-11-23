@@ -232,11 +232,22 @@ bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 
 	char dir[ABS_COVER_FILE_PATH_MAX];
 	char final_path[ABS_COVER_FILE_PATH_MAX];
-	if (!cover_make_dirs(root) ||
-		(size_t)snprintf(dir, sizeof(dir), "%s/" ABS_COVER_CACHE_DIR, root) >= sizeof(dir) ||
+	// The path-length refusals decide BEFORE any filesystem side effect, so a
+	// genuinely over-long path keeps the length message and a failing mkdir
+	// cannot be mistaken for it: these two checks share nothing else.
+	size_t dir_len = (size_t)snprintf(dir, sizeof(dir), "%s/" ABS_COVER_CACHE_DIR, root);
+	if (dir_len >= sizeof(dir) ||
 		(size_t)snprintf(final_path, sizeof(final_path), "%s/%s", dir, name) >= sizeof(final_path) ||
 		strlen(final_path) >= ABS_COVER_PATH_MAX)
 		COVER_FAIL("The cover cache path does not fit the card.");
+	if (!cover_make_dirs(root))
+		// A refusal from mkdir is a card/permission problem, not a path-length
+		// one (observed live: an unattached root logged the length message for
+		// a plain ENOENT). cover_make_dirs() logs the exact path it could not
+		// create; this reports the same failure without the misleading "does
+		// not fit" wording, which is what sent the operator hunting for a
+		// longer card root.
+		COVER_FAIL("The cover cache folder could not be created on the card.");
 
 	struct stat existing;
 	if (stat(final_path, &existing) == 0 && S_ISREG(existing.st_mode) && existing.st_size > 0) {

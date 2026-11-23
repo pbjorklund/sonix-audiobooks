@@ -203,6 +203,10 @@ PY
 		fail "$ALIAS: fewer media transfers than the phases require"
 	grep -aq "/api/items/mock-book/cover" "$ADIR/progress.requests" \
 		|| fail "$ALIAS: the finalize never fetched the server cover"
+	# §8.8 >2 GiB staging (forge-m6 fixes wave): the probe stream's request for
+	# the staged 3,000,000,000-byte route reached the server.
+	grep -aq "/api/items/mock-book/file/gi2g" "$ADIR/progress.requests" \
+		|| fail "$ALIAS: the >2 GiB Content-Length probe never ran"
 
 	kill -TERM "$MOCK_PID" 2>/dev/null || true
 	wait "$MOCK_PID" 2>/dev/null || true

@@ -685,6 +685,18 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         item_id = path.split("/")[3]
         file_token = path.rsplit("/file/", 1)[1]
+        if file_token == "gi2g":
+            # §8.8 >2 GiB staging (forge-m6 fixes wave): a Content-Length no
+            # 32-bit long can hold, then a short prefix and a close -- exactly
+            # a real giant file cut short. The framing layer must parse the
+            # claimed length end to end as long long (the 32-bit-`long` MIPS
+            # target would wrap a strtol here) and read exactly what arrived.
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", "3000000000")
+            self.end_headers()
+            self.wfile.write(b"GI2G" * 1024)
+            return
         if item_id == LEGACY_PRIMARY_ITEM:
             # Legacy byte-compatibility: the smoke test supplies real media.
             legacy_names = {"1": "part1.mp3", "2": "part2.mp3"}

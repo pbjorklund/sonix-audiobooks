@@ -30,7 +30,7 @@ need() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1";
 need gcc
 need python3
 
-# §14.6 alias gate, matching the other ABS smokes: SONIX_ABS_FIXTURE picks one
+# §14.7 alias gate, matching the other ABS smokes: SONIX_ABS_FIXTURE picks one
 # alias, the default run walks all three.
 ALIASES="pinned-3563d49 current-5de038d eric-v2.38.0"
 if [[ -n "${SONIX_ABS_FIXTURE:-}" ]]; then
@@ -40,9 +40,19 @@ if [[ -n "${SONIX_ABS_FIXTURE:-}" ]]; then
 	esac
 fi
 
+# §14.7: SONIX_SANITIZER selects the sanitizer build. The functional default is
+# address+undefined; thread is a DISTINCT TSan build (never combined with
+# ASan). An unknown mode fails the run.
+SAN_MODE="${SONIX_SANITIZER:-address,undefined}"
+case "$SAN_MODE" in
+	address,undefined) SANITIZERS=(-fsanitize=address,undefined -fno-omit-frame-pointer) ;;
+	thread) SANITIZERS=(-fsanitize=thread -fno-omit-frame-pointer) ;;
+	*) fail "unknown SONIX_SANITIZER: $SAN_MODE (address,undefined|thread)" ;;
+esac
+
 COMPILE_FLAGS=(-O1 -g -DHOST_BUILD=1 -D_FILE_OFFSET_BITS=64 -I. -Ilvgl
 	-DLV_CONF_INCLUDE_SIMPLE=1 -ffunction-sections -fdata-sections
-	-fsanitize=address,undefined -fno-omit-frame-pointer)
+	"${SANITIZERS[@]}")
 LINK_FLAGS=(-Wl,--gc-sections -lm -lpthread -ldl)
 
 case "$WORK" in "$ROOT"/build/*) rm -rf -- "$WORK" ;; *) fail "unsafe output directory: $WORK" ;; esac
