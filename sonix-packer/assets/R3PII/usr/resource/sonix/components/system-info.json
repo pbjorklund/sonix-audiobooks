@@ -1,7 +1,7 @@
 {
     "device-name": "HiBy R3 Pro II",
     "dac-info": "Dual Cirrus Logic CS43198",
-    "OS_version": "0.5.0",
+    "OS_version": "0.6.0",
     "build_version": "030920262043",
     "ota-repo": "yetisoldier/sonix-audiobooks"
 }
