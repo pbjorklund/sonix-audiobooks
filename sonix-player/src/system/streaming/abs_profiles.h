@@ -75,6 +75,16 @@ bool abs_profiles_edit(const char *id, const char *name, const char *token);
 // media is never touched. Selecting another profile afterwards is allowed.
 bool abs_profiles_remove(const char *id);
 
+// Store-change notification for consumers that mirror profile identity in
+// their own RAM (§12.4 line 1201: the per-profile sync diagnostics clear on
+// profile replacement). Fired after every add/edit/remove and after a factory
+// reset — never for selecting a different active profile (an activation
+// replaces no profile) and never for init. The callback runs on the calling
+// thread, outside the store lock, with a NULL-terminated contract: `fn` may
+// be unregistered by passing NULL afterwards. `user` rides through verbatim.
+typedef void (*abs_profiles_store_fn)(void *user);
+void abs_profiles_set_store_listener(abs_profiles_store_fn fn, void *user);
+
 // Copies `id`'s credentials into `out` under the lock. False when unknown or
 // unconfigured. Callers zero the snapshot after use.
 bool abs_profiles_snapshot(const char *id, abs_auth_snapshot_t *out);

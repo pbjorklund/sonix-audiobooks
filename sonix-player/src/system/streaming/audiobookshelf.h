@@ -316,6 +316,49 @@ void audiobookshelf_network_changed(void);
 void audiobookshelf_queue_progress(const char *book_path, const char *file, double seconds,
 								   bool finished, bool immediate);
 
+// ---------------------------------------------------------------------------
+// Per-profile sync diagnostics (§12.4 line 1201): in-memory only; never
+// persisted, never containing tokens or credentials — the bounded English
+// observability surface for "why has this profile not synced".
+//
+// One entry appears with the first observed server interaction for a profile
+// id (or the literal "legacy" while the §11.1 migration window is all there
+// is): the last successful libraries response, the last successful progress
+// pass, the class of the last failure ("auth", "network", "server", "data"),
+// how many interactions failed since the last success, and the reconnect
+// generation that was current at the last interaction — compared against the
+// generation a caller gets from audiobookshelf_profile_reconnect_generation(),
+// it says whether this profile has been retried since the network returned.
+// Any profile replacement (add/edit/remove/factory reset through the profile
+// store) clears every entry: the history belonged to the old credentials.
+// ---------------------------------------------------------------------------
+
+#define ABS_PROFILE_DIAG_LEGACY "legacy"
+#define ABS_PROFILE_DIAG_CLASS_MAX 16
+
+typedef struct {
+	char profile_id[ABS_PROFILE_ID_MAX];
+	long long last_libraries_ms;         // last successful /api/libraries; 0 = none
+	long long last_progress_ms;          // last successful progress GET/PATCH; 0 = none
+	char last_error_class[ABS_PROFILE_DIAG_CLASS_MAX]; // "" when the last try succeeded
+	int consecutive_failures;            // failed server interactions since the last success
+	unsigned last_reconnect_generation;  // reconnect counter at the last interaction
+} abs_profile_diag_t;
+
+// Copies the live diagnostics into `out` (bounded by `max`), entries oldest
+// first, at most ABS_PROFILE_MAX + 1. Returns how many were filled.
+int audiobookshelf_profile_diagnostics(abs_profile_diag_t *out, int max);
+
+// The monotonically rising reconnect counter the diagnostics stamp. Every
+// connectivity notification (wifi enable, a fresh association mid-session)
+// bumps it exactly once.
+unsigned audiobookshelf_profile_reconnect_generation(void);
+
+// Hooks the clear-on-replacement behavior (§12.4) to the profile store. Boot
+// calls this once from audiobookshelf_init(); the host tests call it directly.
+// Idempotent.
+void audiobookshelf_profile_diagnostics_install(void);
+
 // Why the most recent call on this thread failed.
 const char *audiobookshelf_last_error(void);
 

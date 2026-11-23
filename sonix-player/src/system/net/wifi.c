@@ -1250,6 +1250,14 @@ static void poll_status(void) {
 	// RTC cannot be trusted.
 	if (now_online && !was_online) {
 		clock_network_sync();
+		// The link is back mid-session: the connectivity notification that a
+		// toggle carries must reach abs sync and the download queue here too
+		// (§12.3 line 1178: retry on network notification), or a queue job
+		// parked in WAITING_NETWORK would wait out its whole receive timeout
+		// on a link that just returned. Offline transitions are silent here by
+		// design: in-flight requests fail on their own into WAITING_NETWORK,
+		// and re-attempting into a just-dead link would only churn.
+		audiobookshelf_network_changed();
 	}
 }
 

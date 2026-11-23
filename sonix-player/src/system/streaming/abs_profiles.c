@@ -527,6 +527,19 @@ static bool save_store_locked(void) {
 	return atomic_write_file(path, buf);
 }
 
+// The §12.4 store-change listener: one slot, since the only consumer (the ABS
+// module's per-profile diagnostics) is also one. Fired OUTSIDE store_lock so
+// the callback never extends that lock's critical section; the caller's own
+// thread ordering applies from there.
+static abs_profiles_store_fn store_listener;
+static void *store_listener_user;
+
+static void store_changed_notify(void) {
+	abs_profiles_store_fn fn = store_listener;
+	void *user = store_listener_user;
+	if (fn) fn(user);
+}
+
 int abs_profiles_init(void) {
 	pthread_mutex_lock(&store_lock);
 	memset(&store, 0, sizeof(store));
@@ -699,6 +712,7 @@ bool abs_profiles_add(const char *name, const char *server, const char *token, c
 	if (ok && id_out && id_size) snprintf(id_out, id_size, "%s", id);
 done:
 	pthread_mutex_unlock(&store_lock);
+	if (ok) store_changed_notify();
 	return ok;
 }
 
@@ -719,6 +733,9 @@ bool abs_profiles_edit(const char *id, const char *name, const char *token) {
 	if (token && token[0]) snprintf(p->token, sizeof(p->token), "%s", token);
 	bool ok = save_store_locked();
 	pthread_mutex_unlock(&store_lock);
+	// An edited token replaces the credentials the diagnostics belonged to
+	// (§12.4): the consumer clears on every store change, edits included.
+	if (ok) store_changed_notify();
 	return ok;
 }
 
@@ -739,6 +756,7 @@ bool abs_profiles_remove(const char *id) {
 	if (strcmp(store.active_id, id) == 0) store.active_id[0] = '\0';
 	bool ok = save_store_locked();
 	pthread_mutex_unlock(&store_lock);
+	if (ok) store_changed_notify();
 	return ok;
 }
 
@@ -818,6 +836,13 @@ void abs_profiles_snapshot_wipe(abs_auth_snapshot_t *snap) {
 	memset((void *)bytes, 0, sizeof(*snap));
 }
 
+void abs_profiles_set_store_listener(abs_profiles_store_fn fn, void *user) {
+	pthread_mutex_lock(&store_lock);
+	store_listener = fn;
+	store_listener_user = user;
+	pthread_mutex_unlock(&store_lock);
+}
+
 void abs_profiles_factory_reset(void) {
 	pthread_mutex_lock(&store_lock);
 	// A cleared store cannot hand out credentials: every snapshot call after
@@ -845,4 +870,7 @@ void abs_profiles_factory_reset(void) {
 		if (!config_save())
 			fprintf(stderr, "abs_profiles: factory reset could not clear the legacy keys\n");
 	}
+	// §12.4: a factory reset replaces every profile; the diagnostics mirror
+	// clears even though nothing was persisted.
+	store_changed_notify();
 }

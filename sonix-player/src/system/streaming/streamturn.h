@@ -1,6 +1,8 @@
 #ifndef STREAMTURN_H
 #define STREAMTURN_H
 
+#include <stdbool.h>
+
 // The download turn: one download at a time, across all services.
 //
 // Prefetch calls the start path for upcoming tracks, and that returns as soon
@@ -18,6 +20,13 @@
 
 // Takes the turn, waiting until it is free. Call from a worker thread.
 void streamturn_acquire(void);
+
+// Takes the turn only when it is free this instant. False when another
+// download holds it -- the caller parks and re-tries instead of blocking, so
+// a stop command (pause/cancel) is never wedged behind somebody else's
+// transfer. The ABS download queue uses this: its pump step must never block
+// (§8.5), and its pause acknowledgement runs without the turn at all.
+bool streamturn_try_acquire(void);
 
 // Releases it and wakes a waiter.
 void streamturn_release(void);
@@ -39,6 +48,25 @@ void streamturn_wait_idle(void);
 // the user just asked for, whichever service it belongs to.
 typedef void (*streamturn_abandon_fn)(void);
 void streamturn_register_abandon(streamturn_abandon_fn fn);
+
+// How many abandon callbacks the linked player registers. The four names are
+// the registrants of this tree: qobuzcache, tidalcache, podcastcache and the
+// ABS download queue (§8.3 line 559). The table capacity in streamturn.c
+// carries this count plus deliberate margin, and a static assertion holds the
+// two together, so a fifth registrant that forgets to raise either constant
+// fails the build instead of losing its abandon silently at runtime.
+#define STREAMTURN_ABANDON_KNOWN 4
+
+// How many registrations the table can hold. streamturn.c owns the table and
+// asserts the capacity covers every known registrant (see the header note
+// above); the extra slots are decided margin so a future downloader trips a
+// build failure to raise this, not a silently dropped abandon.
+#define STREAMTURN_ABANDON_MAX 8
+
+// How many abandon callbacks are registered right now. Diagnostics (§12.4)
+// and the tests: the coexistence suite asserts the queue's own registration
+// landed and that the table refuses to overflow past the capacity.
+int streamturn_abandon_count(void);
 
 // Abandons everything in flight, for every service.
 void streamturn_abandon_all(void);

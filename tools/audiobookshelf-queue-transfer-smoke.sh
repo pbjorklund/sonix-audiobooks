@@ -52,7 +52,7 @@ FLAGS=(-O1 -g -DHOST_BUILD=1 -D_FILE_OFFSET_BITS=64 -I. -Ilvgl -DLV_CONF_INCLUDE
 LINK=(-Wl,--gc-sections -lm -lpthread -ldl)
 SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
 	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c
-	src/system/streaming/abs_download.c
+	src/system/streaming/abs_download.c src/system/streaming/streamturn.c
 	src/system/library/audiobookdb.c src/system/library/library.c
 	# The test drives the REAL audiobookscan (the §8.3 scan-completion import
 	# runs through the §8.5 line-592 notification), so the scanner's own stack

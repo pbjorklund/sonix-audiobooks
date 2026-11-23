@@ -24,6 +24,7 @@
 
 #include "src/system/db/sqlite3.h"
 #include "src/system/streaming/abs_download.h"
+#include "src/system/streaming/streamturn.h"
 
 #include <errno.h>
 #include <math.h>
@@ -528,8 +529,12 @@ static bool op_file_download(void *user, const abs_download_op_ctx_t *ctx, const
 
 	if (wake_take_bool(&block_stream_next)) {
 		// Cancel during a blocked STREAMING body read (§8.5 line 1157): a
-		// partial .part exists first, so the cancel's cleanup is observable.
+		// partial .part exists first, so the cancel's cleanup is observable,
+		// and the byte counter is published like a real streaming transfer's
+		// would be — RAM-backed between transitions (§8.2), which is exactly
+		// what the diagnostics wave asserts about the persisted row.
 		fake_transfer(file, 10, true);
+		abs_download_op_progress(ctx, 10, file->expected_size);
 		block_like_network(ctx);
 		*stage_out = "network";
 		snprintf(error, error_size, "The download was paused or cancelled.");
@@ -797,6 +802,24 @@ static void crash_child(const char *mode, const char *root) {
 		exit_after_stop_request = true;
 	} else if (strcmp(mode, "finalize") == 0) {
 		crash_on_finalize = true;
+	} else if (strcmp(mode, "wait") == 0) {
+		// §12.4 line 1202: the persisted queue diagnostics of a
+		// WAITING_NETWORK row. The child stalls the identity fetch and dies
+		// before anything can rewrite the row; the parent reads the database
+		// directly, before any recovery normalizes the state.
+		fetch_fail_stage = "network";
+		fetch_fail_error = "Connection refused while fetching identity";
+		abs_download_config_t cfg = make_config(root, false);
+		CHECK(abs_download_init(&cfg), "child init failed\n");
+		long long id = enqueue_book("waititem", "Wait Title");
+		CHECK(id > 0, "child enqueue failed\n");
+		for (int i = 0; i < 6; i++) {
+			abs_download_pump();
+		}
+		CHECK(job_state(id) == ABS_DL_WAITING_NETWORK,
+			  "child reached %s instead of WAITING_NETWORK\n",
+			  abs_download_state_name(job_state(id)));
+		_exit(81);
 	} else {
 		_exit(98);
 	}
@@ -1985,6 +2008,306 @@ static void test_import_coordinator(void) {
 }
 
 // ---------------------------------------------------------------------------
+// 12. §8.3 lines 558–559 coexistence — the shared download turn.
+//     Four shapes, all against the REAL streamturn:
+//       (a) a busy turn parks the file step without blocking the pump and
+//           before any durable mark (the pump keeps its never-blocks contract);
+//       (b) a pause during the park acknowledges WITHOUT the turn (no hang);
+//       (c) the registered abandon gives the turn to another downloader
+//           mid-book, and the §8.4 timer half of the bounded backoff resumes
+//           the queue even though no connectivity notification ever lands;
+//       (d) the abandon table's capacity holds every registrant and a
+//           post-capacity registration is refused loudly, never silently.
+// ---------------------------------------------------------------------------
+
+static void test_turn_park_pause(void) {
+	printf("streamturn: busy turn parks; pause does not hang... ");
+	const char *root = mkcard("turn-park");
+	fake_reset();
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "init\n");
+	char err[128] = {0};
+
+	long long id = enqueue_book("tp1", "Turn Park");
+	pump_until(id, ABS_DL_DOWNLOADING);
+	// File 1: the turn is free, the transfer runs, the record commits (§8.2
+	// step 4) and the file step releases before advancing (§8.3 line 558).
+	CHECK(abs_download_pump(), "file 1 transfer\n");
+	file_record(id, 1, &f_record);
+	CHECK(strcmp(f_record.state, "complete") == 0, "file 1 record after its transfer\n");
+
+	// Another downloader holds the turn. The next file step must PARK: the
+	// pump returns (never blocks), the op never runs, nothing durable moves —
+	// file 2 stays `pending` and no .part appears.
+	streamturn_acquire();
+	int writes2 = file_writes[2];
+	CHECK(!abs_download_pump(), "a busy turn must park the pump, never block\n");
+	CHECK(job_state(id) == ABS_DL_DOWNLOADING, "parked attempt keeps its state\n");
+	CHECK(file_writes[2] == writes2, "the parked step must not run the op\n");
+	abs_download_file_t f2;
+	file_record(id, 2, &f2);
+	CHECK(strcmp(f2.state, "pending") == 0, "the parked step must not durably mark file 2\n");
+	char part2[1400];
+	card_file(FAKE_DEST "/track02.mp3.part", part2, sizeof(part2));
+	CHECK(!file_exists(part2), "the parked step must not touch the card\n");
+	CHECK(abs_download_busy(), "a parked DOWNLOADING row stays the power decisions' busy bit\n");
+
+	// §8.1/§8.3: pausing during the streamturn wait cannot hang. The pause
+	// acknowledgement runs while the other downloader still holds the turn.
+	CHECK(abs_download_pause(id, err, sizeof(err)), "pause while parked: %s\n", err);
+	CHECK(job_state(id) == ABS_DL_PAUSING, "the snapshot must say Stopping at once\n");
+	CHECK(abs_download_pump(), "the pause ack must run without the turn\n");
+	CHECK(job_state(id) == ABS_DL_PAUSED, "paused with the turn still held\n");
+
+	// The other downloader's transfer ends and the turn returns.
+	streamturn_release();
+	// The parked attempt never marked anything, so the resume is the plain
+	// file-granular restart-from-zero of §8.1.
+	CHECK(abs_download_resume(id, err, sizeof(err)), "resume: %s\n", err);
+	pump_until(id, ABS_DL_DOWNLOADING);
+	CHECK(abs_download_pump(), "file 2 after the turn returned\n");
+	run_to_done(id);
+	CHECK(file_writes[2] == writes2 + 1, "file 2 transferred exactly once after the park\n");
+
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+static void test_turn_interleave(void) {
+	printf("streamturn: abandon gives way mid-book; the timer half resumes... ");
+	const char *root = mkcard("turn-interleave");
+	fake_reset();
+	wake_reset();
+	abs_download_config_t cfg = make_config(root, true);
+	CHECK(abs_download_init(&cfg), "init\n");
+	// §8.3 line 559: init registered the queue's abandon with the shared turn.
+	CHECK(streamturn_abandon_count() >= 1, "the queue's abandon must be registered at init\n");
+
+	long long id = enqueue_book("ti1", "Turn Interleave");
+	// File 1 completes; file 2 blocks inside a published read exactly like a
+	// stalled server (the §8.5 line 1028 block the abandon wakes).
+	wake_put_bool(&block_stream_next, true);
+	wait_state(id, ABS_DL_DOWNLOADING, "the attempt reaches the transfer");
+	wait_flag(&blocked_seen, "the streaming transfer to block");
+
+	// Another downloader asks for the turn: abandon-everything first (§8.3:
+	// whoever asks for the turn wakes every holder), then its acquire. Only
+	// the queue's registered abandon can end this blocked transfer — the test
+	// wrote nothing to the stand-in socket's other end.
+	streamturn_abandon_all();
+	wait_flag(&unblocked_seen, "the abandon to wake the blocked transfer");
+	wait_state(id, ABS_DL_WAITING_NETWORK, "the abandoned attempt waits for the network");
+	abs_download_snapshot_t snap;
+	const abs_download_job_t *j = snap_job(id, &snap);
+	CHECK(strcmp(j->error_stage, "network") == 0, "the give-way records a network stage\n");
+	CHECK(j->bytes_done >= 0, "the abandoned attempt keeps an honest counter\n");
+
+	// The turn is free the moment the attempt ended (release precedes the
+	// WAITING persist), so the other downloader acquires it mid-book and
+	// holds it. The queue's 300 ms test backoff expires during the hold and
+	// the resumed attempt must PARK behind us — no byte, no op, no race.
+	streamturn_acquire();
+	wake_reset();
+	int writes2_held = file_writes[2];
+	usleep(150 * 1000); // a bounded hold: longer than any poll, shorter than a hang
+	CHECK(file_writes[2] == writes2_held, "nothing transferred while we held the turn\n");
+	streamturn_release();
+
+	// No connectivity notification ever arrives: the §8.4 per-job backoff's
+	// TIMER HALF requeues the expired wait and the FIFO resumes cleanly.
+	wait_state(id, ABS_DL_DONE, "the timer half must resume the abandoned job");
+	j = snap_job(id, &snap);
+	CHECK(strcmp(j->error, "") == 0, "DONE with error: %s\n", j->error);
+	CHECK(file_writes[2] == writes2_held + 1, "file 2 restarted from zero exactly once\n");
+	CHECK(ack_resets == 1, "one acknowledgement after the give-way resume\n");
+
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// Distinct marker functions so the table fills with genuinely distinct
+// registrations, each recording that abandon-everything reached it.
+static int turn_marker_calls[10];
+#define TURN_MARKER(n) \
+	static void turn_marker_##n(void) { turn_marker_calls[n]++; }
+TURN_MARKER(0)
+TURN_MARKER(1)
+TURN_MARKER(2)
+TURN_MARKER(3)
+TURN_MARKER(4)
+TURN_MARKER(5)
+TURN_MARKER(6)
+TURN_MARKER(7)
+TURN_MARKER(8)
+TURN_MARKER(9)
+static streamturn_abandon_fn turn_markers[] = {
+	turn_marker_0, turn_marker_1, turn_marker_2, turn_marker_3, turn_marker_4,
+	turn_marker_5, turn_marker_6, turn_marker_7, turn_marker_8, turn_marker_9,
+};
+
+static void test_turn_registration(void) {
+	printf("streamturn: abandon table capacity... ");
+	// The queue's own registration is in the table from init (§8.3 line 559).
+	CHECK(streamturn_abandon_count() >= 1, "the queue's registration must survive\n");
+	// Fill up to capacity, then try past it: the overflow is refused loudly
+	// on stderr and the count stays — the former silent no-op would have
+	// dropped a whole service's abandon.
+	int before = streamturn_abandon_count();
+	int filled = 0;
+	while (streamturn_abandon_count() < STREAMTURN_ABANDON_MAX && filled < 10) {
+		CHECK(turn_marker_calls[filled] == 0, "marker pre-registered\n");
+		streamturn_register_abandon(turn_markers[filled]);
+		filled++;
+	}
+	CHECK(streamturn_abandon_count() == STREAMTURN_ABANDON_MAX, "the table must fill exactly to the capacity\n");
+	streamturn_register_abandon(turn_markers[9]);
+	CHECK(streamturn_abandon_count() == STREAMTURN_ABANDON_MAX, "a post-capacity registration is refused, not silent\n");
+
+	// Abandon-everything reaches every registrant, the queue's own among
+	// them (the queue is disarmed here, so its callback wakes nothing).
+	streamturn_abandon_all();
+	for (int i = 0; i < STREAMTURN_ABANDON_MAX - before; i++) {
+		CHECK(turn_marker_calls[i] == 1, "marker %d fired %d times\n", i, turn_marker_calls[i]);
+	}
+	// Capacity is stable for the rest of the process: re-registration of an
+	// existing pointer (as the queue's card-reopen init does) neither grows
+	// nor shifts the table.
+	streamturn_register_abandon(turn_markers[0]);
+	CHECK(streamturn_abandon_count() == STREAMTURN_ABANDON_MAX, "deduplicated registration must not grow the table\n");
+	printf("ok\n");
+}
+
+// §8.4 line 569, §12.3 line 1179: the bounded per-job backoff on the TIMER —
+// inside the window the suspended FIFO must not pick anything up however
+// often the pump is asked, and the window's expiry requeues with no
+// connectivity notification at all.
+static void test_wait_backoff_timer(void) {
+	printf("backoff: bounded window + timer half... ");
+	const char *root = mkcard("wait-timer");
+	fake_reset();
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "init\n");
+
+	// Wi-Fi loss shaped as a stalled identity fetch: WAITING_NETWORK, FIFO
+	// suspended, the queue's other job not attempted (line 569).
+	fetch_fail_stage = "network";
+	fetch_fail_error = "Connection refused while fetching identity";
+	long long w = enqueue_book("wb1", "Wait Backoff");
+	long long other = enqueue_book("wb2", "Wait Other");
+	pump_until(w, ABS_DL_WAITING_NETWORK);
+	CHECK(job_state(other) == ABS_DL_QUEUED, "the FIFO stays suspended behind the wait\n");
+	CHECK(!abs_download_pump(), "inside the window nothing may resume\n");
+	CHECK(!abs_download_pump(), "pumping repeatedly inside the window stays inert\n");
+
+	// No connectivity notification ever arrives. The window (300 ms in this
+	// build) expires and the timer half requeues on the pump's own deadline.
+	fetch_fail_stage = "";
+	usleep(400 * 1000);
+	CHECK(abs_download_pump(), "an expired wait must requeue itself (timer half)\n");
+	pump_until(w, ABS_DL_FETCHING); // the head retry takes the turn first
+	CHECK(job_state(other) == ABS_DL_QUEUED, "the resumed FIFO still runs the stalled job first\n");
+	run_to_done(w);
+	run_to_done(other);
+
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// ---------------------------------------------------------------------------
+// 13. §12.4 line 1202 — queue diagnostics persisted ONLY at coarse state
+//     transitions: state, error stage, sanitized bounded error, file
+//     index/count, last state timestamp; byte progress stays RAM-backed
+//     between transitions and lands at them (§8.2).
+// ---------------------------------------------------------------------------
+
+static void test_queue_diagnostics(void) {
+	printf("queue diagnostics at transitions... ");
+	const char *root = mkcard("diag");
+	// The child stalls the identity fetch and dies at the WAITING_NETWORK
+	// transition; the parent reads the database before any recovery has
+	// normalized the row.
+	fork_crash("wait", root, 81);
+
+	char db[700];
+	card_file(".local/audiobookshelf-downloads.db", db, sizeof(db));
+	sqlite3 *d = NULL;
+	CHECK(sqlite3_open(db, &d) == SQLITE_OK, "open %s\n", db);
+	sqlite3_stmt *stmt = NULL;
+	CHECK(sqlite3_prepare_v2(d,
+								 "SELECT state, error_stage, error, file_index, file_count, bytes_done,"
+								 " bytes_total, updated_ms, created_ms FROM DOWNLOAD_JOB",
+								 -1, &stmt, NULL) == SQLITE_OK,
+		  "prepare (%s)\n", sqlite3_errmsg(d));
+	CHECK(sqlite3_step(stmt) == SQLITE_ROW, "the child's row must persist\n");
+	CHECK(strcmp((const char *)sqlite3_column_text(stmt, 0), "WAITING_NETWORK") == 0, "state %s\n",
+		  (const char *)sqlite3_column_text(stmt, 0));
+	CHECK(strcmp((const char *)sqlite3_column_text(stmt, 1), "network") == 0, "error stage\n");
+	const unsigned char *err_bytes = sqlite3_column_text(stmt, 2);
+	CHECK(err_bytes && err_bytes[0] && strlen((const char *)err_bytes) <= 255,
+		  "the diagnostics error is bounded and nonempty\n");
+	CHECK(strstr((const char *)err_bytes, FAKE_TOKEN) == NULL, "no token in the diagnostics error\n");
+	CHECK(sqlite3_column_int(stmt, 3) == 0 && sqlite3_column_int(stmt, 4) == 0,
+		  "a fetch-stall has no file position yet (%d/%d)\n", sqlite3_column_int(stmt, 3),
+		  sqlite3_column_int(stmt, 4));
+	CHECK(sqlite3_column_int64(stmt, 5) == 0 && sqlite3_column_int64(stmt, 6) == -1,
+		  "byte counters at a pre-file stall\n");
+	long long updated = sqlite3_column_int64(stmt, 7);
+	long long created = sqlite3_column_int64(stmt, 8);
+	// The last state transition stamp cannot predate the row itself.
+	CHECK(updated >= created && updated > 0, "last state timestamp %lld vs %lld\n", updated, created);
+	CHECK(sqlite3_step(stmt) != SQLITE_ROW, "the suspended FIFO must not have run the second job\n");
+	sqlite3_finalize(stmt);
+	CHECK(sqlite3_close(d) == SQLITE_OK, "close\n");
+
+	// §8.2 recovery: the persisted WAITING returns to QUEUED and finishes.
+	fake_reset();
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "re-init\n");
+	long long id = sole_job();
+	CHECK(job_state(id) == ABS_DL_QUEUED, "recovered %s\n", abs_download_state_name(job_state(id)));
+	run_to_done(id);
+	abs_download_quiesce_storage();
+
+	// Byte progress is RAM-backed between transitions and lands at one: the
+	// mid-file stop publishes 10 bytes; the quiesce transition (§8.5 storage
+	// close) persists them while mapping the row QUEUED, so the returned card
+	// shows exactly the transition's counters.
+	fake_reset();
+	wake_reset();
+	cfg = make_config(root, true);
+	CHECK(abs_download_init(&cfg), "thread re-init\n");
+	wake_put_bool(&block_stream_next, true);
+	long long b2 = enqueue_book("dg2", "Diagnostics 2");
+	wait_flag(&blocked_seen, "the mid-file block with published counters");
+	wake_reset();
+	abs_download_quiesce_storage();
+	CHECK(sqlite3_open(db, &d) == SQLITE_OK, "reopen %s\n", db);
+	stmt = NULL;
+	CHECK(sqlite3_prepare_v2(d,
+								 "SELECT state, bytes_done, bytes_total, file_index, file_count"
+								 " FROM DOWNLOAD_JOB ORDER BY id DESC LIMIT 1",
+								 -1, &stmt, NULL) == SQLITE_OK,
+		  "prepare 2 (%s)\n", sqlite3_errmsg(d));
+	CHECK(sqlite3_step(stmt) == SQLITE_ROW, "row\n");
+	CHECK(strcmp((const char *)sqlite3_column_text(stmt, 0), "QUEUED") == 0, "stop-free quiesce state %s\n",
+		  (const char *)sqlite3_column_text(stmt, 0));
+	CHECK(sqlite3_column_int64(stmt, 1) == 10 && sqlite3_column_int64(stmt, 2) == 42,
+		  "the transition must persist the mirrored byte counters (%lld/%lld)\n",
+		  sqlite3_column_int64(stmt, 1), sqlite3_column_int64(stmt, 2));
+	CHECK(sqlite3_column_int(stmt, 3) == 0 && sqlite3_column_int(stmt, 4) == 3, "file index/count\n");
+	sqlite3_finalize(stmt);
+	CHECK(sqlite3_close(d) == SQLITE_OK, "close 2\n");
+
+	// The reopened card finishes the job from the recovered state.
+	fake_reset();
+	cfg = make_config(root, true);
+	CHECK(abs_download_init(&cfg), "reopen init\n");
+	wait_state(b2, ABS_DL_DONE, "the reopened queue must finish the job");
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
 	if (argc != 2 || !argv[1][0]) {
@@ -2016,6 +2339,15 @@ int main(int argc, char **argv) {
 	test_busy_gate();
 	test_storage_lifecycle();
 	test_import_coordinator();
+
+	// §8.3/§8.5 line 589 coexistence + §8.4 timer backoff + §12.4 diagnostics.
+	test_queue_diagnostics();
+	test_turn_park_pause();
+	test_wait_backoff_timer();
+	test_turn_interleave();
+	// Last: leaves the abandon table filled to capacity for the remainder of
+	// the process (harmless no-ops) while proving the overflow refusal.
+	test_turn_registration();
 
 	printf("audiobookshelf-queue-test: queue foundation passed\n");
 	return 0;

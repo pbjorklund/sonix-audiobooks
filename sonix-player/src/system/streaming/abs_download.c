@@ -57,14 +57,27 @@
 
 #include "src/system/core/utils.h"
 #include "src/system/db/sqlite3.h"
+#include "src/system/streaming/streamturn.h"
 
 // Bounded per-job automatic backoff (§8.4): WAITING_NETWORK jobs are only
 // reconsidered after a connectivity change AND after this interval since they
 // entered the wait. A change inside the window must not cause an instant
 // re-attempt storm. User actions (pause+resume, retry of a FAILED job) bypass
-// it. The timer-driven half of this arrives with the WS5 bounded-wait work;
-// see the report's missing entry points.
+// it. The timer-driven half — requeueing an expired wait with no connectivity
+// notification at all, for a server that returned while the link stayed up —
+// lives in the worker's wake deadline and the pump step. The interval is
+// overridable at build time for the queue test's bounded harness only;
+// production never defines it.
+#ifndef ABS_DL_WAIT_BACKOFF_MS
 #define ABS_DL_WAIT_BACKOFF_MS (30 * 1000)
+#endif
+
+// The head file step, parked because another downloader holds the shared turn,
+// re-pumps on this cadence (§8.3 line 558). A released turn is noticed within
+// a quarter second, and a stop command cuts in at once through the condition
+// variable — a pause never waits out this interval, because its
+// acknowledgement runs without the turn.
+#define ABS_DL_TURN_POLL_MS 250
 
 static const char *const STATE_NAMES[ABS_DL_STATE_COUNT] = {
 	"QUEUED", "FETCHING", "DOWNLOADING", "PAUSING", "PAUSED",
@@ -170,6 +183,7 @@ static int jobs_count;
 
 static bool storage_paused;             // §8.4: ENOSPC/card write failure pauses the whole queue
 static bool wait_blocked;               // a job hit the network; FIFO suspended until connectivity changes
+static bool turn_wait;                  // the head file/finalize step parked: another downloader holds the turn
 
 static long long active_id;             // job the worker owns, 0 when none
 static abs_download_state_t active_state; // mirror of jobs[active].state
@@ -220,6 +234,35 @@ static long long now_ms(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
 	return (long long)ts.tv_sec * 1000 + (long long)ts.tv_nsec / 1000000LL;
+}
+
+// §8.3 line 559: the queue's abandon callback. Whoever is about to ask for the
+// shared download turn (a Qobuz/Tidal/podcast start) calls every registered
+// abandon, and this one wakes the queue's in-flight transfer through its
+// §8.5 line-1028 slot, so the ABS download gives way at once instead of
+// holding the turn for the rest of a large file. The woken attempt is
+// classified by the op as a network stall: the job enters WAITING_NETWORK and
+// resumes on a connectivity change or the bounded per-job backoff — exactly
+// the give-way-and-resume shape the shared turn exists for.
+//
+// The armed/stale check is the same card-generation guard every command uses;
+// taking the queue lock here is safe because streamturn_abandon_all() copies
+// the table and calls the functions OUTSIDE its own lock, and nothing on the
+// queue side ever holds `lock` while waiting for streamturn's.
+static void queue_streamturn_abandon(void) {
+	pthread_mutex_lock(&lock);
+	if (armed && !storage_stale_locked()) {
+		http_op_cancel(&queue_http_op);
+	}
+	pthread_mutex_unlock(&lock);
+}
+
+// Registers the queue's abandon with the shared download turn. Idempotent:
+// registration deduplicates by function pointer, so every card-reopen init
+// (§8.5 system.c/usb.c) re-arms through the same call without growing the
+// table.
+static void streamturn_register_queue_locked(void) {
+	streamturn_register_abandon(queue_streamturn_abandon);
 }
 
 // §8.4: bounded, sanitized English message. Control bytes become spaces; any
@@ -1658,33 +1701,51 @@ bool abs_download_sync_blocked(const char *destination) {
 	return blocked;
 }
 
+// §8.4: move every WAITING_NETWORK row whose per-job backoff window has
+// expired back to QUEUED, in one transaction. `now` is compared against the
+// row's updated_ms — the stamp committed when it entered the wait. Returns how
+// many rows moved; any movement lifts the FIFO suspension, because the head
+// retry is what the suspension was protecting.
+static int requeue_waiting_network_locked(long long now) {
+	if (!db_exec("BEGIN")) {
+		return 0;
+	}
+	int moved = 0;
+	for (int i = 0; i < jobs_count; i++) {
+		abs_download_job_t *j = &jobs[i];
+		if (j->state != ABS_DL_WAITING_NETWORK || now - j->updated_ms < ABS_DL_WAIT_BACKOFF_MS) {
+			continue;
+		}
+		j->state = ABS_DL_QUEUED;
+		j->error_stage[0] = '\0';
+		j->error[0] = '\0';
+		if (persist_job_locked(j)) {
+			moved++;
+		}
+	}
+	if (moved && !db_exec("COMMIT")) {
+		db_exec("ROLLBACK");
+		reload_locked();
+		return 0;
+	}
+	if (!moved) {
+		db_exec("COMMIT"); // empty pass matches the empty network_changed signal
+		return 0;
+	}
+	reload_locked();
+	wait_blocked = false;
+	return moved;
+}
+
 void abs_download_network_changed(void) {
 	pthread_mutex_lock(&lock);
 	if (armed && !storage_stale_locked()) {
-		long long now = now_ms();
 		// §8.4: automatic retry happens after a connectivity change, and never
-		// inside the per-job window since the job entered the wait.
-		db_exec("BEGIN");
-		bool any = false;
-		for (int i = 0; i < jobs_count; i++) {
-			abs_download_job_t *j = &jobs[i];
-			if (j->state != ABS_DL_WAITING_NETWORK || now - j->updated_ms < ABS_DL_WAIT_BACKOFF_MS) {
-				continue;
-			}
-			j->state = ABS_DL_QUEUED;
-			j->error_stage[0] = '\0';
-			j->error[0] = '\0';
-			if (persist_job_locked(j)) {
-				any = true;
-			}
-		}
-		if (any && db_exec("COMMIT")) {
-			reload_locked();
-		} else if (any) {
-			db_exec("ROLLBACK");
-		} else {
-			db_exec("COMMIT");
-		}
+		// inside the per-job window since the job entered the wait. A
+		// connectivity change is also what lifts the FIFO suspension — even
+		// for rows still inside their own window, whose automatic retry
+		// remains their own wait's business.
+		requeue_waiting_network_locked(now_ms());
 		wait_blocked = false;
 	}
 	cv_signal();
@@ -1835,12 +1896,15 @@ static void auth_drop(void) {
 
 // A terminal state or a stop resets the per-attempt context: the auth snapshot
 // is destroyed (it never outlives one attempt, §8.1), the cancel flag is
-// armed for the next attempt, and the wake slot is drained -- a stop aimed at
-// the finished attempt must not wake the next job's network calls.
+// armed for the next attempt, the wake slot is drained -- a stop aimed at
+// the finished attempt must not wake the next job's network calls -- and the
+// turn-park latch resets: nothing of this attempt is waiting for the shared
+// turn any more.
 static void end_attempt_locked(void) {
 	auth_drop();
 	active_auth_done = false;
 	active_stop = STOP_NONE;
+	turn_wait = false;
 	op_cancel_store(0);
 	http_op_clear(&queue_http_op);
 	snapshot_generation++;
@@ -1898,6 +1962,7 @@ static bool ack_pause_locked(void) {
 	}
 	int intent = active_stop;
 	bool cancelled = intent == STOP_CANCEL;
+	turn_wait = false; // a parked step never reached an op; the ack may run immediately
 
 	db_exec("BEGIN");
 	reset_writing_file_locked(active_job.id);
@@ -2151,6 +2216,16 @@ static bool step_fetch_locked(void) {
 // DOWNLOADING: the current file's transfer. The row goes to `writing` first
 // (durable), then the op streams to <final>.part; the record is committed
 // complete only after the op's atomic rename (§8.2 step 4).
+//
+// §8.3 line 558: the shared download turn is taken around EACH file — not
+// around a whole multi-track book — so a Qobuz/Tidal/podcast downloader can
+// interleave between this book's files. The acquisition happens with the
+// queue mutex RELEASED (§12.1 line 1154), and it is a non-blocking try, not an
+// unconditional wait: a step that cannot take the turn parks (turn_wait) and
+// re-pumps on a bounded cadence instead of blocking the pump (§8.5) behind
+// somebody else's transfer. A pause/cancel never needs the turn — its
+// acknowledgement runs before this step ever does — so a stop during the park
+// is never wedged behind another downloader's file.
 static bool step_file_locked(void) {
 	if (!active_take_locked()) {
 		return false;
@@ -2172,7 +2247,32 @@ static bool step_file_locked(void) {
 		return apply_job_locked(&j);
 	}
 
-	// Durably mark the attempt before the first byte moves.
+	// The turn window: released `lock`, a single instant of streamturn. A
+	// command (pause/cancel/remove-refusal/quiesce) can run in here; the state
+	// check after the lock returns decides which of us owns the attempt.
+	op_running = true;
+	pthread_mutex_unlock(&lock);
+	bool took = streamturn_try_acquire();
+	pthread_mutex_lock(&lock);
+	if (!took) {
+		// §8.3 coexistence: another downloader holds the turn. Nothing in this
+		// step mutates anything, so the parked attempt leaves no durable
+		// trace; the worker re-pumps within ABS_DL_TURN_POLL_MS and a stop
+		// command wakes the worker at once.
+		op_running = false;
+		turn_wait = true;
+		return false;
+	}
+	turn_wait = false;
+	if (stop_requested || active_state != ABS_DL_DOWNLOADING || active_id != active_job.id) {
+		// A quiesce or a stop raced the turn win. Give the turn straight back
+		// and let the stop's acknowledgement path own the outcome.
+		op_running = false;
+		streamturn_release();
+		return true;
+	}
+
+	// Durably mark the attempt before the first byte moves (the turn is ours).
 	db_exec("BEGIN");
 	{
 		sqlite3_stmt *stmt = prepare_locked(
@@ -2190,10 +2290,14 @@ static bool step_file_locked(void) {
 	j.bytes_total = current->expected_size >= 0 ? current->expected_size : -1;
 	if (!persist_job_locked(&j) || !db_exec("COMMIT")) {
 		db_exec("ROLLBACK");
+		op_running = false;
+		streamturn_release();
 		return false;
 	}
 	reload_locked();
 	if (!active_take_locked()) {
+		op_running = false;
+		streamturn_release();
 		return false;
 	}
 
@@ -2211,6 +2315,10 @@ static bool step_file_locked(void) {
 			  cfg.ops->file_download(cfg.ops->user, &ctx, current, &final_size, &stage, error, sizeof(error));
 	pthread_mutex_lock(&lock);
 	op_running = false;
+	// The per-file turn ends here regardless of the outcome (§8.3 line 558):
+	// success, stop, or failure all release before any state writing, so
+	// another downloader can start the moment this file is done.
+	streamturn_release();
 	if (stop_requested) {
 		return true;
 	}
@@ -2346,10 +2454,35 @@ static bool step_file_locked(void) {
 // §8.2 steps 6–8: FINALIZING — sidecars/manifest and the resume mapping, then
 // the acknowledgement reset, then the DONE transaction that releases the sync
 // barrier. The barrier is visible to abs_download_sync_blocked the whole time.
+//
+// §8.3 line 558: the finalize window holds the shared download turn, because
+// its cover fetch is a media download like any file's. The hold spans the
+// whole finalize op (the sidecar/manifest writes are local and brief), the
+// acquisition is the same released-lock non-blocking try as the file step, and
+// the pause deferred by the FINALIZING semantics (§8.1) stays bounded: the
+// park never blocks the stop acknowledgement, and the turn returns before the
+// barrier-completing transactions run.
 static bool step_finalize_locked(void) {
 	if (!active_take_locked()) {
 		return false;
 	}
+	// The finalize turn window — same shape as step_file_locked's.
+	op_running = true;
+	pthread_mutex_unlock(&lock);
+	bool took = streamturn_try_acquire();
+	pthread_mutex_lock(&lock);
+	if (!took) {
+		op_running = false;
+		turn_wait = true;
+		return false;
+	}
+	turn_wait = false;
+	if (stop_requested || active_state != ABS_DL_FINALIZING || active_id != active_job.id) {
+		op_running = false;
+		streamturn_release();
+		return true;
+	}
+
 	abs_download_op_ctx_t ctx;
 	op_ctx_fill(&ctx, ABS_DL_FINALIZING);
 	abs_download_resume_t resume;
@@ -2364,6 +2497,9 @@ static bool step_finalize_locked(void) {
 								&stage, error, sizeof(error));
 	pthread_mutex_lock(&lock);
 	op_running = false;
+	// The finalize's own per-file turn ends before any of the commit work
+	// below runs (§8.3: the interleave hole between downloads is the point).
+	streamturn_release();
 	if (stop_requested) {
 		return true;
 	}
@@ -2469,6 +2605,20 @@ bool abs_download_pump(void) {
 		return did;
 	}
 	if (!active_id) {
+		// §8.4, timer half: an expired WAITING_NETWORK wait requeues on the
+		// pump regardless of any connectivity notification — a server that
+		// returned while the link stayed up gets its bounded automatic retry
+		// from the worker's own deadline, not only from a wifi event. This
+		// covers both suspension shapes: the FIFO-wide wait_blocked stall, and
+		// the rarer row whose suspension a connectivity change already lifted
+		// while its own window was still running.
+		bool any_waiting = false;
+		for (int i = 0; i < jobs_count && !any_waiting; i++) {
+			any_waiting = jobs[i].state == ABS_DL_WAITING_NETWORK;
+		}
+		if (any_waiting) {
+			requeue_waiting_network_locked(now_ms());
+		}
 		if (storage_paused || wait_blocked) {
 			pthread_mutex_unlock(&lock);
 			return false;
@@ -2509,14 +2659,63 @@ static bool pump_has_work_locked(void) {
 	return !storage_paused && !wait_blocked && first_queued_locked() != 0;
 }
 
+// The earliest moment a suspended WAITING_NETWORK job's per-job backoff
+// window expires — the wake deadline of the §8.4 timer half (0 when no row
+// waits, which cannot happen while the callers check `wait_blocked` first).
+static long long wait_expiry_locked(void) {
+	long long earliest = 0;
+	for (int i = 0; i < jobs_count; i++) {
+		if (jobs[i].state != ABS_DL_WAITING_NETWORK) {
+			continue;
+		}
+		long long at = jobs[i].updated_ms + ABS_DL_WAIT_BACKOFF_MS;
+		if (!earliest || at < earliest) {
+			earliest = at;
+		}
+	}
+	return earliest;
+}
+
 static void *worker_main(void *unused) {
 	(void)unused;
 	// §8.5/power: background work on the 1-core device; see utils.h.
 	thread_be_background("abs download");
 	for (;;) {
 		pthread_mutex_lock(&lock);
-		while (!stop_requested && !pump_has_work_locked()) {
-			pthread_cond_wait(&work_cv, &lock);
+		if (stop_requested) {
+			pthread_mutex_unlock(&lock);
+			break;
+		}
+		if (!pump_has_work_locked()) {
+			// Nothing to do: sleep until a command's signal, a wait expiry or
+			// the next turn re-pump — and pump once after ANY of them, because
+			// the §8.4 timer half and the §8.3 turn park must reach the pump
+			// even though pump_has_work only looks at row states. Every wait
+			// here is a release-wait (the mutex is dropped while sleeping), so
+			// commands never queue behind it.
+			struct timespec until;
+			if (!active_id && wait_blocked && !storage_paused) {
+				// §8.4, timer half: wake at the earliest WAITING_NETWORK
+				// expiry so a server that returned without any connectivity
+				// notification still gets its bounded automatic retry. The
+				// delay is clamped to [200 ms, the backoff] — never a hot
+				// spin, never a silently-forever sleep.
+				long long expiry = wait_expiry_locked();
+				long long delay = expiry > 0 ? expiry - now_ms() : ABS_DL_WAIT_BACKOFF_MS;
+				if (delay > ABS_DL_WAIT_BACKOFF_MS) delay = ABS_DL_WAIT_BACKOFF_MS;
+				if (delay < 200) delay = 200;
+				deadline_in_ms(&until, (unsigned int)delay);
+				pthread_cond_timedwait(&work_cv, &lock, &until);
+			} else if (turn_wait) {
+				// §8.3 line 558: the head file/finalize step is parked because
+				// another downloader holds the shared turn. Re-pump on the
+				// bounded cadence; a stop command's condvar signal cuts in at
+				// once, and its acknowledgement never needs the turn.
+				deadline_in_ms(&until, ABS_DL_TURN_POLL_MS);
+				pthread_cond_timedwait(&work_cv, &lock, &until);
+			} else {
+				pthread_cond_wait(&work_cv, &lock);
+			}
 		}
 		bool stop = stop_requested;
 		pthread_mutex_unlock(&lock);
@@ -2567,6 +2766,7 @@ bool abs_download_init(const abs_download_config_t *config) {
 	stop_requested = false;
 	storage_paused = false;
 	wait_blocked = false;
+	turn_wait = false;
 	import_running = false;
 	op_cancel_store(0);
 	op_running = false;
@@ -2602,6 +2802,10 @@ bool abs_download_init(const abs_download_config_t *config) {
 	armed = true;
 	card_generation++;
 	reload_locked();
+	// §8.3 line 559: the queue's abandon joins the shared download turn's
+	// table. Idempotent across card-reopen inits (registration deduplicates
+	// by pointer), and the callback refuses to wake anything while disarmed.
+	streamturn_register_queue_locked();
 	if (cfg.ops && cfg.enable_worker_thread &&
 		pthread_create(&worker_thread, NULL, worker_main, NULL) == 0) {
 		worker_alive = true;
@@ -2676,6 +2880,7 @@ void abs_download_quiesce_storage(void) {
 	active_state = ABS_DL_QUEUED;
 	active_auth_done = false;
 	active_stop = STOP_NONE;
+	turn_wait = false; // nothing of a torn-down queue is parked on the shared turn
 	op_cancel_store(0);
 	if (was_armed) {
 		// The slot belonged to the queue just torn down. When quiesce runs

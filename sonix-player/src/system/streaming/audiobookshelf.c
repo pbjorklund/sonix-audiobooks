@@ -87,6 +87,126 @@ static long progress_forced_stamp;
 static audiobookshelf_sync_status_t progress_status = ABS_SYNC_CHECKING;
 static void progress_worker_start(void);
 
+// ---------------------------------------------------------------------------
+// Per-profile sync diagnostics (§12.4 line 1201). In RAM only — nothing here
+// is persisted, logged with credentials, or read on the LVGL thread's behalf
+// outside the bounded copy in audiobookshelf_profile_diagnostics(). The table
+// is keyed by the store's profile ids plus the fixed "legacy" migration
+// window; a store replacement (add/edit/remove/factory reset, §11) clears it
+// through the profile store's notification, because ids can repeat after a
+// factory reset and no lazy staleness check can see a same-id token edit.
+// ---------------------------------------------------------------------------
+
+static pthread_mutex_t diag_lock = PTHREAD_MUTEX_INITIALIZER;
+static abs_profile_diag_t profile_diags[ABS_PROFILE_MAX + 1]; // +1: the legacy slot
+static unsigned diag_reconnect_generation;
+
+static long long diag_now_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (long long)ts.tv_sec * 1000 + (long long)ts.tv_nsec / 1000000LL;
+}
+
+// §12.4 "last error class" for the sync surface, from the HTTP response the
+// interaction ended with: a refused token is auth, no response at all is the
+// network, everything else the server answered is the server's, and a
+// well-formed response the parser could not use is data. No class carries any
+// request detail — the row is four fixed English words, sanitizable by shape.
+static const char *abs_diag_class(int status) {
+	if (status == 401 || status == 403) return "auth";
+	if (status <= 0) return "network";
+	return "server";
+}
+
+// The slot for a profile id: found by id, else the first free row. Never
+// fails: ABS_PROFILE_MAX profiles plus the legacy slot fill the table exactly
+// (§11.1), and an impossible sixth id reuses the legacy row rather than
+// growing anything.
+static abs_profile_diag_t *diag_slot_locked(const char *profile_id) {
+	const char *key = profile_id && profile_id[0] ? profile_id : ABS_PROFILE_DIAG_LEGACY;
+	abs_profile_diag_t *free_slot = NULL;
+	for (int i = 0; i < (int)(sizeof(profile_diags) / sizeof(profile_diags[0])); i++) {
+		if (strcmp(profile_diags[i].profile_id, key) == 0) return &profile_diags[i];
+		if (!profile_diags[i].profile_id[0] && !free_slot) free_slot = &profile_diags[i];
+	}
+	abs_profile_diag_t *slot = free_slot ? free_slot : &profile_diags[0];
+	if (!slot->profile_id[0]) snprintf(slot->profile_id, sizeof(slot->profile_id), "%s", key);
+	return slot;
+}
+
+// One observed server interaction for a profile: a success resets the failure
+// run (and stamps the matching response surface), a failure records the class
+// and extends the run. `now` rides in so both recorders stamp one instant.
+static void diag_record(bool ok, const char *which, const char *profile_id, const char *error_class,
+						long long now) {
+	if (!which || !which[0]) return;
+	const char *klass = ok ? "" : (error_class && error_class[0] ? error_class : "network");
+	pthread_mutex_lock(&diag_lock);
+	abs_profile_diag_t *d = diag_slot_locked(profile_id);
+	d->last_reconnect_generation = diag_reconnect_generation;
+	if (ok) {
+		if (strcmp(which, "libraries") == 0) d->last_libraries_ms = now;
+		else d->last_progress_ms = now;
+		d->consecutive_failures = 0;
+		d->last_error_class[0] = '\0';
+	} else {
+		snprintf(d->last_error_class, sizeof(d->last_error_class), "%.15s", klass);
+		d->consecutive_failures++;
+	}
+	pthread_mutex_unlock(&diag_lock);
+}
+
+// The credentials identity a profile-less caller (the browse path resolves the
+// ACTIVE profile) should stamp its interaction under.
+static void diag_key_for_active(char *out, size_t size) {
+	char id[ABS_PROFILE_ID_MAX];
+	if (abs_profiles_active(id, sizeof(id))) {
+		snprintf(out, size, "%s", id);
+	} else {
+		snprintf(out, size, "%s", ABS_PROFILE_DIAG_LEGACY);
+	}
+}
+
+int audiobookshelf_profile_diagnostics(abs_profile_diag_t *out, int max) {
+	if (!out || max <= 0) return 0;
+	pthread_mutex_lock(&diag_lock);
+	int count = 0;
+	for (int i = 0; i < (int)(sizeof(profile_diags) / sizeof(profile_diags[0])) && count < max; i++) {
+		if (profile_diags[i].profile_id[0]) out[count++] = profile_diags[i];
+	}
+	pthread_mutex_unlock(&diag_lock);
+	return count;
+}
+
+unsigned audiobookshelf_profile_reconnect_generation(void) {
+	pthread_mutex_lock(&diag_lock);
+	unsigned generation = diag_reconnect_generation;
+	pthread_mutex_unlock(&diag_lock);
+	return generation;
+}
+
+// §12.4: cleared on profile replacement. The profile store fires after every
+// add/edit/remove and factory reset; the table dies wholesale because the
+// history belonged to the replaced credentials, whatever the new row's id is.
+static void abs_diag_store_replaced(void *user) {
+	(void)user;
+	pthread_mutex_lock(&diag_lock);
+	memset(profile_diags, 0, sizeof(profile_diags));
+	pthread_mutex_unlock(&diag_lock);
+}
+
+// The store's single listener slot must stay owner-stable across the two
+// call shapes (boot init from audiobookshelf_init(), host tests calling the
+// install entry directly), so the registration itself rides pthread_once.
+static void abs_diag_install_listen(void) {
+	abs_profiles_set_store_listener(abs_diag_store_replaced, NULL);
+}
+
+void audiobookshelf_profile_diagnostics_install(void) {
+	static pthread_once_t once = PTHREAD_ONCE_INIT;
+	pthread_once(&once, abs_diag_install_listen);
+}
+
 static void set_error(const char *message) {
 	snprintf(last_error, sizeof(last_error), "%s", message ? message : "");
 }
@@ -107,6 +227,9 @@ static void normalize_server(const char *server, char *out, size_t size) {
 void audiobookshelf_init(void) {
 	normalize_server(config_get("audiobookshelf", "server", ""), server_url, sizeof(server_url));
 	snprintf(bearer_token, sizeof(bearer_token), "%s", config_get("audiobookshelf", "token", ""));
+	// §12.4 line 1201: the per-profile diagnostics join the profile store's
+	// replacement notification for this process. Idempotent.
+	audiobookshelf_profile_diagnostics_install();
 #ifdef HOST_BUILD
 	// Test a server without ever putting its secret in a checkout or simulator
 	// config file. Device builds intentionally have no environment override.
@@ -346,7 +469,7 @@ static bool api_request(const char *path, const http_req_t *request, char **body
 }
 
 static bool update_progress(const char *item_id, double current, double duration, bool finished,
-	long long updated_ms, const char *server) {
+	long long updated_ms, const char *server, int *status_out) {
 	char id[ABS_ID_MAX * 3];
 	http_url_encode(item_id, id, sizeof(id));
 	char path[ABS_ID_MAX * 3 + 32];
@@ -363,13 +486,15 @@ static bool update_progress(const char *item_id, double current, double duration
 		.want_error_body = true,
 		.allow_empty_body = true,
 	};
+	int ignored_status;
 	char *body = NULL;
-	bool ok = api_request(path, &req, &body, NULL, server);
+	bool ok = api_request(path, &req, &body, status_out ? status_out : &ignored_status, server);
 	free(body);
 	return ok;
 }
 
-static bool read_progress(const char *item_id, const char *server, abs_remote_progress_t *out) {
+static bool read_progress(const char *item_id, const char *server, abs_remote_progress_t *out,
+	int *status_out) {
 	memset(out, 0, sizeof(*out));
 	char id[ABS_ID_MAX * 3], path[ABS_ID_MAX * 3 + 32];
 	http_url_encode(item_id, id, sizeof(id));
@@ -377,11 +502,15 @@ static bool read_progress(const char *item_id, const char *server, abs_remote_pr
 	char *body = NULL;
 	int status = 0;
 	http_req_t req = {.allow_empty_body = true};
-	bool ok = api_request(path, &req, &body, &status, server);
+	// §12.4: the diagnostics recorder classifies the failure from the exact
+	// status this GET ended with; callers without a diagnostics interest keep
+	// their old behavior apart from writing one stack int.
+	bool ok = api_request(path, &req, &body, status_out ? status_out : &status, server);
 	out->server_now_ms = http_last_server_time_ms();
 	if (!ok) {
+		int ended = status_out ? *status_out : status;
 		free(body);
-		return status == 404;
+		return ended == 404; // §12.3 line 1181: no remote progress is not an error
 	}
 	json_doc_t doc;
 	if (!body || !json_parse(body, &doc)) { free(body); return false; }
@@ -539,10 +668,18 @@ static void progress_refresh_status(void) {
 }
 
 // 0: retain/retry, 1: acknowledge sent checkpoint, 2: newer remote imported.
+// `class_out` carries the §12.4 diagnostics error class of a failed reconcile
+// (left "" on success); the caller stamps the profile's per-profile sync
+// diagnostics with it. Class never carries request detail — four fixed words.
 static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const progress_job_t *job,
-	const char *item, double current, double duration, const char *server) {
+	const char *item, double current, double duration, const char *server, const char **class_out) {
+	*class_out = "";
 	abs_remote_progress_t remote;
-	if (!read_progress(item, server, &remote)) return 0;
+	int status = 0;
+	if (!read_progress(item, server, &remote, &status)) {
+		*class_out = abs_diag_class(status);
+		return 0;
+	}
 	checkpoint->sync_error = 0;
 	for (int check = 0; check < 2; check++) {
 		abs_decision_t decision = abs_sync_decide(current, checkpoint->finished, checkpoint->updated_ms,
@@ -551,6 +688,9 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 			checkpoint->server_updated_ms = remote.updated_ms;
 			return 1;
 		}
+		// A HOLD keeps the checkpoint on purpose: the server answered a
+		// 2xx and the decision said retain — a successful interaction, no
+		// failure class, the worker records the row's honest not-ready.
 		if (decision == ABS_DECISION_HOLD) return 0;
 		if (decision == ABS_DECISION_DOWNLOAD) {
 			progress_job_t incoming = *job;
@@ -564,7 +704,13 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 			snprintf(bound, sizeof(bound), "%s", server);
 			if (!local_progress(&incoming, ignored, sizeof(ignored), &unused, &total, bound, sizeof(bound), file, &seconds) ||
 				!file[0] || strcmp(bound, server) || !audiobookdb_book_for_file(file, owner, sizeof(owner)) ||
-				strcmp(owner, checkpoint->book) || access(file, R_OK)) return 0;
+				strcmp(owner, checkpoint->book) || access(file, R_OK)) {
+				// The remote copy names a locally unknown book: not a server
+				// fault, not a transport fault — the data the two sides keep
+				// points at different files (§12.3 row "404 progress" family).
+				*class_out = "data";
+				return 0;
+			}
 			long long stamp = remote.updated_ms >= 1577836800000LL &&
 				remote.updated_ms <= remote.server_now_ms + 300000 ? remote.updated_ms : 0;
 			// §8.2 step 6 / §8.5 line 586: a destination inside its FINALIZING
@@ -577,28 +723,58 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 			// the barrier releases (§8.2 line 541: the reset is never re-run
 			// behind it). The barrier surface also covers DONE-but-unacked
 			// recovery rows, so a resumed finalize is covered the same way.
-			if (abs_download_sync_blocked(file)) return 0;
-			if (!audiobook_sync_import(checkpoint, server, file, seconds, remote.finished, stamp)) return 0;
+			if (abs_download_sync_blocked(file)) {
+				*class_out = ""; // not a server problem: the diagnostics record nothing
+				return 0;
+			}
+			if (!audiobook_sync_import(checkpoint, server, file, seconds, remote.finished, stamp)) {
+				// The compare-and-swap lost to a concurrent local edit or an
+				// outstanding checkpoint write: the row retries next pass.
+				*class_out = "data";
+				return 0;
+			}
 			printf("audiobookshelf: imported newer server progress %.1f s\n", remote.seconds);
 			return 2;
 		}
 		// Re-read immediately before the write; ABS has no conditional PATCH.
-		if (check == 0 && !read_progress(item, server, &remote)) return 0;
+		if (check == 0 && !read_progress(item, server, &remote, &status)) {
+			*class_out = abs_diag_class(status);
+			return 0;
+		}
 	}
 	long long stamp = abs_sync_clock_valid(checkpoint->updated_ms, &remote, (long long)time(NULL) * 1000) ?
 		checkpoint->updated_ms : 0;
 	bool restarting = remote.exists && remote.finished && !checkpoint->finished && current > 0;
-	if (!update_progress(item, current, duration, checkpoint->finished, stamp, server)) return 0;
+	if (!update_progress(item, current, duration, checkpoint->finished, stamp, server, &status)) {
+		*class_out = abs_diag_class(status);
+		return 0;
+	}
 	if (restarting) {
 		// ABS clears currentTime when un-finishing; restore it only after
 		// confirming that transition, not if another client moved meanwhile.
-		if (!read_progress(item, server, &remote) || remote.finished ||
-			(remote.seconds != 0 && fabs(remote.seconds - current) > 0.01)) return 0;
-		if (remote.seconds == 0 && !update_progress(item, current, duration, false, stamp, server)) return 0;
+		if (!read_progress(item, server, &remote, &status)) {
+			*class_out = abs_diag_class(status);
+			return 0;
+		}
+		if (remote.finished || (remote.seconds != 0 && fabs(remote.seconds - current) > 0.01)) {
+			*class_out = "data";
+			return 0;
+		}
+		if (remote.seconds == 0 && !update_progress(item, current, duration, false, stamp, server, &status)) {
+			*class_out = abs_diag_class(status);
+			return 0;
+		}
 	}
 	// A successful status alone is not proof that the server kept our position.
-	if (!read_progress(item, server, &remote) || !remote.exists || remote.finished != checkpoint->finished ||
-		fabs(remote.seconds - current) > 0.01) return 0;
+	if (!read_progress(item, server, &remote, &status)) {
+		*class_out = abs_diag_class(status);
+		return 0;
+	}
+	if (!remote.exists || remote.finished != checkpoint->finished ||
+		fabs(remote.seconds - current) > 0.01) {
+		*class_out = "data"; // the server answered, but not with our position
+		return 0;
+	}
 	checkpoint->server_updated_ms = remote.updated_ms;
 	return 1;
 }
@@ -676,6 +852,11 @@ static void *progress_worker(void *unused) {
 		legacy_manifest_binding(legacy_binding, sizeof(legacy_binding));
 		for (int i = 0; i < pass_count && budget > 0; i++) {
 			const abs_auth_snapshot_t *profile = &passes[(rotation + i) % pass_count];
+			// §12.4 line 1201: the progress half of this profile's
+			// diagnostics counts server interactions only — rows skipped for
+			// local reasons (not linked, another server, barrier) record
+			// nothing, so an idle profile's entry still answers "last heard
+			// from this server when".
 			for (; budget > 0; budget--) {
 				audiobookdb_abs_checkpoint_t checkpoint;
 				if (!audiobookdb_abs_next(profile->server, &checkpoint)) break;
@@ -695,11 +876,13 @@ static void *progress_worker(void *unused) {
 					// snapshot under the store lock per request (§11.4 step 4);
 					// this comparison only keeps a manifest from drifting.
 					progress_publish(checkpoint.file, ABS_SYNC_SENDING);
-					result = reconcile_progress(&checkpoint, &job, item, current, duration, bound);
+					const char *class_out = "";
+					result = reconcile_progress(&checkpoint, &job, item, current, duration, bound, &class_out);
 					ok = result != 0;
 					failed = !ok;
 					if (ok) printf("audiobookshelf: synced progress %.1f / %.1f s\n", current, duration);
 					else fprintf(stderr, "audiobookshelf: progress sync failed; saved checkpoint retained\n");
+					diag_record(ok, "progress", profile->profile_id, class_out, diag_now_ms());
 				}
 				if (result != 2) audiobookdb_abs_result(&checkpoint, bound, linked || failed, ok, failed);
 				progress_refresh_status();
@@ -785,6 +968,17 @@ void audiobookshelf_network_changed(void) {
 	progress_reconnect = true;
 	pthread_cond_signal(&progress_cond);
 	pthread_mutex_unlock(&progress_lock);
+	// §12.4 line 1201: the diagnostics' reconnect counter moves exactly once
+	// per connectivity notification, and the §12.3 line 1178 / §8.4 line 569
+	// queue wake rides the same event: a WAITING_NETWORK download job retries
+	// after a connectivity change (its per-job backoff window still applies),
+	// instead of only when its own receive timeout expires. The queue module
+	// shares no lock with this path, so the wake cannot fold back into the
+	// sync pass; it runs outside progress_lock, never across it.
+	pthread_mutex_lock(&diag_lock);
+	diag_reconnect_generation++;
+	pthread_mutex_unlock(&diag_lock);
+	abs_download_network_changed();
 }
 
 audiobookshelf_sync_status_t audiobookshelf_sync_status(const char *file) {
@@ -874,15 +1068,23 @@ static int abs_read_items_page(const char *body, audiobookshelf_item_t *out, int
 
 int audiobookshelf_libraries(audiobookshelf_library_t *out, int max) {
 	if (!out || max <= 0) return 0;
+	// §12.4 line 1201: this is the libraries half of the per-profile
+	// diagnostics. The request resolved the ACTIVE profile's credentials (or
+	// the legacy migration pair), so the interaction stamps that id.
+	char diag_key[ABS_PROFILE_ID_MAX];
+	diag_key_for_active(diag_key, sizeof(diag_key));
 	char *body = NULL;
-	if (!api_request("/api/libraries", NULL, &body, NULL, NULL)) {
+	int status = 0;
+	if (!api_request("/api/libraries", NULL, &body, &status, NULL)) {
 		free(body);
+		diag_record(false, "libraries", diag_key, abs_diag_class(status), diag_now_ms());
 		return -1;
 	}
 	json_doc_t doc;
 	if (!json_parse(body, &doc)) {
 		free(body);
 		set_error("Audiobookshelf returned invalid library data.");
+		diag_record(false, "libraries", diag_key, "data", diag_now_ms());
 		return -1;
 	}
 	int libraries = json_get(&doc, json_root(&doc), "libraries");
@@ -899,6 +1101,7 @@ int audiobookshelf_libraries(audiobookshelf_library_t *out, int max) {
 	}
 	json_free(&doc);
 	free(body);
+	diag_record(true, "libraries", diag_key, "", diag_now_ms());
 	return written;
 }
 

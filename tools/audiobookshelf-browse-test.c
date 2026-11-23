@@ -31,6 +31,15 @@
 static const char *work;          // argv[1]
 #define STUB_SERVER "http://stub.invalid"
 
+// The real connectivity wake lives in the queue module, which this harness
+// deliberately does not link (§8.5 keeps the queue engine out of the browse
+// surface). The §12.4 diagnostics tests below root
+// audiobookshelf_network_changed() for the reconnect generation it carries,
+// so this inert stand-in keeps the link whole; the queue-side wake contract
+// is asserted structurally in tools/audiobookshelf-queue-test.sh and run by
+// the real player binary.
+void abs_download_network_changed(void) { }
+
 // Largest caller array any test needs: the full search window.
 static audiobookshelf_item_t results[ABS_SEARCH_REQUEST_LIMIT];
 static char huge_value[ABS_NAME_MAX + 16];
@@ -46,10 +55,32 @@ static struct {
 	char body[32768];
 } spy;
 
+// §12.4 line 1201 failure shapes for the diagnostics tests: 0 answers
+// normally, a positive value fails exactly one request with that status, and
+// a negative one fails it without any status at all (the transport refused —
+// the diagnostics' network class).
+static int spy_fail_status;
+
 bool http_request(const char *url, const http_req_t *req, char **out, size_t *out_len,
 				  size_t limit, int timeout_secs, int *status_out) {
 	(void)limit; (void)timeout_secs;
 	snprintf(spy.url, sizeof(spy.url), "%s", url ? url : "");
+	if (spy_fail_status) {
+		int status = spy_fail_status;
+		spy_fail_status = 0;
+		if (status > 0 && status_out) *status_out = status;
+		const char *why = status >= 400 ? "Audiobookshelf answered the failure." : "The request never reached the server.";
+		char *body = strdup(why);
+		assert(body);
+		*out = body;
+		if (out_len) *out_len = strlen(why);
+		// The real api_request() resolves credentials through the profile store
+		// before any URL leaves; the stub pins the Bearer reaching this point so a
+		// future credential-path change is caught with the query tests.
+		assert(req && req->extra_headers &&
+			   strncmp(req->extra_headers, "Authorization: Bearer ", 21) == 0);
+		return false;
+	}
 	if (status_out) *status_out = 200;
 	size_t len = strlen(spy.body);
 	char *body = malloc(len + 1);
@@ -604,6 +635,101 @@ static void legacy_compat_tests(void) {
 	expect_str("no request on empty library", captured_path(), "(no request was captured)");
 }
 
+// Canned libraries envelope: one book library the diagnostics tests read.
+static void spy_libraries(void) {
+	snprintf(spy.body, sizeof(spy.body),
+			 "{\"libraries\":[{\"id\":\"lib-diag\",\"name\":\"Diag Shelf\",\"mediaType\":\"book\"}]}");
+}
+
+// §12.4 line 1201: the per-profile, in-memory sync diagnostics —
+// populated through the real libraries path, failure-classed by the exact
+// response the interaction ended with, stamped with the reconnect
+// generation, and cleared by every replacement through the real profile
+// store (the §11 listener; ids repeat after a factory reset, so the clear
+// is wholesale, never a per-id staleness check).
+static void profile_diagnostics_tests(void) {
+	audiobookshelf_library_t libs[8];
+	abs_profile_diag_t diags[ABS_PROFILE_MAX + 1];
+	audiobookshelf_profile_diagnostics_install();
+
+	// Nothing observed in this process yet.
+	expect_int("diagnostics start empty",
+			   audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1), 0);
+
+	// The active profile's first successful libraries response populates
+	// the entry: the libraries stamp, no failure run, no class, no reconnect.
+	spy_libraries();
+	expect_int("libraries response", audiobookshelf_libraries(libs, 8), 1);
+	expect_int("one diagnostics entry", audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1), 1);
+	expect_str("entry keyed by profile id", diags[0].profile_id, "p1");
+	assert(diags[0].last_libraries_ms > 0);
+	expect_bool("libraries does not stamp progress", diags[0].last_progress_ms == 0, true);
+	expect_int("no failures yet", diags[0].consecutive_failures, 0);
+	expect_bool("no error class yet", diags[0].last_error_class[0] == '\0', true);
+	expect_bool("no reconnect generation yet", diags[0].last_reconnect_generation == 0, true);
+
+	// A connectivity notification lifts the reconnect counter exactly once,
+	// and the next interaction stamps its generation.
+	audiobookshelf_network_changed();
+	expect_bool("one reconnect generation", audiobookshelf_profile_reconnect_generation() == 1, true);
+
+	// Network refusal: the transport never answered — class "network",
+	// the failure run starts, generation stamped. The libraries stamp
+	// survives: it answers "when did this profile last answer".
+	spy_fail_status = -1;
+	expect_int("network refusal", audiobookshelf_libraries(libs, 8), -1);
+	audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1);
+	expect_str("network class", diags[0].last_error_class, "network");
+	expect_int("one failure", diags[0].consecutive_failures, 1);
+	expect_bool("libraries stamp survives", diags[0].last_libraries_ms > 0, true);
+	expect_bool("generation stamped", diags[0].last_reconnect_generation == 1, true);
+
+	// A refused token is the auth class (401/403, §12.3 line 1180).
+	spy_fail_status = 401;
+	expect_int("refused token", audiobookshelf_libraries(libs, 8), -1);
+	audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1);
+	expect_str("auth class", diags[0].last_error_class, "auth");
+	expect_int("two failures", diags[0].consecutive_failures, 2);
+
+	// The server's own answer is the server class.
+	spy_fail_status = 500;
+	expect_int("server failure", audiobookshelf_libraries(libs, 8), -1);
+	audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1);
+	expect_str("server class", diags[0].last_error_class, "server");
+	expect_int("three failures", diags[0].consecutive_failures, 3);
+
+	// Success resets the run and clears the class; the generation stays
+	// the last one observed (successes do not invent a reconnect).
+	spy_libraries();
+	expect_int("libraries again", audiobookshelf_libraries(libs, 8), 1);
+	audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1);
+	expect_int("failures reset", diags[0].consecutive_failures, 0);
+	expect_bool("class cleared", diags[0].last_error_class[0] == '\0', true);
+	expect_bool("generation unchanged by a success", diags[0].last_reconnect_generation == 1, true);
+
+	// §12.4: profile replacement clears. Removing p1 — the entry dies.
+	assert(abs_profiles_remove("p1"));
+	expect_int("removed profile's diagnostics gone",
+			   audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1), 0);
+
+	// A replacement profile starts clean, whatever its id (ids repeat
+	// after a factory reset — the wholesale clear, not a per-id check,
+	// is the contract).
+	char id2[ABS_PROFILE_ID_MAX];
+	assert(abs_profiles_add("Test 2", STUB_SERVER, "diag-token-2", id2, sizeof(id2)));
+	expect_str("replacement id", id2, "p2");
+	spy_libraries();
+	expect_int("replacement libraries", audiobookshelf_libraries(libs, 8), 1);
+	expect_int("one entry again", audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1), 1);
+	expect_str("new entry id", diags[0].profile_id, "p2");
+
+	// The listener dies wholesale on the replacement shapes: edit
+	// replaces the credentials the history belonged to.
+	assert(abs_profiles_edit("p2", NULL, "diag-token-3"));
+	expect_int("edited profile's history cleared",
+			   audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1), 0);
+}
+
 int main(int argc, char **argv) {
 	if (argc != 2) {
 		fprintf(stderr, "usage: %s <workdir>\n", argv[0]);
@@ -619,6 +745,7 @@ int main(int argc, char **argv) {
 	search_tests();
 	groups_tests();
 	legacy_compat_tests();
+	profile_diagnostics_tests();
 
 	printf("audiobookshelf-browse-test: offline construction/response/ownership tests passed\n");
 	return 0;
@@ -659,6 +786,13 @@ static void live_resolve_library(void) {
 	}
 	assert(list_lib && strcmp(list_lib, "lib-list-1") == 0);
 	assert(search_lib && strcmp(search_lib, "lib-search-1") == 0);
+	// §12.4 line 1201 on the wire: the fixture's real libraries response
+	// populated the configured profile's in-memory diagnostics entry — the
+	// same surface the offline binary pins, now proven against live bytes.
+	abs_profile_diag_t diags[ABS_PROFILE_MAX + 1];
+	assert(audiobookshelf_profile_diagnostics(diags, ABS_PROFILE_MAX + 1) == 1);
+	assert(strcmp(diags[0].profile_id, "p1") == 0 && diags[0].last_libraries_ms > 0);
+	assert(diags[0].consecutive_failures == 0 && diags[0].last_error_class[0] == '\0');
 }
 
 static bool titles_ascending(const audiobookshelf_item_t *out, int count) {
