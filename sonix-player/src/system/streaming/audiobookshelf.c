@@ -290,8 +290,12 @@ static void error_from_response(int status, const char *body) {
 // exact credential copies the caller resolved (the queue's §8.1 attempt
 // snapshot, or api_request()'s own resolution below); never the mutable
 // globals mid-request. `server` is the identity the URL is joined against.
+// `op`, when given (the queue worker's attempt), carries the wake slot: a
+// pause/cancel shut the in-flight request down instead of waiting out the
+// receive timeout (§8.5 line 1028).
 static bool api_request_with(const char *server, const char *token, const char *path,
-							 const http_req_t *request, char **body, int timeout_secs, int *status_out) {
+							 const http_req_t *request, char **body, int timeout_secs, int *status_out,
+							 http_op_t *op) {
 	char url[ABS_URL_MAX];
 	if (!server || !server[0] ||
 		!path || (size_t)snprintf(url, sizeof(url), "%s%s", server, path) >= sizeof(url)) {
@@ -305,6 +309,7 @@ static bool api_request_with(const char *server, const char *token, const char *
 	http_req_t req = request ? *request : (http_req_t){0};
 	req.extra_headers = headers;
 	req.want_error_body = true;
+	req.op = op; // NULL for every non-queue caller; the wake contract rides here
 
 	int status = 0;
 	bool received = http_request(url, &req, body, NULL, ABS_BODY_LIMIT, timeout_secs, &status);
@@ -335,7 +340,7 @@ static bool api_request(const char *path, const http_req_t *request, char **body
 		return false;
 	}
 	bool ok = api_request_with(server, token, path, request, body, expected_server ? 10 : ABS_TIMEOUT_SECS,
-							   status_out);
+							   status_out, NULL);
 	memset(token, 0, sizeof(token));
 	return ok;
 }
@@ -2251,13 +2256,15 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 // its job is the active one and dies with the attempt snapshot (§8.2
 // steps 2, 8: freed before the next job starts).
 //
-// Cancel/pause reach every op through ctx->cancel (§8.1): the transfer and
-// the finalize's identity refetch poll it between units, and the identity
-// fetch polls it while waiting for the shared catalog mutex. The finalize and
-// acknowledgement-reset ops are the §8.2 steps 5–8 commit: sidecars, cover,
-// resume mapping and the manifest (written LAST, atomic), then the
-// audiobookdb reset and the queue's DONE transaction — books only; episode
-// jobs are the podcast wave's documented refusals.
+// Cancel/pause reach every op through ctx->cancel (§8.1) and through the
+// op context's wake slot (§8.5 line 1028): the transfer and the finalize's
+// identity refetch poll the flag between units, the identity fetch while it
+// waits for the shared catalog mutex, and every blocked network phase inside
+// the http calls is woken by the slot's shutdown — a pause below the receive
+// timeout. The finalize and acknowledgement-reset ops are the §8.2 steps 5–8
+// commit: sidecars, cover, resume mapping and the manifest (written LAST,
+// atomic), then the audiobookdb reset and the queue's DONE transaction —
+// books only; episode jobs are the podcast wave's documented refusals.
 // ---------------------------------------------------------------------------
 
 typedef struct {
@@ -2300,7 +2307,7 @@ static bool abs_catalog_lock_wait(const volatile int *cancel) {
 	for (;;) {
 		if (pthread_mutex_trylock(&abs_catalog_lock) == 0) return true;
 		nanosleep(&pause, NULL);
-		if (cancel && *cancel) return false;
+		if (abs_download_op_cancelled(cancel)) return false;
 		if (time(NULL) >= deadline) return false;
 	}
 }
@@ -2512,12 +2519,15 @@ static bool abs_queue_fetch_identity(void *user, const abs_download_op_ctx_t *ct
 
 	bool requested = false;
 	bool parse_failed = false;
+	int status = 0;
 	{
 		char *body = NULL;
 		// The attempt snapshot's own token, not the mutable globals: the
-		// request identity is the job's server (§8.2 step 1).
+		// request identity is the job's server (§8.2 step 1). The attempt's
+		// wake slot rides the request: a pause/cancel ends the blocked
+		// request at once (§8.5 line 1028).
 		requested = api_request_with(queue_media.server, queue_media.auth.token, path, NULL, &body,
-									 ABS_TIMEOUT_SECS, NULL);
+									 ABS_TIMEOUT_SECS, &status, ctx->op);
 		// §8.2 step 2: validate all tracks before writing anything. A
 		// 257-track item is an explicit unsupported error, never silence.
 		if (requested) {
@@ -2531,6 +2541,34 @@ static bool abs_queue_fetch_identity(void *user, const abs_download_op_ctx_t *ct
 	}
 	pthread_mutex_unlock(&abs_catalog_lock);
 	if (!requested) {
+		// §8.4 line 568: 401/403/404 and malformed metadata are permanent
+		// FAILED jobs, and the job continues to the next one; network stalls
+		// go to WAITING_NETWORK. The two classes need the response status:
+		// a refused token must never look like a dead server, and a vanished
+		// item must never look like a bad connection.
+		if (status == 401 || status == 403) {
+			// Line 1180: never a second profile/token for this job; mark the
+			// job (and, visibly for now, the profile) auth-failed; every
+			// local file and checkpoint is retained and nothing syncs away.
+			// The persisted wording avoids credential-shaped words (§8.4's
+			// sanitizer redacts them on storage); the stage "auth" is what
+			// the queue view keys on later.
+			fprintf(stderr, "abs-queue: job %lld: the server rejected the token (HTTP %d); "
+							"the profile's login needs editing\n",
+					ctx->job_id, status);
+			abs_queue_fail(stage_out, error, error_size, "auth",
+						   "This server refused this profile's login; the credentials need editing.");
+			return false;
+		}
+		if (status == 404) {
+			// Line 1181: permanent missing media; nothing local is deleted
+			// and the row is retryable by the user.
+			fprintf(stderr, "abs-queue: job %lld: the item is no longer on the server (HTTP 404)\n",
+					ctx->job_id);
+			abs_queue_fail(stage_out, error, error_size, "metadata",
+						   "This item is no longer on the server.");
+			return false;
+		}
 		// The failure is described on this thread by the request layer (a
 		// refused token, a dead server) or by the parse (malformed JSON, >256
 		// tracks, no tracks). A dead server or a refused identity stalls into
@@ -2790,13 +2828,35 @@ static bool abs_queue_file_transfer(void *user, const abs_download_op_ctx_t *ctx
 	}
 
 	// The token copy lives in this buffer only for the request build and is
-	// wiped immediately after (§8.1).
+	// wiped immediately after (§8.1). The attempt's wake slot rides the open:
+	// a pause/cancel ends a blocked connect/handshake/header read at once
+	// (§8.5 line 1028), and the response status drives the §8.4 line 568
+	// classification below.
 	char headers[ABS_TOKEN_MAX + 32];
 	snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", queue_media.auth.token);
 	http_stream_t stream;
-	bool opened = http_stream_open_ex(&stream, file->source_url, headers, ABS_TIMEOUT_SECS);
+	int open_status = 0;
+	bool opened = http_stream_open_ex_op(&stream, file->source_url, headers, ABS_TIMEOUT_SECS, ctx->op,
+										 &open_status);
 	memset(headers, 0, sizeof(headers));
 	if (!opened) {
+		if (open_status == 401 || open_status == 403) {
+			// Line 1180: the file-level twin of the fetch mapping — this
+			// job's token was refused mid-attempt; permanent auth failure,
+			// never a second profile/token, nothing local deleted.
+			fprintf(stderr, "abs-queue: job %lld: the server rejected the token for a file (HTTP %d)\n",
+					ctx->job_id, open_status);
+			abs_queue_fail(stage_out, error, error_size, "auth",
+						   "This server refused this profile's login; the credentials need editing.");
+			return false;
+		}
+		if (open_status == 404) {
+			fprintf(stderr, "abs-queue: job %lld: a file is no longer on the server (HTTP 404)\n",
+					ctx->job_id);
+			abs_queue_fail(stage_out, error, error_size, "metadata",
+						   "This file is no longer on the server.");
+			return false;
+		}
 		const char *why = http_last_error();
 		abs_queue_fail(stage_out, error, error_size, "network",
 					   why && why[0] ? why : "The audiobook file could not be downloaded.");
@@ -2826,19 +2886,36 @@ static bool abs_queue_file_transfer(void *user, const abs_download_op_ctx_t *ctx
 	int disk_errno = 0;
 	bool stopped = false;
 	for (;;) {
-		if (*ctx->cancel) {
+		if (abs_download_op_cancelled(ctx->cancel)) {
 			// The stop belongs to the queue: it records PAUSED/CANCELLED and
 			// retains (pause) or deletes (cancel) this .part in its own ack
 			// step, so the op only stops between units — never deletes.
 			stopped = true;
 			break;
 		}
-		int n = http_stream_read(&stream, buffer, sizeof(buffer));
+		// The cancellable read (§8.5 line 1157): the read is wrapped in the
+		// wake slot's publish window, so a pause/cancel both wakes a read
+		// blocked on the socket AND stops the loop on the next attempt.
+		int n = http_stream_read_op(&stream, buffer, sizeof(buffer), ctx->op);
 		if (n == 0) {
+			// EOF is success only when nothing stopped it: a wake surfaces
+			// as this same EOF, and the length check below would call it a
+			// short transfer. The queue's ack step owns the outcome either
+			// way; the classification here just stays honest.
+			if (abs_download_op_cancelled(ctx->cancel) || http_op_woken_current(ctx->op)) {
+				stopped = true;
+			}
 			break;
 		}
 		if (n < 0) {
-			io_failed = true;
+			// A wake (or a flag that rose before this read) is the queue's
+			// stop, not a broken transfer — the ack step owns the outcome,
+			// but the counters and the honest stage still come from here.
+			if (abs_download_op_cancelled(ctx->cancel) || http_op_woken_current(ctx->op)) {
+				stopped = true;
+			} else {
+				io_failed = true;
+			}
 			break;
 		}
 		if (fwrite(buffer, 1, (size_t)n, f) != (size_t)n) {

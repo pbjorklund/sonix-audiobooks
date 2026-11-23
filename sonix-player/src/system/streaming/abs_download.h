@@ -6,6 +6,7 @@
 
 #include "abs_profiles.h" // abs_auth_snapshot_t only (header-only use)
 #include "src/system/core/pathlimits.h" // SONIX_LINKED_DB_PATH_MAX
+#include "src/system/net/http.h"        // http_op_t wake slot (§8.5 line 1028)
 
 // ---------------------------------------------------------------------------
 // Workstream 2 — Audiobookshelf download queue: storage foundation (spec §8).
@@ -147,16 +148,32 @@ typedef struct {
 } abs_download_resume_t;
 
 // Context handed to every ops callback. `cancel` is set (with the queue mutex
-// held) by abs_download_pause/cancel on the active job; slow ops poll it and
-// stop between units. This is the foundation stand-in for the
-// abs_client_op_t publication of §8.1's pause semantics — see the report's
-// missing-entry-points list.
+// held) by abs_download_pause/cancel/quiesce on the active job; slow ops poll
+// it and stop between units.
+//
+// `op` is the §8.5 line-1028 active-operation wake slot for THIS attempt: a
+// pause/cancel/quiesce also wakes it, so an op blocked inside a network wait
+// (connect, headers, a buffered/streaming body read) returns at once instead
+// of riding out its receive timeout. The ops run WITHOUT the queue mutex
+// held; they publish each blocking network phase through this slot (the
+// http.c entry points do it when the op is attached; a fake transfer can do
+// the same itself) and classify a failed read via ctx->cancel. The ops must
+// additionally not call back into abs_download_pump().
 typedef struct {
 	long long job_id;
 	abs_download_state_t state;     // FETCHING | DOWNLOADING | FINALIZING
 	const volatile int *cancel;
+	http_op_t *op;                  // wake slot; never NULL from the real queue
 	void *user;                     // == ops->user
 } abs_download_op_ctx_t;
+
+// The ops' view of the queue's stop flag. Commands mutex-write it on other
+// threads; the ops read it for PROMPTNESS (the wake slot is the real
+// promptness mechanism), so the read is an acquire load: a stale read costs
+// one poll step, never correctness.
+static inline bool abs_download_op_cancelled(const volatile int *flag) {
+	return flag && __atomic_load_n(flag, __ATOMIC_ACQUIRE) != 0;
+}
 
 // Report bytes for the active file. Only meaningful during DOWNLOADING; the
 // counters are RAM-backed and persisted at pause/cancel/state transitions
@@ -293,8 +310,10 @@ bool abs_download_enqueue_episode(const abs_download_enqueue_t *req, long long *
 								  bool *deduped_out, char *error, size_t error_size);
 
 // Pause: QUEUED/WAITING_NETWORK jobs become PAUSED immediately (durable
-// state). The active job becomes PAUSING, its media op is signalled through
-// ctx->cancel, and only the worker records PAUSED after cleanup (§8.1).
+// state). The active job becomes PAUSING (the snapshot's honest "Stopping"),
+// its media op is woken through the context's wake slot and polled through
+// ctx->cancel, and only the worker records PAUSED after cleanup (§8.1, §8.2
+// line 463: the bounded, non-interruptible DNS phase is part of "Stopping").
 // Cancel during FINALIZING is deferred until the atomic finalize finishes.
 bool abs_download_pause(long long job_id, char *error, size_t error_size);
 
@@ -357,5 +376,11 @@ bool abs_download_snapshot(abs_download_snapshot_t *out);
 // Performs at most one worker step (state transition / media op / cleanup).
 // Returns true when it did something and more may remain. Never blocks.
 bool abs_download_pump(void);
+
+// §12.1 lock-order probe for the wake tests: true when the queue mutex is NOT
+// held by the calling worker step, i.e. the media ops really do run unlocked.
+// A blocked fake callback takes it once and thereby proves that a pause
+// command could have acquired the same lock while the callback sat blocked.
+bool abs_download_probe_ops_unlocked(void);
 
 #endif /* ABS_DOWNLOAD_H */

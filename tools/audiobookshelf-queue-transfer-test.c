@@ -53,10 +53,13 @@
 #include <dirent.h>
 #include <errno.h>
 #include <math.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -616,6 +619,21 @@ int http_stream_read(http_stream_t *st, void *buf, int len) {
 	(void)len;
 	stream_was_reached = true;
 	return -1;
+}
+
+// Link-level delegates for the op-aware entry points (the wake wave, §8.5
+// line 1028): the offline probes never reach an open, so the stubs simply
+// carry the poisoned behavior above across the new symbols.
+bool http_stream_open_ex_op(http_stream_t *st, const char *url, const char *extra_headers,
+							int timeout_secs, http_op_t *op, int *status_out) {
+	(void)op;
+	(void)status_out;
+	return http_stream_open_ex(st, url, extra_headers, timeout_secs);
+}
+
+int http_stream_read_op(http_stream_t *st, void *buf, int len, http_op_t *op) {
+	(void)op;
+	return http_stream_read(st, buf, len);
 }
 
 void http_stream_close(http_stream_t *st) {
@@ -1364,6 +1382,340 @@ static long long count_log_lines_with(const char *needle) {
 	return hits;
 }
 
+// ---------------------------------------------------------------------------
+// §8.5 line 588/1028/1157 — deterministic wake selftest: the REAL HTTP stack
+// against a local stall server this test drives. No mock, no DNS, no
+// wall-clock pass paths: the canceller synchronizes onto an actually published
+// (i.e. blocked) network phase via http_op_published() and then cancels; only
+// the shutdown can end the blocked wait, because every socket here carries a
+// 30 s receive timeout that the assertion bounds are far below.
+// ---------------------------------------------------------------------------
+
+enum { WAKE_BODY_PARTIAL = 0, WAKE_HEADERS_PARTIAL = 1, WAKE_SILENT = 2 };
+
+static volatile int wake_mode;
+static volatile long wake_connections;
+static int wake_listen_fd = -1;
+
+static void wake_server_send(int fd, const char *bytes) {
+	size_t len = strlen(bytes);
+	size_t sent = 0;
+	while (sent < len) {
+		ssize_t n = send(fd, bytes + sent, len - sent, 0);
+		if (n <= 0) {
+			return;
+		}
+		sent += (size_t)n;
+	}
+}
+
+static void *wake_server_main(void *unused) {
+	(void)unused;
+	// The listener fd is captured once: its happens-before with the creator
+	// (pthread_create) is the only synchronization this loop needs, so main
+	// may close and reset the global at stop time without racing the server.
+	int listener = wake_listen_fd;
+	for (;;) {
+		// poll(), never a bare blocking accept: close() does not reliably
+		// wake a thread parked in accept(), and the stop below closes the
+		// listener. A 200 ms poll tick re-checks the closed/faulted state,
+		// so the join ends in at most one tick.
+		struct pollfd watch = {.fd = listener, .events = POLLIN};
+		int rc = poll(&watch, 1, 200);
+		if (rc < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			return NULL;
+		}
+		if (rc == 0) {
+			continue;
+		}
+		if (watch.revents & (POLLNVAL | POLLERR)) {
+			return NULL; // the listener was closed; the selftest is over
+		}
+		int fd = accept(listener, NULL, NULL);
+		if (fd < 0) {
+			// Only a closed listener ends the loop. A client that aborts its
+			// connection before the server accepts it races this accept —
+			// the cancellers below are designed to do exactly that — and
+			// Linux surfaces ECONNABORTED/EAGAIN there, never a fault of
+			// the server itself.
+			if (errno == EBADF) {
+				return NULL;
+			}
+			continue;
+		}
+		wake_connections++;
+		if (wake_mode == WAKE_BODY_PARTIAL) {
+			// Full headers plus four body bytes, then nothing: the promised
+			// 4 MiB never arrives, so the client's buffered (or streaming)
+			// body read is blocked with data that can never satisfy a loop.
+			wake_server_send(fd, "HTTP/1.1 200 OK\r\nContent-Length: 4194304\r\n\r\npart");
+		} else if (wake_mode == WAKE_HEADERS_PARTIAL) {
+			// Half a header block: the client's read_headers consumes it and
+			// blocks on the continuation that never comes.
+			wake_server_send(fd, "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Leng");
+		}
+		// WAKE_SILENT: not a byte; the very first header read blocks.
+	}
+}
+
+typedef struct wake_server {
+	pthread_t thread;
+	char url[64];
+} wake_server_t;
+
+static void wake_server_start(wake_server_t *w) {
+	CHECK(wake_listen_fd < 0, "wake server left armed\n");
+	wake_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+	CHECK(wake_listen_fd >= 0, "wake listener socket\n");
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	addr.sin_port = 0;
+	CHECK(bind(wake_listen_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0, "wake bind\n");
+	CHECK(listen(wake_listen_fd, 8) == 0, "wake listen\n");
+	struct sockaddr_in bound;
+	socklen_t blen = sizeof(bound);
+	CHECK(getsockname(wake_listen_fd, (struct sockaddr *)&bound, &blen) == 0, "wake getsockname\n");
+	snprintf(w->url, sizeof(w->url), "http://127.0.0.1:%d/file", ntohs(bound.sin_port));
+	wake_mode = WAKE_SILENT;
+	wake_connections = 0;
+	CHECK(pthread_create(&w->thread, NULL, wake_server_main, NULL) == 0, "wake server thread\n");
+}
+
+static void wake_server_stop(wake_server_t *w) {
+	close(wake_listen_fd); // the blocking accept returns and the thread exits
+	wake_listen_fd = -1;
+	pthread_join(w->thread, NULL);
+}
+
+// The selftest's canceller: wait until the caller's op is inside a published
+// (blocked) phase that PERSISTS, then cancel — the wake lands on a genuinely
+// blocked read, never on a poll interval or a lucky pre-check. Loopback
+// connect/write/header phases are gone within microseconds; a publication
+// still present ~200 µs later is a stalled wait. Bounded; a miss is a failed
+// test, not a slow pass.
+static void wake_wait_published_then_cancel(http_op_t *op, const char *what) {
+	for (int i = 0; i < 100000; i++) {
+		if (http_op_published(op, NULL)) {
+			usleep(200);
+			if (http_op_published(op, NULL)) {
+				fprintf(stderr, "wake-canceller: cancelling %s (published twice)\n", what);
+				http_op_cancel(op);
+				return;
+			}
+		}
+		usleep(100);
+	}
+	fprintf(stderr, "wake-canceller: timeout; cancelled=%d\n", http_op_cancelled(op));
+	CHECK(0, "%s: the op never reached a blocked read\n", what);
+}
+
+// The racy canceller for the safety-net loop: cancel as soon as — and as often
+// as — the op is anywhere near a network phase, with no synchronization on
+// purpose. The overlap between the owner's publish/unpublish/close and this
+// thread's wake is exactly what the sanitizer must sweep clean.
+static void *wake_racy_canceller(void *arg) {
+	http_op_t *op = arg;
+	for (int round = 0; round < 64 && !http_op_cancelled(op); round++) {
+		if (http_op_published(op, NULL)) {
+			http_op_cancel(op);
+			return NULL;
+		}
+		usleep(50);
+	}
+	http_op_cancel(op); // the stop must land regardless
+	return NULL;
+}
+
+typedef struct {
+	http_op_t op;
+	char url[64];
+	volatile bool done;
+	bool received;   // buffered: the request result
+	bool opened;     // streaming: the open result
+	int read_bytes;  // streaming read: the byte count (or <=0 on wake/end)
+	int status;
+} wake_client_t;
+
+// Buffered: request a body the server never completes; the blocked body read
+// must end on the wake alone (the 30 s receive timeout is far past the join
+// deadline below).
+static void *wake_buffered_client(void *arg) {
+	wake_client_t *w = arg;
+	char *body = NULL;
+	http_req_t req = {0};
+	req.op = &w->op;
+	w->received = http_request(w->url, &req, &body, NULL, 1 << 20, 30, &w->status);
+	free(body);
+	w->done = true;
+	return NULL;
+}
+
+// Streaming, two stages so the wake can be aimed at each of them.
+static void *wake_stream_open_client(void *arg) {
+	wake_client_t *w = arg;
+	http_stream_t st;
+	w->opened = http_stream_open_ex_op(&st, w->url, NULL, 30, &w->op, &w->status);
+	if (w->opened) {
+		http_stream_close(&st);
+	}
+	w->done = true;
+	return NULL;
+}
+
+typedef struct {
+	http_op_t op;
+	char url[64];
+	volatile bool done;
+	int read_bytes;
+	bool stream_closed; // the OWNER thread closed the stream (never the canceller)
+} wake_reader_t;
+
+static void *wake_stream_reader(void *arg) {
+	wake_reader_t *w = arg;
+	http_stream_t st;
+	int status = 0;
+	bool opened = http_stream_open_ex_op(&st, w->url, NULL, 30, &w->op, &status);
+	if (opened) {
+		char buffer[4096];
+		// Drain the header parser's lead bytes, then the real body read runs
+		// on the socket and blocks there (the server promises 4 MiB and sent
+		// four bytes): the wake has no choice but to end THAT read.
+		for (int reads = 0; reads < 1000; reads++) {
+			w->read_bytes = http_stream_read_op(&st, buffer, sizeof(buffer), &w->op);
+			if (w->read_bytes <= 0) {
+				break;
+			}
+		}
+		http_stream_close(&st); // the owner alone closes
+		w->stream_closed = true;
+	}
+	w->done = true;
+	return NULL;
+}
+
+static void wake_selftest(void) {
+	printf("wake: http stack (buffered/stream/headers/connect)... ");
+	wake_server_t server;
+	wake_server_start(&server);
+
+	// 1. A cancel BEFORE the request stops it without one connection attempt.
+	{
+		wake_client_t w;
+		memset(&w, 0, sizeof(w));
+		http_op_init(&w.op);
+		http_op_cancel(&w.op); // stop before anything begins
+		snprintf(w.url, sizeof(w.url), "%s", server.url);
+		pthread_t thread;
+		CHECK(pthread_create(&thread, NULL, wake_buffered_client, &w) == 0, "client\n");
+		pthread_join(thread, NULL);
+		CHECK(!w.received, "a pre-cancelled request must not succeed\n");
+		CHECK(wake_connections == 0, "a pre-cancelled request must not connect\n");
+		CHECK(!http_op_woken_current(&w.op),
+			  "a stop recorded before this operation must not claim its result\n");
+		http_op_destroy(&w.op);
+	}
+
+	// 2. Blocked BUFFERED body read: the wake ends it far before the 30 s
+	//    receive timeout, and the result generation attributes the outcome.
+	{
+		wake_client_t w;
+		memset(&w, 0, sizeof(w));
+		http_op_init(&w.op);
+		snprintf(w.url, sizeof(w.url), "%s", server.url);
+		wake_mode = WAKE_BODY_PARTIAL;
+		pthread_t thread;
+		CHECK(pthread_create(&thread, NULL, wake_buffered_client, &w) == 0, "client\n");
+		wake_wait_published_then_cancel(&w.op, "the buffered body read");
+		pthread_join(thread, NULL);
+		CHECK(!w.received, "an interrupted body must fail, not pass as success\n");
+		CHECK(http_op_woken_current(&w.op), "the aborted body read must be wake-attributed\n");
+		http_op_destroy(&w.op);
+	}
+
+	// 3. Blocked header read (streaming open): the open is wakeable too.
+	{
+		wake_client_t w;
+		memset(&w, 0, sizeof(w));
+		http_op_init(&w.op);
+		snprintf(w.url, sizeof(w.url), "%s", server.url);
+		wake_mode = WAKE_HEADERS_PARTIAL;
+		pthread_t thread;
+		CHECK(pthread_create(&thread, NULL, wake_stream_open_client, &w) == 0, "client\n");
+		wake_wait_published_then_cancel(&w.op, "the blocked header read");
+		pthread_join(thread, NULL);
+		CHECK(!w.opened, "an interrupted open must fail\n");
+		CHECK(http_op_woken_current(&w.op), "open wake attribution\n");
+		http_op_destroy(&w.op);
+	}
+
+	// 4. Blocked STREAMING body read: the wake ends the read; the reader
+	//    thread (the owner) alone closed the stream.
+	{
+		wake_reader_t w;
+		memset(&w, 0, sizeof(w));
+		snprintf(w.url, sizeof(w.url), "%s", server.url);
+		http_op_init(&w.op);
+		wake_mode = WAKE_BODY_PARTIAL;
+		pthread_t thread;
+		CHECK(pthread_create(&thread, NULL, wake_stream_reader, &w) == 0, "reader\n");
+		wake_wait_published_then_cancel(&w.op, "the streaming body read");
+		pthread_join(thread, NULL);
+		CHECK(w.read_bytes <= 0 && http_op_woken_current(&w.op),
+			  "the woken read must end in the cancelled state (got %d)\n", w.read_bytes);
+		CHECK(w.stream_closed, "the owner thread must be the one that closed the stream\n");
+		http_op_destroy(&w.op);
+	}
+
+	// 5. Wake during CONNECT: a non-routable address holds the connect; one
+	//    cancel ends it (this kernel aborts a connecting socket on shutdown).
+	{
+		wake_client_t w;
+		memset(&w, 0, sizeof(w));
+		http_op_init(&w.op);
+		snprintf(w.url, sizeof(w.url), "%s", "http://240.0.0.1:9/file");
+		pthread_t thread;
+		CHECK(pthread_create(&thread, NULL, wake_stream_open_client, &w) == 0, "client\n");
+		wake_wait_published_then_cancel(&w.op, "the blocked connect");
+		pthread_join(thread, NULL);
+		CHECK(!w.opened, "an interrupted connect must fail\n");
+		CHECK(http_op_woken_current(&w.op), "connect wake attribution\n");
+		http_op_destroy(&w.op);
+	}
+
+	// 6. The safety net, run hard under the sanitizer: repeated open/cancel
+	//    races against a silent server, with the canceller firing whenever it
+	//    can — sometimes between phases, sometimes mid-block. Any
+	//    publish/unpublish-vs-close misuse (use-after-free, fd reuse, double
+	//    close) is ASan territory; a correct run simply keeps returning.
+	{
+		wake_mode = WAKE_SILENT;
+		for (int i = 0; i < 32; i++) {
+			wake_client_t w;
+			memset(&w, 0, sizeof(w));
+			http_op_init(&w.op);
+			snprintf(w.url, sizeof(w.url), "%s", server.url);
+			pthread_t canceller, client;
+			CHECK(pthread_create(&client, NULL, wake_stream_open_client, &w) == 0, "client\n");
+			CHECK(pthread_create(&canceller, NULL, wake_racy_canceller, &w.op) == 0, "canceller\n");
+			pthread_join(client, NULL);
+			if (w.opened) {
+				fprintf(stderr, "wake-race round %d: the open SURVIVED the cancels\n", i);
+			}
+			pthread_join(canceller, NULL);
+			CHECK(!w.opened, "a cancelled open must fail (round %d)\n", i);
+			http_op_destroy(&w.op);
+		}
+	}
+
+	wake_server_stop(&server);
+	printf("ok\n");
+}
+
 typedef struct {
 	pthread_t thread;
 	long long job_id;
@@ -1375,18 +1727,19 @@ typedef struct {
 // counter shows the active file past `threshold`. Deterministic on a 16 MiB
 // track: the counter is monotonic per file, one 50 µs poll can never miss it,
 // and the remaining ~15.9 MiB keeps the transfer in flight well past the
-// pause call.
+// pause call. `fired` is release-stored so the joining reader needs no further
+// fence.
 static void *pause_watcher_main(void *arg) {
 	pause_watcher_t *w = arg;
-	for (int i = 0; i < 400000 && !w->fired; i++) {
+	for (int i = 0; i < 400000 && !__atomic_load_n(&w->fired, __ATOMIC_ACQUIRE); i++) {
 		abs_download_snapshot_t snap;
 		if (abs_download_snapshot(&snap)) {
-			for (int j = 0; j < snap.job_count && !w->fired; j++) {
+			for (int j = 0; j < snap.job_count; j++) {
 				if (snap.jobs[j].id != w->job_id || snap.jobs[j].state != ABS_DL_DOWNLOADING) continue;
 				if (snap.jobs[j].bytes_done < w->threshold) continue;
 				char err[128] = {0};
 				if (abs_download_pause(w->job_id, err, sizeof(err))) {
-					w->fired = true;
+					__atomic_store_n(&w->fired, true, __ATOMIC_RELEASE);
 					return NULL;
 				}
 				fprintf(stderr, "pause retry: %s\n", err);
@@ -1402,6 +1755,11 @@ static void live_run(void) {
 	read_root_file("token.txt", mock_token, sizeof(mock_token));
 	snprintf(media_dir, sizeof(media_dir), "%.860s/media", work);
 	snprintf(request_log, sizeof(request_log), "%.700s/progress.requests", work);
+
+	// Phase 0 — the wake machinery of §8.5 against the real HTTP stack, with
+	// no mock and no DNS (deterministic, sanitizer-run both here and in the
+	// queue-engine test's fake-blocking harness).
+	wake_selftest();
 
 	// The profile store is the runner's fresh file; the real auth surface is
 	// exercised through it exactly like a device session.
@@ -1732,9 +2090,12 @@ static void live_run(void) {
 	pause_watcher_t watcher = {.job_id = job3, .threshold = 128 * 1024, .fired = false};
 	CHECK(pthread_create(&watcher.thread, NULL, pause_watcher_main, &watcher) == 0, "watcher\n");
 	abs_download_state_t state3 = pump_until_terminal(job3);
+	// Join before reading the watcher's flag: the watcher stops the moment
+	// its pause lands, so the join is short, and it is the memory fence TSan
+	// needs for `fired`.
+	pthread_join(watcher.thread, NULL);
 	CHECK(watcher.fired, "the watcher must fire while the 16 MiB track transfers\n");
 	CHECK(state3 == ABS_DL_PAUSED, "phase 3 state %s\n", abs_download_state_name(state3));
-	pthread_join(watcher.thread, NULL);
 	abs_download_job_t seen3 = snapshot_job(job3);
 	CHECK(seen3.file_index == 0, "the pause must be on file 1, index %d\n", seen3.file_index);
 	CHECK(file_exists_abs(part1_file), "the paused .part must be retained\n");
@@ -1804,6 +2165,63 @@ static void live_run(void) {
 	CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_probe + 3,
 		  "a refused auth must not fetch, got %lld\n",
 		  count_log_lines_with("expanded=1&include=progress,authors"));
+
+	// ------------------------------------------------------------------
+	// Phase 5 — §8.4 line 568 / line 1180 status visibility: refused tokens
+	// and vanished items are permanent FAILED jobs with their own stage, no
+	// retry, and nothing local deleted.
+	// ------------------------------------------------------------------
+	{
+		// 401: the job's own profile rotates to a token the server rejects
+		// (a duplicate-server twin profile is refused by the store by design —
+		// a job MUST NOT be resolvable to another profile's token, §11.1).
+		// The failure must be auth-staged, terminal, and requested exactly
+		// once: no retry with another profile/token, nothing local deleted.
+		char bad_token[ABS_TOKEN_MAX];
+		snprintf(bad_token, sizeof(bad_token), "rotated-away-%.32s", mock_token);
+		CHECK(abs_profiles_edit(live_profile, NULL, bad_token), "cannot rotate the profile token\n");
+		long long items_before_401 = count_log_lines_with("expanded=1&include=progress,authors");
+		// A distinct item id: the smoke runner greps the LAST mock-book row
+		// as its DONE check, and this refusal must never displace it.
+		long long auth401 = enqueue_book(live_profile, live_server, "rotated-token-item", "Rotated Token");
+		CHECK(pump_until_terminal(auth401) == ABS_DL_FAILED, "the rotated-token job must fail\n");
+		abs_download_job_t seen_401 = snapshot_job(auth401);
+		CHECK(strcmp(seen_401.error_stage, "auth") == 0, "401 stage %s\n", seen_401.error_stage);
+		CHECK(strstr(seen_401.error, "credentials need editing") != NULL, "401 message: %s\n",
+			  seen_401.error);
+		CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_before_401 + 1,
+			  "the refused fetch reached the server exactly once, got %lld of %lld\n",
+			  count_log_lines_with("expanded=1&include=progress,authors"), items_before_401 + 1);
+		for (int settle = 0; settle < 8; settle++) {
+			abs_download_pump();
+		}
+		CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_before_401 + 1,
+			  "an auth-failed job must never retry with another profile/token\n");
+		CHECK(job_state(auth401) == ABS_DL_FAILED, "the auth failure must stay terminal\n");
+		abs_download_file_t rows_401[2];
+		CHECK(abs_download_job_files(auth401, rows_401, 2) == 0, "an auth failure wrote no file rows\n");
+		seen_401 = snapshot_job(auth401);
+		CHECK(seen_401.destination[0] == '\0', "a refused fetch must not claim a destination\n");
+		// Restore the working token for the 404 probe (and the final state).
+		CHECK(abs_profiles_edit(live_profile, NULL, mock_token), "cannot restore the token\n");
+
+		// 404 item: permanent missing-media failure with its own message; the
+		// FAILED row carries no file records and touches nothing local.
+		long long items_before_404 = count_log_lines_with("expanded=1&include=progress,authors");
+		long long missing404 = enqueue_book(live_profile, live_server, "no-such-item", "Missing Item");
+		CHECK(pump_until_terminal(missing404) == ABS_DL_FAILED, "the vanished item must fail\n");
+		abs_download_job_t seen_404 = snapshot_job(missing404);
+		CHECK(strcmp(seen_404.error_stage, "metadata") == 0, "404 stage %s\n", seen_404.error_stage);
+		CHECK(strstr(seen_404.error, "no longer on the server") != NULL, "404 message: %s\n",
+			  seen_404.error);
+		CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_before_404 + 1,
+			  "the vanished item is requested exactly once\n");
+		CHECK(job_state(missing404) == ABS_DL_FAILED, "the 404 failure must stay terminal\n");
+		abs_download_file_t rows_404[2];
+		CHECK(abs_download_job_files(missing404, rows_404, 2) == 0, "a 404 wrote no file rows\n");
+		seen_404 = snapshot_job(missing404);
+		CHECK(seen_404.destination[0] == '\0', "a failed fetch must not claim a destination\n");
+	}
 
 	// ------------------------------------------------------------------
 	// Token-leak scans: card tree, queue database, mock request log

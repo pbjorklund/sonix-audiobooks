@@ -14,10 +14,13 @@
 // or finalize+acknowledge. The injected media ops run WITHOUT the queue mutex
 // held -- they are slow network work, and pause/cancel must be able to run
 // from the GUI thread while they are in flight. Cancellation reaches them
-// through the `cancel` flag in the op context; the worker alone records the
-// resulting PAUSED/CANCELLED state after the op returns (§8.1 command
-// semantics). The ops must poll the flag between units and must not call back
-// into abs_download_pump().
+// two ways (§8.1 command semantics): through the `cancel` flag in the op
+// context, which the ops poll between units, and through the op context's
+// `http_op_t` wake slot (§8.5 line 1028), which the commands shut down so a
+// read blocked INSIDE the network stack returns at once -- a paused download
+// does not ride out its receive timeout. The worker alone records the
+// resulting PAUSED/CANCELLED state after the op returns, and alone reads and
+// closes its connections. The ops must not call back into abs_download_pump().
 //
 // Byte counters. RAM-backed between transitions; persisted at pause, cancel
 // and every state transition only (§8.2). They describe the *current file*;
@@ -168,8 +171,20 @@ static bool active_auth_held;
 enum { STOP_NONE = 0, STOP_PAUSE = 1, STOP_CANCEL = 2 };
 static int active_stop;                 // what a PAUSING row resolves to
 
-static volatile int op_cancel;          // published into op contexts; set under lock
+static volatile int op_cancel;          // published into op contexts; stored atomically
 static bool op_running;                 // an ops callback is executing (mutex released)
+
+// Mutex-external readers (the media ops) acquire-load this flag, so its
+// writers store release-evenly; queue-locked readers stay as they were.
+static void op_cancel_store(int value) {
+	__atomic_store_n(&op_cancel, value, __ATOMIC_RELEASE);
+}
+
+// The active attempt's http wake slot (§8.5 line 1028): published into every
+// op context, woken by pause/cancel/quiesce, cleared at attempt boundaries.
+// The media ops run their HTTP against THIS slot; it outlives any single op
+// and carries no connection between attempts.
+static http_op_t queue_http_op;
 
 static bool stop_requested;             // worker thread: quiesce asked us to exit
 static bool worker_alive;               // worker thread was created
@@ -1248,7 +1263,12 @@ bool abs_download_pause(long long job_id, char *error, size_t error_size) {
 			active_stop = STOP_PAUSE;
 		}
 		if (ok) {
-			op_cancel = 1;
+			op_cancel_store(1);
+			// §8.5 line 1028: the stop is published AND the in-flight
+			// connection is shut down, so a pause does not wait for the
+			// blocked read/connect to finish or time out. The PAUSING row is
+			// already durable, so the snapshot said "Stopping" from now on.
+			http_op_cancel(&queue_http_op);
 			cv_signal();
 		}
 		break;
@@ -1330,14 +1350,16 @@ static bool cancel_inactive_locked(abs_download_job_t *j) {
 	return ok;
 }
 
-// Active cancel: PAUSING + the cancel flag; the worker records CANCELLED after
-// the transfer acknowledges and cleans the job-owned .part (§8.1).
+// Active cancel: PAUSING + the cancel flag + the wake; the worker records
+// CANCELLED after the transfer acknowledges and cleans the job-owned .part
+// (§8.1).
 static bool cancel_active_locked(abs_download_job_t *j) {
 	j->state = ABS_DL_PAUSING;
 	bool ok = apply_job_locked(j);
 	if (ok) {
 		active_stop = STOP_CANCEL;
-		op_cancel = 1;
+		op_cancel_store(1);
+		http_op_cancel(&queue_http_op);
 		cv_signal();
 	}
 	return ok;
@@ -1669,6 +1691,7 @@ static void op_ctx_fill(abs_download_op_ctx_t *ctx, abs_download_state_t state) 
 	ctx->job_id = active_id;
 	ctx->state = state;
 	ctx->cancel = &op_cancel;
+	ctx->op = &queue_http_op;
 	ctx->user = cfg.ops ? cfg.ops->user : NULL;
 }
 
@@ -1681,13 +1704,15 @@ static void auth_drop(void) {
 }
 
 // A terminal state or a stop resets the per-attempt context: the auth snapshot
-// is destroyed (it never outlives one attempt, §8.1) and the cancel flag is
-// armed for the next attempt.
+// is destroyed (it never outlives one attempt, §8.1), the cancel flag is
+// armed for the next attempt, and the wake slot is drained -- a stop aimed at
+// the finished attempt must not wake the next job's network calls.
 static void end_attempt_locked(void) {
 	auth_drop();
 	active_auth_done = false;
 	active_stop = STOP_NONE;
-	op_cancel = 0;
+	op_cancel_store(0);
+	http_op_clear(&queue_http_op);
 	snapshot_generation++;
 	reload_locked();
 }
@@ -1781,7 +1806,10 @@ static bool begin_next_locked(void) {
 	}
 	active_auth_done = false;
 	active_stop = STOP_NONE;
-	op_cancel = 0;
+	op_cancel_store(0);
+	// Fresh attempt, fresh slot: nothing from the previous attempt may wake
+	// this one's network calls.
+	http_op_clear(&queue_http_op);
 	cv_signal();
 	return true;
 }
@@ -2409,8 +2437,12 @@ bool abs_download_init(const abs_download_config_t *config) {
 	stop_requested = false;
 	storage_paused = false;
 	wait_blocked = false;
-	op_cancel = 0;
+	op_cancel_store(0);
 	op_running = false;
+	// §8.5 line 1028: the wake slot is module-lifetime state; re-init after a
+	// quiesce re-arms it (the destroy ran in the quiesce). init re-entry
+	// without a quiesce is refused above.
+	http_op_init(&queue_http_op);
 	active_auth_done = false;
 	active_stop = STOP_NONE;
 	auth_drop();
@@ -2455,7 +2487,10 @@ void abs_download_quiesce_storage(void) {
 	// units; the WS5 bounded-wait work bounds pathological waits.
 	if (worker_alive) {
 		stop_requested = true;
-		op_cancel = 1;
+		op_cancel_store(1);
+		// Wake the in-flight op out of its network wait so the bounded join
+		// below really is bounded: storage must close promptly (§8.5).
+		http_op_cancel(&queue_http_op);
 		cv_signal();
 		pthread_t thread = worker_thread;
 		pthread_mutex_unlock(&lock);
@@ -2463,6 +2498,9 @@ void abs_download_quiesce_storage(void) {
 		pthread_mutex_lock(&lock);
 		worker_alive = false;
 		op_running = false;
+		// The join is complete: nothing may publish into or wake the slot
+		// until the next init.
+		http_op_clear(&queue_http_op);
 	}
 
 	if (active_id && db) {
@@ -2494,7 +2532,9 @@ void abs_download_quiesce_storage(void) {
 	active_state = ABS_DL_QUEUED;
 	active_auth_done = false;
 	active_stop = STOP_NONE;
-	op_cancel = 0;
+	op_cancel_store(0);
+	http_op_clear(&queue_http_op);
+	http_op_destroy(&queue_http_op);
 	if (db) {
 		sqlite3_close(db);
 		db = NULL;
@@ -2512,4 +2552,17 @@ unsigned abs_download_card_generation(void) {
 	unsigned gen = card_generation;
 	pthread_mutex_unlock(&lock);
 	return gen;
+}
+
+bool abs_download_probe_ops_unlocked(void) {
+	// Try, then release. While an ops callback runs the pump has already
+	// released `lock` (§12.1: no queue mutex across HTTP), so the try must
+	// succeed from the op's own thread; if the mutex were still held -- the
+	// bug this probe exists to catch -- the same thread holds it, the try
+	// reports EDEADLK/EAGAIN, and this returns false deterministically.
+	if (pthread_mutex_trylock(&lock) != 0) {
+		return false;
+	}
+	pthread_mutex_unlock(&lock);
+	return true;
 }

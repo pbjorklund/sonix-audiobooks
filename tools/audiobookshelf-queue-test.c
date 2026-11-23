@@ -22,9 +22,11 @@
 #include "src/system/streaming/abs_download.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -54,6 +56,11 @@ static const char *sd;
 #define MAX_STEPS 32 // one pump step per transition for a 3-file book
 
 static abs_download_file_t f_record; // scratch for file_record checks
+
+// Defined with the assertion helpers below. The fake fetch's cancel-ack probe
+// (the next FIFO job must not begin before the previous one acknowledged,
+// §8.1/§8.2 line 463) also reads the durable mirror.
+static const abs_download_job_t *snap_job(long long id, abs_download_snapshot_t *snap_out);
 
 // ---------------------------------------------------------------------------
 // Sandbox card helpers
@@ -187,6 +194,10 @@ static bool crash_on_finalize;       // crash child: manifest written, then _exi
 static int file_writes[16];          // per-ordinal transfer count (resume granularity)
 static int ack_resets;
 static bool seen_blocked_rel, seen_blocked_abs; // sync probe from inside finalize
+static bool block_fetch_next;        // wake tests: the identity fetch blocks like a stalled server
+static bool block_stream_next;       // wake tests: the file transfer blocks the same way
+static bool probe_cancelled_prev;    // wake tests: the NEXT fetch must see the previous job acknowledged
+static long long prev_job_probe;
 
 static void fake_reset(void) {
 	memset(plan_files, 0, sizeof(plan_files));
@@ -214,6 +225,133 @@ static void fake_reset(void) {
 	ack_resets = 0;
 	seen_blocked_rel = false;
 	seen_blocked_abs = false;
+	block_fetch_next = false;
+	block_stream_next = false;
+	probe_cancelled_prev = false;
+	prev_job_probe = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Wake-harness synchronization (§8.5 line 1028 tests): no wall-clock sleeps in
+// the unblock path. The fake blocks in a receive on a socketpair it published
+// into ctx->op — a read with NO timeout — so only the queue command's
+// http_op_cancel() (shutdown) can end it. Signalling is mutex/cond based; the
+// only polling is over worker-ack state transitions (§8.1 semantics, not the
+// unblock mechanism).
+// ---------------------------------------------------------------------------
+
+static pthread_mutex_t wake_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t wake_cv = PTHREAD_COND_INITIALIZER;
+static int blocked_seen;    // the fake is blocked inside its published read
+static int unblocked_seen;  // the wake ended the blocked read
+static int close_count;     // stream stand-in closes (owner-only, below)
+static bool op_thread_closed; // the close ran on the thread that ran the op
+static bool next_fetch_cancel_ok;
+
+static void wait_flag(int *flag, const char *what) {
+	pthread_mutex_lock(&wake_mu);
+	struct timespec until;
+	clock_gettime(CLOCK_REALTIME, &until);
+	until.tv_sec += 10;
+	while (!*flag) {
+		int rc = pthread_cond_timedwait(&wake_cv, &wake_mu, &until);
+		if (rc == ETIMEDOUT) {
+			pthread_mutex_unlock(&wake_mu);
+			CHECK(0, "timed out waiting for %s\n", what);
+		}
+	}
+	pthread_mutex_unlock(&wake_mu);
+}
+
+static void set_flag(int *flag) {
+	pthread_mutex_lock(&wake_mu);
+	*flag = 1;
+	pthread_cond_broadcast(&wake_cv);
+	pthread_mutex_unlock(&wake_mu);
+}
+
+static void wake_reset(void) {
+	pthread_mutex_lock(&wake_mu);
+	blocked_seen = 0;
+	unblocked_seen = 0;
+	close_count = 0;
+	pthread_mutex_unlock(&wake_mu);
+	op_thread_closed = false;
+	next_fetch_cancel_ok = false;
+	block_fetch_next = false;
+	block_stream_next = false;
+}
+
+// The main↔worker hand-off flags are mutex-mediated on purpose: without it,
+// the harness itself is a data race (and TSan is right to say so), even though
+// every racing order here would still behave.
+static void wake_put_bool(bool *flag, bool value) {
+	pthread_mutex_lock(&wake_mu);
+	*flag = value;
+	pthread_cond_broadcast(&wake_cv);
+	pthread_mutex_unlock(&wake_mu);
+}
+
+static bool wake_take_bool(bool *flag) {
+	pthread_mutex_lock(&wake_mu);
+	bool value = *flag;
+	*flag = false;
+	pthread_mutex_unlock(&wake_mu);
+	return value;
+}
+
+static bool wake_get_bool(bool *flag) {
+	pthread_mutex_lock(&wake_mu);
+	bool value = *flag;
+	pthread_mutex_unlock(&wake_mu);
+	return value;
+}
+
+// The cancel-ack ordering probe: armed by main before the cancel (the FIFO
+// cannot reach the next job before the ack, so the next fetch is guaranteeably
+// the first taker).
+static void wake_arm_prev_probe(long long job) {
+	pthread_mutex_lock(&wake_mu);
+	prev_job_probe = job;
+	probe_cancelled_prev = true;
+	pthread_mutex_unlock(&wake_mu);
+}
+
+static bool wake_take_prev_probe(void) {
+	pthread_mutex_lock(&wake_mu);
+	bool armed = probe_cancelled_prev;
+	probe_cancelled_prev = false;
+	pthread_mutex_unlock(&wake_mu);
+	return armed;
+}
+
+// The fake-blocking stand-in for a stalled HTTP server: publish the socketpair
+// fd in the attempt's wake slot exactly like http.c does around a body read,
+// probe the §12.1 lock order (the op must run with the queue mutex released),
+// then block in a receive with no timeout. Nothing writes to that socket —
+// only http_op_cancel()'s shutdown can return from here, which is the
+// deterministic "wakes the blocked read, not a poll interval" proof.
+static void block_like_network(const abs_download_op_ctx_t *ctx) {
+	CHECK(abs_download_probe_ops_unlocked(),
+		  "a blocking ops callback must run without the queue mutex (§12.1)\n");
+	CHECK(ctx->op != NULL, "the op context must carry the wake slot\n");
+	int sv[2];
+	CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair: %s\n", strerror(errno));
+	http_op_publish_fd(ctx->op, sv[1]);
+	pthread_t self = pthread_self(); // recorded before any close happens
+	set_flag(&blocked_seen);
+	char byte;
+	ssize_t got = recv(sv[1], &byte, 1, 0);
+	CHECK(got <= 0, "nothing is written to the blocked read; only a wake ends it\n");
+	CHECK(http_op_cancelled(ctx->op), "the read ended without the cancel flag\n");
+	CHECK(http_op_woken_current(ctx->op), "the wake did not target this operation\n");
+	// The owner (this op thread) alone unpublishes and closes its stand-in.
+	http_op_unpublish(ctx->op);
+	close(sv[1]);
+	close_count++;
+	op_thread_closed = pthread_equal(pthread_self(), self);
+	close(sv[0]);
+	set_flag(&unblocked_seen);
 }
 
 static bool op_auth_acquire(void *user, const char *profile_id, const char *server,
@@ -242,8 +380,26 @@ static bool op_fetch_identity(void *user, const abs_download_op_ctx_t *ctx,
 							  const abs_download_job_t *job, abs_download_plan_t *plan,
 							  const char **stage_out, char *error, size_t error_size) {
 	(void)user;
-	(void)ctx;
 	CHECK(job != NULL, "no job handed to fetch\n");
+	if (wake_take_prev_probe()) {
+		// §8.1/§8.2 line 463: the next FIFO job must not begin until the
+		// previous job's stop was acknowledged. This fetch runs on the worker
+		// after begin_next_locked(), so the probe reads the durable mirror.
+		abs_download_snapshot_t snap;
+		CHECK(abs_download_snapshot(&snap), "probe snapshot\n");
+		const abs_download_job_t *before = snap_job(prev_job_probe, &snap);
+		CHECK(before != NULL && before->state == ABS_DL_CANCELLED,
+			  "the next job started before the cancel was acknowledged\n");
+		wake_put_bool(&next_fetch_cancel_ok, true);
+	}
+	if (wake_take_bool(&block_fetch_next)) {
+		// Pause during the blocked identity fetch: the wake slot contract
+		// (§8.5 line 1028) — the stop wakes this read instead of waiting it out.
+		block_like_network(ctx);
+		*stage_out = "network";
+		snprintf(error, error_size, "The download was paused or cancelled.");
+		return false; // the queue records the stop
+	}
 	if (fetch_fail_stage && fetch_fail_stage[0]) {
 		*stage_out = fetch_fail_stage;
 		snprintf(error, error_size, "%s",
@@ -326,6 +482,15 @@ static bool op_file_download(void *user, const abs_download_op_ctx_t *ctx, const
 		  ordinal);
 	file_writes[ordinal]++;
 
+	if (wake_take_bool(&block_stream_next)) {
+		// Cancel during a blocked STREAMING body read (§8.5 line 1157): a
+		// partial .part exists first, so the cancel's cleanup is observable.
+		fake_transfer(file, 10, true);
+		block_like_network(ctx);
+		*stage_out = "network";
+		snprintf(error, error_size, "The download was paused or cancelled.");
+		return false; // the queue records the stop
+	}
 	if (ordinal == 2 && (pause_mid_file || cancel_mid_file)) {
 		bool pause = pause_mid_file;
 		pause_mid_file = false;
@@ -1282,6 +1447,119 @@ static void test_worker_thread(void) {
 }
 
 // ---------------------------------------------------------------------------
+// 8. Active-operation wake (§8.2 line 463 pause semantics, §8.5 line 1028/1157)
+// ---------------------------------------------------------------------------
+
+// Bounded wait for a state transition driven by the worker thread (§8.1 ack).
+// The wake itself is never behind this loop: the blocked read ended on the
+// shutdown, and the wake_cv handshake saw to it. This only polls the ack.
+static void wait_state(long long id, abs_download_state_t want, const char *what) {
+	bool reached = false;
+	for (int i = 0; i < 20000 && !reached; i++) {
+		reached = job_state(id) == want;
+		if (!reached) {
+			usleep(1000);
+		}
+	}
+	CHECK(reached, "job %lld never reached %s (now %s): %s\n", id, abs_download_state_name(want),
+		  abs_download_state_name(job_state(id)), what);
+}
+
+// §8.2 line 463: pausing the ACTIVE job records PAUSING durably ("Stopping"
+// in the snapshot, honestly) and wakes the blocked op; only the worker marks
+// PAUSED after cleanup. The blocked op here is the BUFFERED identity fetch.
+static void test_wake_pause_during_fetch(void) {
+	printf("wake: pause wakes a blocked buffered op... ");
+	const char *root = mkcard("wake-pause");
+	fake_reset();
+	wake_reset();
+	abs_download_config_t cfg = make_config(root, true);
+	CHECK(abs_download_init(&cfg), "init\n");
+	long long id = enqueue_book("wka", "Wake Pause");
+
+	wake_put_bool(&block_fetch_next, true);
+	wait_flag(&blocked_seen, "the identity fetch to block");
+	CHECK(abs_download_probe_ops_unlocked(), "self-check: the probe works outside ops\n");
+	abs_download_snapshot_t snap;
+	const abs_download_job_t *j = snap_job(id, &snap);
+	CHECK(j->state == ABS_DL_FETCHING, "state while blocked: %s\n", abs_download_state_name(j->state));
+
+	char err[128] = {0};
+	CHECK(abs_download_pause(id, err, sizeof(err)), "pause: %s\n", err);
+	j = snap_job(id, &snap);
+	CHECK(j->state == ABS_DL_PAUSING, "the snapshot must say Stopping at once: %s\n",
+		  abs_download_state_name(j->state));
+	wait_flag(&unblocked_seen, "the blocked fetch to wake on cancel");
+	CHECK(op_thread_closed, "the op thread owns the close of its stand-in stream\n");
+	wait_state(id, ABS_DL_PAUSED, "the worker must acknowledge the pause promptly");
+
+	// Queued intent, durable. Resume finishes the book with ordinary fakes;
+	// the fetch's wake slot is drained, so nothing of the old stop leaks in
+	// (http_op_clear at attempt boundaries).
+	CHECK(abs_download_resume(id, err, sizeof(err)), "resume: %s\n", err);
+	wait_state(id, ABS_DL_DONE, "resumed run completes");
+	CHECK(ack_resets == 1, "acknowledgement reset ran\n");
+
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// §8.5 line 1157: a cancelled streaming body read is woken mid-body; the op
+// thread alone closes its connection; the cancelled .part goes; and the next
+// FIFO job begins ONLY after the cancel was acknowledged (§8.1).
+static void test_wake_cancel_next_job_ordering(void) {
+	printf("wake: cancel wakes a blocked stream, FIFO waits for the ack... ");
+	const char *root = mkcard("wake-cancel");
+	fake_reset();
+	wake_reset();
+	abs_download_config_t cfg = make_config(root, true);
+	CHECK(abs_download_init(&cfg), "init\n");
+	char err[128] = {0};
+	abs_download_enqueue_t req_a = book_req("wkb", "Wake Cancel A", FAKE_DEST);
+	long long a = 0;
+	CHECK(abs_download_enqueue_book(&req_a, &a, NULL, err, sizeof(err)), "enqueue A: %s\n", err);
+	// A distinct destination: the probe job must not share A's files.
+	char dest_b[ABS_DL_DEST_MAX];
+	snprintf(dest_b, sizeof(dest_b), "%s-B", FAKE_DEST);
+	abs_download_enqueue_t req_b = book_req("wkc", "Wake Cancel B", dest_b);
+	long long b = 0;
+	CHECK(abs_download_enqueue_book(&req_b, &b, NULL, err, sizeof(err)), "enqueue B: %s\n", err);
+
+	wake_put_bool(&block_stream_next, true);
+	wait_flag(&blocked_seen, "the streaming transfer to block");
+	wait_state(a, ABS_DL_DOWNLOADING, "the active transfer is running");
+	char part[1400];
+	fake_paths("track01.mp3", ".part", part, sizeof(part));
+	CHECK(file_exists(part), "the transfer's .part exists while blocked\n");
+
+	abs_download_snapshot_t snap;
+	const abs_download_job_t *j = snap_job(b, &snap);
+	CHECK(j->state == ABS_DL_QUEUED, "the next job must still be queued\n");
+
+	// Arm the ordering probe BEFORE the cancel: the FIFO cannot reach B until
+	// A's stop is acknowledged, so B's fetch is guaranteed to be the next
+	// probe point — and it must then see A durably CANCELLED.
+	wake_arm_prev_probe(a);
+
+	CHECK(abs_download_cancel(a, err, sizeof(err)), "cancel: %s\n", err);
+	j = snap_job(a, &snap);
+	CHECK(j->state == ABS_DL_PAUSING, "stopping state after cancel: %s\n", abs_download_state_name(j->state));
+	wait_flag(&unblocked_seen, "the blocked stream read to wake on cancel");
+	CHECK(close_count == 1 && op_thread_closed,
+		  "the op thread alone closed its woken stream exactly once\n");
+	wait_state(a, ABS_DL_CANCELLED, "the worker must acknowledge the cancel promptly");
+	CHECK(!file_exists(part), "cancel removes the job-owned .part\n");
+
+	// The FIFO may only touch B after the ack; B's fetch ran the probe that
+	// re-read A's durable state under the queue mutex.
+	wait_state(b, ABS_DL_DONE, "the next job proceeds after the ack");
+	CHECK(wake_get_bool(&next_fetch_cancel_ok), "the next job's fetch never saw the cancelled ack\n");
+
+	abs_download_quiesce_storage();
+	printf("ok\n");
+}
+
+// ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
 	if (argc != 2 || !argv[1][0]) {
@@ -1307,6 +1585,8 @@ int main(int argc, char **argv) {
 	test_no_token();
 	test_card_generation();
 	test_worker_thread();
+	test_wake_pause_during_fetch();
+	test_wake_cancel_next_job_ordering();
 
 	printf("audiobookshelf-queue-test: queue foundation passed\n");
 	return 0;

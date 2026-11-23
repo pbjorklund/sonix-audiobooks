@@ -231,9 +231,19 @@ static void dns_follow_resolv_conf(void) {
 // A socket with both directions bounded by `timeout_secs`. The receive timeout
 // is what keeps a station that goes quiet from holding the radio thread: the
 // read comes back EAGAIN and the caller can give up.
-static int connect_to(const char *host, int port, int timeout_secs) {
+//
+// With an active-operation slot, two more things hold (§8.2 line 463 / §8.5
+// line 1028): the socket fd is published from just after creation so a wake
+// aborts connect() and the TLS handshake, and a cancel that arrived during the
+// (necessarily uninterruptible) resolver wait stops here -- BEFORE any
+// connect attempt -- which is the documented "wakes before connect" bound.
+// The fd is un-published immediately before it is closed, so a wake can never
+// shut down an fd that has been closed and possibly re-opened elsewhere.
+static int connect_to(const char *host, int port, int timeout_secs, http_op_t *op, bool *published_out) {
 	char service[16];
 	snprintf(service, sizeof(service), "%d", port);
+
+	*published_out = false;
 
 	struct addrinfo hints;
 	memset(&hints, 0, sizeof(hints));
@@ -251,8 +261,19 @@ static int connect_to(const char *host, int port, int timeout_secs) {
 		return -1;
 	}
 
+	// The resolver could not be interrupted; the bounded timeout has returned
+	// us here. A cancel waiting since before the lookup stops now, without a
+	// single connect attempt (§8.2 line 463).
+	if (http_op_cancelled(op)) {
+		freeaddrinfo(list);
+		return -1;
+	}
+
 	int fd = -1;
 	for (struct addrinfo *a = list; a; a = a->ai_next) {
+		if (http_op_cancelled(op)) {
+			break;
+		}
 		fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
 		if (fd < 0) {
 			continue;
@@ -262,9 +283,16 @@ static int connect_to(const char *host, int port, int timeout_secs) {
 		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
+		// Publish before connect(): a wake during the connect wait shuts the
+		// socket down, and the fd is un-published before every close below.
+		http_op_publish_fd(op, fd);
+		*published_out = true;
+
 		if (connect(fd, a->ai_addr, a->ai_addrlen) == 0) {
 			break;
 		}
+		http_op_unpublish(op);
+		*published_out = false;
 		close(fd);
 		fd = -1;
 	}
@@ -272,8 +300,11 @@ static int connect_to(const char *host, int port, int timeout_secs) {
 	freeaddrinfo(list);
 	if (fd < 0) {
 		// The address resolved but the connection did not: a different fault
-		// from DNS, and worth its own message.
-		set_last_error(tr("http_connect_failed"), host, port);
+		// from DNS, and worth its own message. A cancelled stop lands here
+		// too, silently: the caller reads the cancellation from the op.
+		if (!http_op_cancelled(op)) {
+			set_last_error(tr("http_connect_failed"), host, port);
+		}
 	}
 	return fd;
 }
@@ -328,29 +359,81 @@ static void conn_close(conn_t *c) {
 	}
 }
 
+// Close with an active-operation slot: the fd must be un-published BEFORE it
+// can be closed, so a wake can never capture a dead fd number (§8.5 line
+// 1157: wake-safe publication). Every op-aware close path goes through this.
+static void conn_close_op(conn_t *c, http_op_t *op) {
+	http_op_unpublish(op);
+	conn_close(c);
+}
+
+// One blocking read under the op window: never start one a cancel already
+// asked to skip; wake a blocked one through the published fd. The mutex is
+// held for the two pointer writes only (§8.5 line 1028).
+static int conn_read_op(conn_t *c, void *buf, size_t len, http_op_t *op) {
+	if (http_op_cancelled(op)) {
+		return -1; // the stop predates this read; do not touch the network
+	}
+	if (op) {
+		http_op_publish_fd(op, c->fd);
+	}
+	int n = conn_read(c, buf, len);
+	if (op) {
+		http_op_unpublish(op);
+	}
+	return n;
+}
+
+// The write side of the same window: the request write can also sit in a
+// stalled send, and shutdown() ends that too.
+static bool conn_write_all_op(conn_t *c, const char *data, size_t len, http_op_t *op) {
+	if (http_op_cancelled(op)) {
+		return false;
+	}
+	if (op) {
+		http_op_publish_fd(op, c->fd);
+	}
+	bool ok = conn_write_all(c, data, len);
+	if (op) {
+		http_op_unpublish(op);
+	}
+	return ok;
+}
+
 // Connects and, for an https:// URL, completes the TLS handshake. `err` gets
 // the reason a handshake failed, which is worth carrying up: "expired
 // certificate" almost always means the device clock is wrong, and that is
 // something the user can fix.
-static bool conn_open(conn_t *c, const url_t *u, int timeout_secs, char *err, size_t err_size) {
+//
+// With an op, the fd stays published from connect() through the handshake, so
+// a wake aborts either; it is un-published before returning (success leaves no
+// window open -- phase publication is per blocking phase, per §8.5 line 1157).
+static bool conn_open(conn_t *c, const url_t *u, int timeout_secs, char *err, size_t err_size, http_op_t *op) {
 	c->fd = -1;
 	c->tls = NULL;
 	if (err && err_size) {
 		err[0] = 0;
 	}
 
-	c->fd = connect_to(u->host, u->port, timeout_secs);
+	bool published = false;
+	c->fd = connect_to(u->host, u->port, timeout_secs, op, &published);
 	if (c->fd < 0) {
-		fprintf(stderr, "http: cannot reach %s:%d (%s)\n", u->host, u->port,
-				http_last_error() ? http_last_error() : "?");
+		// A cancelled stop is not a network fault worth logging against the
+		// server address; the op carries the outcome to the caller.
+		if (!http_op_cancelled(op)) {
+			fprintf(stderr, "http: cannot reach %s:%d (%s)\n", u->host, u->port,
+					http_last_error() ? http_last_error() : "?");
+		}
 		return false;
 	}
 
 	if (!u->secure) {
+		http_op_unpublish(op);
 		return true;
 	}
 
 	c->tls = tls_client(c->fd, u->host, err, err_size);
+	http_op_unpublish(op);
 	if (!c->tls) {
 		fprintf(stderr, "http: TLS to %s failed: %s\n", u->host, (err && err[0]) ? err : "?");
 		if (err && err[0]) {
@@ -371,14 +454,15 @@ static bool conn_open(conn_t *c, const url_t *u, int timeout_secs, char *err, si
 // body and is handed back in `body`/`body_len` -- with a stream there is no
 // way to put it back on the socket.
 //
-// Returns the status code, or -1.
+// Returns the status code, or -1. Each blocking read inside runs in the op's
+// publish window (`op` may be NULL: the historical non-wakeable behavior).
 static int read_headers(conn_t *c, char *headers, size_t headers_size, char *body, size_t body_size,
-						int *body_len) {
+						int *body_len, http_op_t *op) {
 	size_t used = 0;
 	*body_len = 0;
 
 	while (used + 1 < headers_size) {
-		int n = conn_read(c, headers + used, headers_size - used - 1);
+		int n = conn_read_op(c, headers + used, headers_size - used - 1, op);
 		if (n <= 0) {
 			return -1;
 		}
@@ -499,15 +583,18 @@ static bool body_append(body_t *b, const char *data, size_t len) {
 
 // Reads the rest of the body when the server framed it by closing the
 // connection (HTTP/1.0, or Connection: close with no length).
-static void read_until_close(conn_t *c, body_t *b) {
+static void read_until_close(conn_t *c, body_t *b, http_op_t *op) {
 	char buf[8192];
 	for (;;) {
-		int got = conn_read(c, buf, sizeof(buf));
+		int got = conn_read_op(c, buf, sizeof(buf), op);
 		if (got <= 0) {
 			return;
 		}
 		if (!body_append(b, buf, (size_t)got)) {
 			return;
+		}
+		if (http_op_cancelled(op)) {
+			return; // stop between this chunk and the next blocked read
 		}
 	}
 }
@@ -518,14 +605,14 @@ static void read_until_close(conn_t *c, body_t *b) {
 // matters: a Tidal segment cut in half by a Wi-Fi hiccup and accepted as good
 // becomes a gap mid-track, inside a file then marked complete and never
 // re-downloaded.
-static bool read_length(conn_t *c, body_t *b, size_t content_length) {
+static bool read_length(conn_t *c, body_t *b, size_t content_length, http_op_t *op) {
 	char buf[8192];
 	while (b->used < content_length) {
 		size_t want = content_length - b->used;
 		if (want > sizeof(buf)) {
 			want = sizeof(buf);
 		}
-		int got = conn_read(c, buf, want);
+		int got = conn_read_op(c, buf, want, op);
 		if (got <= 0) {
 			return false;
 		}
@@ -538,6 +625,9 @@ static bool read_length(conn_t *c, body_t *b, size_t content_length) {
 			// what it promised.
 			return true;
 		}
+		if (http_op_cancelled(op)) {
+			return false;
+		}
 	}
 	return true;
 }
@@ -549,6 +639,7 @@ typedef struct {
 	const char *lead;
 	size_t lead_len;
 	size_t lead_pos;
+	http_op_t *op; // publication window around every socket read; may be NULL
 } source_t;
 
 static int source_read(source_t *src, char *out, size_t len) {
@@ -561,7 +652,7 @@ static int source_read(source_t *src, char *out, size_t len) {
 		src->lead_pos += take;
 		return (int)take;
 	}
-	int got = conn_read(src->conn, out, len);
+	int got = conn_read_op(src->conn, out, len, src->op);
 	return got <= 0 ? 0 : got;
 }
 
@@ -656,10 +747,12 @@ static void host_header_value(const url_t *u, char *out, size_t size) {
 }
 
 // One request/response, no redirect handling. `location` is filled when the
-// status is a redirect.
+// status is a redirect. `op`, when present, wraps every blocking phase in the
+// active-operation publication window (§8.5 line 1157) and stops the request
+// at once when the op is cancelled.
 static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *out_len, size_t limit,
 					 int timeout_secs, int *status_out, char *location, size_t location_size, char *err,
-					 size_t err_size) {
+					 size_t err_size, http_op_t *op) {
 	const char *method = req->method && req->method[0] ? req->method : "GET";
 	const char *extra_headers = req->extra_headers;
 	bool want_error_body = req->want_error_body;
@@ -670,7 +763,7 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 	}
 
 	conn_t conn;
-	if (!conn_open(&conn, u, timeout_secs, err, err_size)) {
+	if (!conn_open(&conn, u, timeout_secs, err, err_size, op)) {
 		return false;
 	}
 
@@ -711,23 +804,24 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 	// request would put bytes from past the end of the stack on the wire. It
 	// fits with room today; this check keeps it fitting when someone adds a
 	// longer header.
-	if (n <= 0 || (size_t)n >= sizeof(request) || !conn_write_all(&conn, request, (size_t)n)) {
-		conn_close(&conn);
+	if (n <= 0 || (size_t)n >= sizeof(request) ||
+		!conn_write_all_op(&conn, request, (size_t)n, op)) {
+		conn_close_op(&conn, op);
 		return false;
 	}
 
 	// The body goes out as a separate write rather than concatenated into
 	// `request`: a long body would overflow that buffer silently, and snprintf
 	// would truncate a request that has already declared its length.
-	if (body_len > 0 && !conn_write_all(&conn, req->body, body_len)) {
-		conn_close(&conn);
+	if (body_len > 0 && !conn_write_all_op(&conn, req->body, body_len, op)) {
+		conn_close_op(&conn, op);
 		return false;
 	}
 
 	char headers[HTTP_HEADER_BUFFER];
 	char lead[HTTP_HEADER_BUFFER];
 	int lead_len = 0;
-	int status = read_headers(&conn, headers, sizeof(headers), lead, sizeof(lead), &lead_len);
+	int status = read_headers(&conn, headers, sizeof(headers), lead, sizeof(lead), &lead_len, op);
 	*status_out = status;
 	last_server_time_ms = 0;
 	char date[80];
@@ -741,7 +835,7 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 	if (status >= 300 && status < 400) {
 		location[0] = '\0';
 		header_value(headers, "Location", location, location_size);
-		conn_close(&conn);
+		conn_close_op(&conn, op);
 		return false; // the caller decides whether to follow
 	}
 	// An API's 4xx is not silence: the body carries the reason, and that is
@@ -756,7 +850,7 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 		if (!last_error[0]) {
 			set_last_error(tr("http_server_answered"), status);
 		}
-		conn_close(&conn);
+		conn_close_op(&conn, op);
 		return false;
 	}
 
@@ -767,11 +861,11 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 				   strcasestr(encoding, "chunked") != NULL;
 
 	if (chunked) {
-		source_t src = {.conn = &conn, .lead = lead, .lead_len = (size_t)lead_len, .lead_pos = 0};
+		source_t src = {.conn = &conn, .lead = lead, .lead_len = (size_t)lead_len, .lead_pos = 0, .op = op};
 		read_chunked(&src, &body);
 	} else {
 		if (lead_len > 0 && !body_append(&body, lead, (size_t)lead_len)) {
-			conn_close(&conn);
+			conn_close_op(&conn, op);
 			free(body.data);
 			return false;
 		}
@@ -783,7 +877,7 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 				// A non-numeric or overflowing length frames nothing: no body
 				// is delivered from it (§8.4, reject before reading).
 				fprintf(stderr, "http: %s%s -> malformed Content-Length\n", u->host, u->path);
-				conn_close(&conn);
+				conn_close_op(&conn, op);
 				free(body.data);
 				return false;
 			}
@@ -792,21 +886,25 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 			// behavior-identical and keeps the loop counters in size_t.
 			size_t content_length =
 				claimed >= (long long)body.limit ? (size_t)body.limit : (size_t)claimed;
-			if (!read_length(&conn, &body, content_length)) {
+			if (!read_length(&conn, &body, content_length, op)) {
 				// Less than promised: the response is broken, not short.
 				// Delivering it anyway means half a JPEG or, worse, an audio
 				// segment with a hole in it, accepted as good and cached.
-				fprintf(stderr, "http: %s%s -> body cut short\n", u->host, u->path);
-				conn_close(&conn);
+				// A wake that ended this read is the caller's deliberate
+				// stop, not a broken response -- and its log stays quiet.
+				if (!http_op_woken_current(op)) {
+					fprintf(stderr, "http: %s%s -> body cut short\n", u->host, u->path);
+				}
+				conn_close_op(&conn, op);
 				free(body.data);
 				return false;
 			}
 		} else {
-			read_until_close(&conn, &body);
+			read_until_close(&conn, &body, op);
 		}
 	}
 
-	conn_close(&conn);
+	conn_close_op(&conn, op);
 
 	if (!body.data) {
 		// An empty 200 is not an answer to anything asked here, except for
@@ -854,6 +952,9 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 	if (status_out) {
 		*status_out = 0;
 	}
+	if (req->op) {
+		http_op_begin(req->op); // wakes from here on belong to this request
+	}
 
 	clear_last_error();
 
@@ -874,8 +975,8 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 		int status = 0;
 		char location[2048] = "";
 		char err[192] = "";
-		bool ok = get_once(&u, &hop_req, out, out_len, limit, timeout_secs, &status, location, sizeof(location), err,
-						   sizeof(err));
+		bool ok = get_once(&u, &hop_req, out, out_len, limit, timeout_secs, &status, location, sizeof(location),
+						   err, sizeof(err), hop_req.op);
 		if (status_out) {
 			*status_out = status;
 		}
@@ -930,7 +1031,7 @@ static conn_t stream_conn(http_stream_t *st) {
 }
 
 static bool stream_open_once(http_stream_t *st, const char *url, const char *extra_headers, int timeout_secs, int *status_out,
-							 char *location, size_t location_size) {
+							 char *location, size_t location_size, http_op_t *op) {
 	url_t u;
 	if (!url_parse(url, &u)) {
 		return false;
@@ -938,7 +1039,7 @@ static bool stream_open_once(http_stream_t *st, const char *url, const char *ext
 
 	conn_t conn;
 	char err[192] = "";
-	if (!conn_open(&conn, &u, timeout_secs, err, sizeof(err))) {
+	if (!conn_open(&conn, &u, timeout_secs, err, sizeof(err), op)) {
 		return false;
 	}
 
@@ -963,23 +1064,23 @@ static bool stream_open_once(http_stream_t *st, const char *url, const char *ext
 					 "\r\n",
 					 u.path, host_header, extra_headers ? extra_headers : "");
 	// As above: snprintf returns what it would have written, not what it did.
-	if (n <= 0 || (size_t)n >= sizeof(request) || !conn_write_all(&conn, request, (size_t)n)) {
-		conn_close(&conn);
+	if (n <= 0 || (size_t)n >= sizeof(request) || !conn_write_all_op(&conn, request, (size_t)n, op)) {
+		conn_close_op(&conn, op);
 		return false;
 	}
 
 	char headers[HTTP_HEADER_BUFFER];
-	int status = read_headers(&conn, headers, sizeof(headers), st->lead, sizeof(st->lead), &st->lead_len);
+	int status = read_headers(&conn, headers, sizeof(headers), st->lead, sizeof(st->lead), &st->lead_len, op);
 	*status_out = status;
 
 	if (status >= 300 && status < 400) {
 		location[0] = '\0';
 		header_value(headers, "Location", location, location_size);
-		conn_close(&conn);
+		conn_close_op(&conn, op);
 		return false;
 	}
 	if (status != 200) {
-		conn_close(&conn);
+		conn_close_op(&conn, op);
 		return false;
 	}
 
@@ -998,7 +1099,7 @@ static bool stream_open_once(http_stream_t *st, const char *url, const char *ext
 	st->content_length = 0;
 	if (header_value(headers, "Content-Length", length_text, sizeof(length_text)) &&
 		!checked_content_length(length_text, &st->content_length)) {
-		conn_close(&conn);
+		conn_close_op(&conn, op);
 		set_last_error("malformed Content-Length response header");
 		return false;
 	}
@@ -1019,8 +1120,19 @@ static bool stream_open_once(http_stream_t *st, const char *url, const char *ext
 }
 
 bool http_stream_open_ex(http_stream_t *st, const char *url, const char *extra_headers, int timeout_secs) {
+	return http_stream_open_ex_op(st, url, extra_headers, timeout_secs, NULL, NULL);
+}
+
+bool http_stream_open_ex_op(http_stream_t *st, const char *url, const char *extra_headers, int timeout_secs,
+							http_op_t *op, int *status_out) {
 	if (!st || !url) {
 		return false;
+	}
+	if (status_out) {
+		*status_out = 0;
+	}
+	if (op) {
+		http_op_begin(op); // wakes from here on belong to this open
 	}
 	memset(st, 0, sizeof(*st));
 	st->fd = -1;
@@ -1033,8 +1145,14 @@ bool http_stream_open_ex(http_stream_t *st, const char *url, const char *extra_h
 	for (int hop = 0; hop <= HTTP_MAX_REDIRECTS; hop++) {
 		int status = 0;
 		char location[2048] = "";
-		if (stream_open_once(st, current, hop_headers, timeout_secs, &status, location, sizeof(location))) {
+		if (stream_open_once(st, current, hop_headers, timeout_secs, &status, location, sizeof(location), op)) {
+			if (status_out) {
+				*status_out = status;
+			}
 			return true;
+		}
+		if (status_out) {
+			*status_out = status;
 		}
 		if (status < 300 || status >= 400 || !location[0]) {
 			return false;
@@ -1066,8 +1184,9 @@ bool http_stream_open(http_stream_t *st, const char *url, int timeout_secs) {
 }
 
 // Reads exactly `len` raw bytes (lead buffer first, then the socket).
-// Returns false if the stream ended or errored partway.
-static bool read_raw(http_stream_t *st, char *buf, int len) {
+// Returns false if the stream ended or errored partway. Every socket read
+// runs in the op's wake window when one is attached (§8.5 line 1157).
+static bool read_raw(http_stream_t *st, char *buf, int len, http_op_t *op) {
 	int got = 0;
 	while (got < len) {
 		if (st->lead_pos < st->lead_len) {
@@ -1082,7 +1201,7 @@ static bool read_raw(http_stream_t *st, char *buf, int len) {
 		}
 
 		conn_t c = stream_conn(st);
-		int n = conn_read(&c, buf + got, (size_t)(len - got));
+		int n = conn_read_op(&c, buf + got, (size_t)(len - got), op);
 		if (n <= 0) {
 			return false;
 		}
@@ -1095,9 +1214,9 @@ static bool read_raw(http_stream_t *st, char *buf, int len) {
 // "StreamTitle='...';StreamUrl='...';", padded with NULs. A length of zero --
 // which is the usual case, most blocks say nothing new -- means nothing
 // follows.
-static bool consume_metadata(http_stream_t *st) {
+static bool consume_metadata(http_stream_t *st, http_op_t *op) {
 	char length_byte;
-	if (!read_raw(st, &length_byte, 1)) {
+	if (!read_raw(st, &length_byte, 1, op)) {
 		return false;
 	}
 
@@ -1107,7 +1226,7 @@ static bool consume_metadata(http_stream_t *st) {
 	}
 
 	char block[16 * 255 + 1];
-	if (!read_raw(st, block, len)) {
+	if (!read_raw(st, block, len, op)) {
 		return false;
 	}
 	block[len] = '\0';
@@ -1152,7 +1271,12 @@ static bool consume_metadata(http_stream_t *st) {
 	return true;
 }
 
-int http_stream_read(http_stream_t *st, void *buf, int len) {
+// The read engine behind http_stream_read() and its cancellable form. With an
+// op, every blocking socket read runs in the publish window and never starts
+// once the op is cancelled; a blocked read is woken by http_op_cancel()'s
+// shutdown and simply comes back as a read error, which the OWNER classifies
+// (the wake left http_op_woken_current() true only for this generation).
+static int stream_read_impl(http_stream_t *st, void *buf, int len, http_op_t *op) {
 	if (!st || st->fd < 0 || len <= 0) {
 		return -1;
 	}
@@ -1169,13 +1293,13 @@ int http_stream_read(http_stream_t *st, void *buf, int len) {
 			return take;
 		}
 		conn_t c = stream_conn(st);
-		int n = conn_read(&c, buf, (size_t)len);
+		int n = conn_read_op(&c, buf, (size_t)len, op);
 		return n < 0 ? -1 : n;
 	}
 
 	// With it, hand back at most what is left before the next metadata block.
 	if (st->meta_countdown == 0) {
-		if (!consume_metadata(st)) {
+		if (!consume_metadata(st, op)) {
 			return 0;
 		}
 		st->meta_countdown = st->icy_metaint;
@@ -1193,7 +1317,7 @@ int http_stream_read(http_stream_t *st, void *buf, int len) {
 		st->lead_pos += got;
 	} else {
 		conn_t c = stream_conn(st);
-		int n = conn_read(&c, buf, (size_t)want);
+		int n = conn_read_op(&c, buf, (size_t)want, op);
 		if (n <= 0) {
 			return n == 0 ? 0 : -1;
 		}
@@ -1202,6 +1326,17 @@ int http_stream_read(http_stream_t *st, void *buf, int len) {
 
 	st->meta_countdown -= got;
 	return got;
+}
+
+int http_stream_read(http_stream_t *st, void *buf, int len) {
+	return stream_read_impl(st, buf, len, NULL);
+}
+
+int http_stream_read_op(http_stream_t *st, void *buf, int len, http_op_t *op) {
+	if (op) {
+		http_op_begin(op); // this read's result generation
+	}
+	return stream_read_impl(st, buf, len, op);
 }
 
 void http_stream_wake(http_stream_t *st) {

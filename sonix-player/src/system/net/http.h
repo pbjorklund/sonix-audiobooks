@@ -1,8 +1,10 @@
 #ifndef HTTP_H
 #define HTTP_H
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/socket.h>
 
 // A very small HTTP/1.1 client.
 //
@@ -28,6 +30,200 @@
 // What the server is told this client is. radio-browser.info asks for a
 // descriptive agent of the form appname/version.
 #define HTTP_USER_AGENT "SonixPlayer/1.0"
+
+// ---------------------------------------------------------------------------
+// The active-operation slot (Bob §8.5 line 1028/1157; §8.2 line 463)
+//
+// A caller whose HTTP work sits behind a cancellable command (today: the
+// Audiobookshelf download queue's pause/cancel, whose pause must not wait out
+// a 30 s receive timeout) hands every blocking operation one of these slots.
+// The op is the `abs_client_op_t` of the spec under its next-wave name: it
+// carries a cancellation flag, a result generation, and a mutex-published
+// active connection, and cancellation wakes the exact blocked read through
+// the connection itself.
+//
+// The contract, in the order the spec states it:
+//
+//   * The OWNER (the worker thread doing the HTTP) publishes the in-flight
+//     connection's fd around connect, the TLS handshake, the request write,
+//     the header read, and every buffered/streaming body read, and un-publishes
+//     before that fd can be closed. Publication takes the slot mutex only for
+//     the pointer/state write -- never across a network wait.
+//   * Another thread (the GUI) calls http_op_cancel(): the flag is set and the
+//     published connection, if any, is shut down. A blocked recv()/SSL_read on
+//     that fd returns at once, so a paused download does not ride out its
+//     receive timeout. The owner keeps sole read/close ownership: wake never
+//     closes, frees or dereferences anything.
+//   * Because un-publish happens under the same mutex as publish and always
+//     before close, a wake can never shut down an fd that has been closed and
+//     re-opened by someone else (fd reuse) -- a wake captures a published fd
+//     only while the owner still owns that connection.
+//   * `generation` is the result generation: the owner bumps it when an
+//     operation begins on the slot, and a cancel records which generation it
+//     landed on. An owner that must classify a failed read asks
+//     http_op_woken_current(): true means this generation's read was ended by
+//     a deliberate wake, false means the network failed on its own.
+//   * DNS stays honest (§8.2 line 463): getaddrinfo cannot be interrupted, so
+//     a cancel during resolver time is only a flag until the resolver's own
+//     bounded timeout returns; the owner then checks the flag and stops BEFORE
+//     connecting. The queue reports that phase as "Stopping" rather than
+//     pretending DNS can be cut short. Connect itself, the TLS handshake and
+//     every read are wakeable.
+//
+// The slot lives with the owner (one download worker, one active transfer),
+// is passed to the op-aware entry points below, and is safe to cancel from
+// any other thread at any moment, published or not.
+typedef struct {
+	pthread_mutex_t mutex; // guards the four fields below, nothing else
+	volatile int cancelled;
+	volatile unsigned generation;     // bumped at each operation begin
+	volatile unsigned wake_generation; // the generation a cancel landed on
+	volatile int active_fd;           // published in-flight fd; -1 = none
+} http_op_t;
+
+// Lifecycle. Everything is inline and mutex-guarded on purpose: the slot must
+// be usable from modules that do not link http.c at all (the download worker
+// owns the slot, the queue tests publish into it) while http.c publishes the
+// same fields inside its own calls. Every function below is cheap and does
+// no I/O.
+
+static inline void http_op_init(http_op_t *op) {
+	if (!op) {
+		return;
+	}
+	pthread_mutex_init(&op->mutex, NULL);
+	op->cancelled = 0;
+	op->generation = 0;
+	op->wake_generation = 0;
+	op->active_fd = -1;
+}
+
+static inline void http_op_destroy(http_op_t *op) {
+	if (!op) {
+		return;
+	}
+	pthread_mutex_destroy(&op->mutex);
+}
+
+// Owner, between attempts on a reusable slot: clears a consumed/overrun
+// cancellation flag so a stop directed at the previous attempt cannot leak
+// into the next one. wake_generation is re-anchored to the current generation
+// so no stale wake can ever look like this attempt's own.
+static inline void http_op_clear(http_op_t *op) {
+	if (!op) {
+		return;
+	}
+	pthread_mutex_lock(&op->mutex);
+	op->cancelled = 0;
+	op->wake_generation = op->generation;
+	op->active_fd = -1;
+	pthread_mutex_unlock(&op->mutex);
+}
+
+// Owner, at the start of an op-aware HTTP call: the result generation moves,
+// and a wake from here on belongs to this operation.
+static inline void http_op_begin(http_op_t *op) {
+	if (!op) {
+		return;
+	}
+	pthread_mutex_lock(&op->mutex);
+	op->generation++;
+	pthread_mutex_unlock(&op->mutex);
+}
+
+static inline bool http_op_cancelled(http_op_t *op) {
+	if (!op) {
+		return false;
+	}
+	pthread_mutex_lock(&op->mutex);
+	bool c = op->cancelled != 0;
+	pthread_mutex_unlock(&op->mutex);
+	return c;
+}
+
+// True when a cancel/wake is directed at the operation the owner is currently
+// running (§8.5 "result generation"): the owner's read failed and THIS
+// generation is the one the wake hit. The cheap, non-classifying form is
+// http_op_cancelled().
+static inline bool http_op_woken_current(http_op_t *op) {
+	if (!op) {
+		return false;
+	}
+	pthread_mutex_lock(&op->mutex);
+	bool w = op->cancelled != 0 && op->wake_generation == op->generation;
+	pthread_mutex_unlock(&op->mutex);
+	return w;
+}
+
+static inline unsigned http_op_generation(http_op_t *op) {
+	if (!op) {
+		return 0;
+	}
+	pthread_mutex_lock(&op->mutex);
+	unsigned g = op->generation;
+	pthread_mutex_unlock(&op->mutex);
+	return g;
+}
+
+// Another thread stops the operation: the flag rises and the published
+// connection -- if one is in flight right now -- is shut down so the blocked
+// read/write returns immediately. The owner still owns read/close; this only
+// wakes the connection, like http_stream_wake() but through the slot and only
+// while an fd is genuinely published.
+static inline void http_op_cancel(http_op_t *op) {
+	if (!op) {
+		return;
+	}
+	pthread_mutex_lock(&op->mutex);
+	op->cancelled = 1;
+	op->wake_generation = op->generation;
+	int fd = op->active_fd;
+	if (fd >= 0) {
+		shutdown(fd, SHUT_RDWR); // wakes recv()/SSL_read at once; owner still closes
+	}
+	pthread_mutex_unlock(&op->mutex);
+}
+
+// Owner: publish the in-flight connection's fd for the duration of one
+// blocking network phase (connect, handshake, request write, header read, one
+// buffered/streaming body read), then un-publish before that fd can be closed.
+// Both under the slot mutex, so a concurrent wake captures a published fd only
+// while the owner still owns the connection -- never a closed-reused number.
+static inline void http_op_publish_fd(http_op_t *op, int fd) {
+	if (!op) {
+		return;
+	}
+	pthread_mutex_lock(&op->mutex);
+	op->active_fd = fd;
+	pthread_mutex_unlock(&op->mutex);
+}
+
+static inline void http_op_unpublish(http_op_t *op) {
+	if (!op) {
+		return;
+	}
+	pthread_mutex_lock(&op->mutex);
+	op->active_fd = -1;
+	pthread_mutex_unlock(&op->mutex);
+}
+
+// Test/diagnostic observation (§8.5 line 588's optional hooks): true while the
+// owner is INSIDE one published network phase, i.e. at an instant where a
+// cancel would wake a genuinely blocked wait. *fd_out (may be NULL) receives
+// the published fd. The wake tests use it to synchronize a cancellation onto
+// the blocked window without wall-clock guesses.
+static inline bool http_op_published(http_op_t *op, int *fd_out) {
+	if (!op) {
+		return false;
+	}
+	pthread_mutex_lock(&op->mutex);
+	bool p = op->active_fd >= 0;
+	if (p && fd_out) {
+		*fd_out = op->active_fd;
+	}
+	pthread_mutex_unlock(&op->mutex);
+	return p;
+}
 
 // Fetches `url` into a freshly malloc'd, NUL-terminated buffer. The caller
 // frees it. `out_len` may be NULL. Redirects (301/302/303/307/308) are
@@ -112,6 +308,14 @@ typedef struct {
 	// never NULL, so the caller always frees the same way.
 	bool allow_empty_body;
 
+	// The caller's active-operation slot (above), when this request must be
+	// cancellable mid-flight. NULL (the default for every zero-initialised
+	// request) keeps the historical, non-wakeable behavior of every existing
+	// caller. The owner keeps the slot valid for the whole call; http.c
+	// publishes the connection through it around connect, handshake, request
+	// write, headers and every body read, and honors the cancellation flag.
+	http_op_t *op;
+
 } http_req_t;
 
 // Like http_get_ex(), but with the method and body chosen by the caller.
@@ -181,10 +385,26 @@ bool http_stream_open(http_stream_t *st, const char *url, int timeout_secs);
 // endpoints such as Audiobookshelf, where the body is too large to buffer.
 bool http_stream_open_ex(http_stream_t *st, const char *url, const char *extra_headers, int timeout_secs);
 
+// The same, cancellable. `op` is the caller's active-operation slot: the open
+// publishes the connection around connect, handshake, request write and the
+// header read, so http_op_cancel() wakes a blocked open at once. When the
+// server answers with a non-2xx status, `status_out` (if given) receives it --
+// a download retry policy can tell a refused token (401/403) from missing
+// media (404) without re-reading headers. Redirection and auth stripping are
+// exactly the non-op form's.
+bool http_stream_open_ex_op(http_stream_t *st, const char *url, const char *extra_headers, int timeout_secs,
+							http_op_t *op, int *status_out);
+
 // Reads up to `len` bytes of *audio* into buf: any ICY metadata blocks in the
 // way are consumed and parsed out, never handed to the caller. Returns the
 // number of bytes read, 0 at end of stream, -1 on error.
 int http_stream_read(http_stream_t *st, void *buf, int len);
+
+// The cancellable form: each blocking body read is wrapped in the slot's
+// publish/unpublish window and preceded by an http_op_cancelled() check, so a
+// cancel both wakes a blocked read at once and stops the loop before the next
+// one. The stream (and its op) stay the owner's: nothing here closes anything.
+int http_stream_read_op(http_stream_t *st, void *buf, int len, http_op_t *op);
 
 void http_stream_close(http_stream_t *st);
 
