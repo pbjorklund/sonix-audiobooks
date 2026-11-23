@@ -238,12 +238,19 @@ static void local_linked_tests(const char *sd, const char *id_a, const char *id_
 	// §11.5: server B's identical item id cannot open server A's copy.
 	assert(abs_profiles_select(id_b));
 	assert(audiobookshelf_local_linked(audio, "probe-item") == false);
+	// The GUI decision for that not-linked match (§11.5): the copy belongs to
+	// another server -> offered a download from this server, never re-linked.
+	// Under its own server the copy is not "elsewhere": re-link applies.
+	assert(audiobookshelf_local_owned_elsewhere(audio) == true);
 	assert(abs_profiles_select(id_a));
+	assert(audiobookshelf_local_owned_elsewhere(audio) == false);
 
 	// §11.5: manifest version/required fields are validated before the binding
-	// is trusted. No version line, no link.
+	// is trusted. No version line, no link -- and no reliable binding, so this
+	// is not "another server's copy" either: the re-link path applies.
 	write_file(manifest_path, "item_id=probe-item\nserver=http://abs-a.example\n");
 	assert(audiobookshelf_local_linked(audio, "probe-item") == false);
+	assert(audiobookshelf_local_owned_elsewhere(audio) == false);
 	// Empty item_id is not a binding either.
 	write_file(manifest_path, "version=1\nitem_id=\nserver=http://abs-a.example\n");
 	assert(audiobookshelf_local_linked(audio, "probe-item") == false);

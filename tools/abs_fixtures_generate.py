@@ -189,10 +189,12 @@ MIXED_FILLER = [
 ]
 
 
-def book_row(item_id, title, author_name, author_ids, series, tag_ids, genre_ids,
+def book_row(item_id, title, author_name, author_ids, series, tags, genres,
              ordinal, duration, num_tracks):
     # §14.1 legacy compatibility: the pinned single-book row keeps the exact
     # pre-0.6.0 coverPath; every other item uses the standard API cover route.
+    # §10.1: `tags`/`genres` carry the VALUE STRINGS themselves (the filter
+    # contract is name-based), never fixture-internal ids.
     cover_path = ("/fixture/cover.jpg" if item_id == "mock-book"
                   else f"/api/items/{item_id}/cover")
     return {
@@ -202,8 +204,8 @@ def book_row(item_id, title, author_name, author_ids, series, tag_ids, genre_ids
         "author_name": author_name,
         "author_ids": list(author_ids),
         "series": [dict(entry) for entry in series],
-        "tag_ids": list(tag_ids),
-        "genre_ids": list(genre_ids),
+        "tags": list(tags),
+        "genres": list(genres),
         "added_at": 1700000000000 + ordinal * 1000,
         "duration": duration,
         "num_tracks": num_tracks,
@@ -212,8 +214,9 @@ def book_row(item_id, title, author_name, author_ids, series, tag_ids, genre_ids
     }
 
 
-def podcast_row(item_id, title, author_name, author_ids, tag_ids, genre_ids,
+def podcast_row(item_id, title, author_name, author_ids, tags, genres,
                 ordinal, num_episodes):
+    # §10.1: genre/tag values are the strings themselves (see book_row).
     return {
         "id": item_id,
         "kind": "podcast",
@@ -221,8 +224,8 @@ def podcast_row(item_id, title, author_name, author_ids, tag_ids, genre_ids,
         "author_name": author_name,
         "author_ids": list(author_ids),
         "series": [],
-        "tag_ids": list(tag_ids),
-        "genre_ids": list(genre_ids),
+        "tags": list(tags),
+        "genres": list(genres),
         "added_at": 1700000000000 + ordinal * 1000,
         "duration": 0.0,
         "num_tracks": 0,
@@ -255,65 +258,67 @@ def build_dataset():
     items["mock-library"] = [book_row(
         "mock-book", "The Mock Journey", "Test Author", ["author-1"],
         [{"id": "series-1", "name": "Fixture Series", "sequence": "2"}],
-        ["tag-legacy"], ["genre-legacy"], 0, 20.0, 2)]
+        ["Fixture Tag"], ["Fixture Genre"], 0, 20.0, 2)]
 
     # -- search-range library feeding the 0/40/100/101 corpora.
     search_rows = []
     for i in range(1, 106):
         search_rows.append(book_row(
             f"sc-{i:03d}", f"Fixture Search Item {i:03d}", "Fixture Search Author",
-            ["author-sr"], [], ["tag-search"], ["genre-search"], i, 600.0, 1))
+            ["author-sr"], [], ["Fixture Search Tag"], ["Fixture Search Genre"], i, 600.0, 1))
     items["lib-search-1"] = search_rows
 
     # -- paginated book library: 75 rows → pages 40 + 35 at the client's limit 40.
+    # §10.1: tag/genre columns carry the same strings the filterdata serves,
+    # so a name-based filter selects real rows (no id indirection).
     list_rows = []
     for i in range(1, 76):
         author_id = f"author-fa-{(i - 1) % 3 + 1}"
         author_name = {1: "Fixture Author One", 2: "Fixture Author Two",
                        3: "Fixture Author Three"}[(i - 1) % 3 + 1]
         series_id = 2 if i % 2 == 0 else 1
-        tag_ids = ["ta-fa-1"] if i <= 40 else ["ta-fa-2"]
-        genre_ids = ["ge-fa-1"] if i % 5 == 1 else ["ge-fa-2"]
+        tags = ["Fixture Tag Alpha"] if i <= 40 else ["Fixture Tag Beta"]
+        genres = ["Fiction"] if i % 5 == 1 else ["Nonfiction"]
         list_rows.append(book_row(
             f"pg-bk-{i:03d}", f"Fixture Paginated Book {i:03d}", author_name,
             [author_id],
             [{"id": f"series-fa-{series_id}",
               "name": {1: "Fixture Series One", 2: "Fixture Series Two"}[series_id],
               "sequence": str((i - 1) % 2 + 1)}],
-            tag_ids, genre_ids, i, 300.0 + (i % 7) * 10.0, 1 + i % 4))
+            tags, genres, i, 300.0 + (i % 7) * 10.0, 1 + i % 4))
     items["lib-list-1"] = list_rows
 
     # -- paginated podcast library: 65 shows → pages 40 + 25.
     rack_rows = []
     for i in range(1, 66):
-        tag_ids = ["ta-pod-1"] if i <= 32 else ["ta-pod-2"]
-        genre_ids = ["ge-pod-1"] if i % 2 == 0 else ["ge-pod-2"]
+        tags = ["Interviews"] if i <= 32 else ["News"]
+        genres = ["Comedy"] if i % 2 == 0 else ["History"]
         rack_rows.append(podcast_row(
             f"pod-rack-{i:03d}", f"Fixture Rack Podcast {i:03d}",
-            "Fixture Podcast Author", [], tag_ids, genre_ids, i,
+            "Fixture Podcast Author", [], tags, genres, i,
             12 + (i % 26)))
     items["lib-pod-1"] = rack_rows
 
     # -- talk-show library hosting the named 41-episode show.
     items["lib-pod-2"] = [
         podcast_row("pod-41", "Fixture Forty-One Podcast", "Fixture Podcast Author",
-                    [], ["ta-pod-1"], ["ge-pod-1"], 1, 41),
+                    [], ["Interviews"], ["Comedy"], 1, 41),
         podcast_row("pod-talk-1", "Fixture Talk Show One", "Fixture Podcast Author",
-                    [], [], ["ge-pod-2"], 2, 8),
+                    [], [], ["History"], 2, 8),
         podcast_row("pod-talk-2", "Fixture Talk Show Two", "Fixture Podcast Author",
-                    [], [], ["ge-pod-2"], 3, 5),
+                    [], [], ["History"], 3, 5),
         podcast_row("pod-talk-3", "Fixture Talk Show Three", "Fixture Podcast Author",
-                    [], [], ["ge-pod-2"], 4, 6),
+                    [], [], ["History"], 4, 6),
     ]
 
     # -- long-show library hosting the >3 MiB expanded show.
     items["lib-pod-3"] = [
         podcast_row("pod-big", "Fixture Long Show", "Fixture Podcast Author",
-                    [], ["ta-pod-2"], ["ge-pod-2"], 1, BIG_SHOW_EPISODES),
+                    [], ["News"], ["History"], 1, BIG_SHOW_EPISODES),
         podcast_row("pod-long-1", "Fixture Long Show One", "Fixture Podcast Author",
-                    [], [], ["ge-pod-1"], 2, 30),
+                    [], [], ["Comedy"], 2, 30),
         podcast_row("pod-long-2", "Fixture Long Show Two", "Fixture Podcast Author",
-                    [], [], ["ge-pod-1"], 3, 34),
+                    [], [], ["Comedy"], 3, 34),
     ]
 
     # -- details shelf: full/minimal book details plus 0/1/400/401 chapter variants.
@@ -332,7 +337,7 @@ def build_dataset():
             "Fixture Detail Author", ["author-detail"],
             [{"id": "series-detail", "name": "Fixture Detail Series",
               "sequence": str(ordinal)}] if item_id != "bk-minimal" else [],
-            ["ta-detail"], ["ge-detail"], ordinal, float(chapters * 300), 3))
+            ["Fixture Detail Tag"], ["Fixture Detail Genre"], ordinal, float(chapters * 300), 3))
     items["lib-detail-1"] = detail_rows
 
     # -- mixed filler libraries so every library has browsable content.
@@ -343,7 +348,7 @@ def build_dataset():
                 rows.append(book_row(
                     f"{lib_id}-bk-{ordinal}", f"{name} Book {ordinal}",
                     "Fixture Mixed Author", [f"author-{lib_id}"], [],
-                    [], ["genre-mixed"], ordinal, 240.0, 1))
+                    [], ["Fixture Mixed Genre"], ordinal, 240.0, 1))
             else:
                 rows.append(podcast_row(
                     f"{lib_id}-pod-{ordinal}", f"{name} Podcast {ordinal}",
@@ -371,21 +376,17 @@ def build_dataset():
                 {"id": "series-fa-1", "name": "Fixture Series One"},
                 {"id": "series-fa-2", "name": "Fixture Series Two"},
             ],
-            "tags": [
-                {"id": "ta-fa-1", "name": "Fixture Tag Alpha"},
-                {"id": "ta-fa-2", "name": "Fixture Tag Beta"},
-            ],
-            "genres": [
-                {"id": "ge-fa-1", "name": "Fiction"},
-                {"id": "ge-fa-2", "name": "Nonfiction"},
-            ],
+            # §10.1: reviewed servers serve genres/tags as bare strings, and
+            # the filter value is the string itself. The {id,name} shape from
+            # earlier fixtures is covered by the offline unit tests; this
+            # dataset exercises the real-server wire shape.
+            "tags": ["Fixture Tag Alpha", "Fixture Tag Beta"],
+            "genres": ["Fiction", "Nonfiction"],
         },
         "lib-pod-1": {
             "authors": [], "series": [],
-            "tags": [{"id": "ta-pod-1", "name": "Interviews"},
-                     {"id": "ta-pod-2", "name": "News"}],
-            "genres": [{"id": "ge-pod-1", "name": "Comedy"},
-                       {"id": "ge-pod-2", "name": "History"}],
+            "tags": ["Interviews", "News"],
+            "genres": ["Comedy", "History"],
         },
         "lib-detail-1": {
             "authors": [{"id": "author-detail", "name": "Fixture Detail Author"}],
@@ -726,10 +727,13 @@ def build_expected(dataset):
         # group → (value, expected count). lib-list-1 rows: author cycles i%3,
         # series id 1 = odd rows (38), series id 2 = even rows (37); tags split
         # 40/35 at index 40; genres: every 5th row starting at i=1 (15) vs rest.
+        # §10.1: authors/series values are object ids, genre/tag values the
+        # NAME strings the filterdata serves -- both kinds of filter must
+        # round-trip to rows.
         "authors": [("author-fa-1", 25), ("author-fa-2", 25), ("author-fa-3", 25)],
         "series": [("series-fa-1", 38), ("series-fa-2", 37)],
-        "tags": [("ta-fa-1", 40), ("ta-fa-2", 35)],
-        "genres": [("ge-fa-1", 15), ("ge-fa-2", 60)],
+        "tags": [("Fixture Tag Alpha", 40), ("Fixture Tag Beta", 35)],
+        "genres": [("Fiction", 15), ("Nonfiction", 60)],
     }
     expected_filters = {}
     for group, entries in filter_input_groups.items():

@@ -174,16 +174,22 @@ def decode_filter(filter_param):
 
 
 def filter_rows(rows, group, value):
-    """Select dataset rows for a decoded filter group/value."""
+    """Select dataset rows for a decoded filter group/value.
+
+    §10.1 filter value semantics: author/series take the object id, genre/tag
+    take the string itself (the NAME), so a genre/tag filter matches the rows
+    whose genre/tag list carries that exact string -- a name-based filter
+    selects real rows, never zero by id lookup.
+    """
     if group == "authors":
         return [row for row in rows if value in row["author_ids"]]
     if group == "series":
         return [row for row in rows
                 if any(entry["id"] == value for entry in row["series"])]
     if group == "tags":
-        return [row for row in rows if value in row["tag_ids"]]
+        return [row for row in rows if value in row["tags"]]
     if group == "genres":
-        return [row for row in rows if value in row["genre_ids"]]
+        return [row for row in rows if value in row["genres"]]
     return []
 
 

@@ -226,10 +226,12 @@ start_player player-a
 click 356 160 1       # Home -> Streaming
 click 124 704 2       # Streaming -> Audiobookshelf (bottom-left tile)
 click 280 305 2       # library
-click 240 180 2       # Authors toolbar
+click 390 180 2       # Filter toolbar (§10.2: authors live under Filter now)
+click 240 200 2       # Authors kind
 click 240 200 2       # Test Author
 click 43 88 1         # author books -> authors
-click 43 88 2         # authors -> all books
+click 43 88 2         # authors -> filter kinds
+click 240 200 2       # All books (clear the filter; first title then sits at y=277)
 click 240 277 0.2     # first title: The Mock Journey (no local copy -> download dialog)
 read -r OKX OKY CX CY <<<"$(dialog_buttons "$WORK/player-a.log")"
 click "$OKX" "$OKY" 0.3   # confirm download
@@ -257,11 +259,13 @@ wait_for "phase-B local row" 100 abs_row_indexed
 click 356 160 1       # Home -> Streaming
 click 124 704 2       # Streaming -> Audiobookshelf
 click 280 305 2       # library
-click 240 180 2       # Authors toolbar
+click 390 180 2       # Filter toolbar (§10.2: authors live under Filter now)
+click 240 200 2       # Authors kind
 click 240 200 2       # Test Author
-click 43 88 1
-click 43 88 2
-click 240 277 0.2     # first title -- link question dialog, not playback
+click 43 88 1         # author books -> authors
+click 43 88 2         # authors -> filter kinds
+click 240 200 2       # All books (clear the filter; first title then sits at y=277)
+click 240 277 0.2     # first title -- download-anyway question (another server's bound copy), not playback
 read -r OKX OKY CX CY <<<"$(dialog_buttons "$WORK/player-b.log")"
 if grep -q "play requested.*Audiobookshelf/abs-$HASH_A/" "$WORK/player-b.log"; then
 	fail "server B silently opened the local server-A copy (wrong-server local link)"

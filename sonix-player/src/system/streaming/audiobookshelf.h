@@ -19,6 +19,16 @@
 #define ABS_SEARCH_REQUEST_LIMIT 101
 #define ABS_SEARCH_DISPLAY_LIMIT 100
 
+// §10.2 group bounds. The GUI shows one filterdata group as client-side pages
+// of ABS_GROUP_UI_PAGE_LIMIT rows; the projection behind it is hard-bounded
+// BEFORE allocation at ABS_FILTER_GROUP_LIMIT entries and
+// ABS_FILTER_GROUP_BYTES_MAX bytes, so a multi-megabyte filterdata can never
+// expand into an unbounded array -- past either bound the first bounded,
+// pageable set is retained and the caller is told (TRUNCATED).
+#define ABS_GROUP_UI_PAGE_LIMIT 40
+#define ABS_FILTER_GROUP_LIMIT 512
+#define ABS_FILTER_GROUP_BYTES_MAX (192 * 1024)
+
 // Verified server sort mapping for book item queries (§10.1). The strings are
 // what the reviewed Audiobookshelf route accepts; `sequence` is meaningful
 // only under a series filter.
@@ -56,6 +66,12 @@ typedef struct {
 	char id[ABS_ID_MAX];
 	char name[ABS_NAME_MAX];
 	char media_type[24];
+	// Filter-group entries only (§10.2): a raw value that exceeds the
+	// 256-byte filter query contract is never silently truncated into a
+	// working-looking but wrong filter. The head of the value is kept for
+	// display, `oversized` marks it unusable, and groups_ex() counts these
+	// for the visible warning. Library listings always carry false.
+	bool oversized;
 } audiobookshelf_library_t;
 
 typedef struct {
@@ -146,9 +162,10 @@ int audiobookshelf_search_ex(const char *library_id, const char *query,
 
 // Legacy search entry point: identical wire behavior to 0.6.0 M1 (request
 // limit = min(max, ABS_PAGE_LIMIT), no has_more). Superseded by
-// audiobookshelf_search_ex(); kept only until the GUI migrates (§10.3).
-// Library-scoped (§10.1), whatever the old "server-wide" wording said; at most
-// max matches (no server search pagination).
+// audiobookshelf_search_ex() -- the GUI now uses the §10.1 entry points -- and
+// kept as the M1 wire pin for the browse tests. Library-scoped (§10.1),
+// whatever the old "server-wide" wording said; at most max matches (no server
+// search pagination).
 int audiobookshelf_search(const char *library_id, const char *query, audiobookshelf_item_t *out, int max);
 // Caller owns the allocated, alphabetically sorted filter list.
 int audiobookshelf_groups(const char *library_id, bool series, audiobookshelf_library_t **out);
@@ -158,13 +175,25 @@ int audiobookshelf_groups(const char *library_id, bool series, audiobookshelf_li
 // name is the filter value either way) and `id` stays empty: the value a
 // genre/tag filter encodes is the name, never an object id. The returned list
 // is alphabetically sorted and caller-owned (free()).
+//
+// §10.2 projection bounds: the response is bounded to the first
+// ABS_FILTER_GROUP_LIMIT entries / ABS_FILTER_GROUP_BYTES_MAX of projection
+// before anything is allocated; above either bound `*truncated_out` reports
+// TRUNCATED and only the bounded first set arrives (in received order, then
+// sorted). Entries whose raw filter value does not fit the 256-byte query
+// contract are marked `oversized` and counted in `*oversized_out` for the
+// caller's visible warning -- they are never silently truncated into a
+// working-looking but wrong filter. Both outputs are optional (NULL skips).
 int audiobookshelf_groups_ex(const char *library_id, abs_browse_filter_t group,
-							 audiobookshelf_library_t **out);
+							 audiobookshelf_library_t **out, bool *truncated_out,
+							 int *oversized_out);
 int audiobookshelf_filtered_items(const char *library_id, int page, const char *filter,
 	 audiobookshelf_item_t *out, int max, int *total_out);
-// Raw (unencoded) `authors.|series.<Base64(id)>` filter value for the legacy
-// M1 GUI flow, which URL-encodes the whole string later. The general building
-// block for one already-encoded filter is abs_browse_query_build_filter().
+// Legacy M1 items entry point, kept as the M1 wire pin for the browse tests;
+// the GUI browses through audiobookshelf_browse() (§10.1). Raw (unencoded)
+// `authors.|series.<Base64(id)>` filter value for that M1 flow, which
+// URL-encodes the whole string later. The general building block for one
+// already-encoded filter is abs_browse_query_build_filter().
 void audiobookshelf_group_filter(bool series, const char *id, char *out, size_t size);
 bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out);
 
@@ -206,6 +235,17 @@ bool audiobookshelf_link_local(const audiobookshelf_book_t *book, const char *lo
 // This lets the server library open a previously linked copy directly instead
 // of offering to link the same book again.
 bool audiobookshelf_local_linked(const char *local_book, const char *item_id);
+
+// UI decision for a unique local match that is NOT linked to this server item
+// (§11.5): true when the local copy's manifest -- a valid version=1 binding --
+// resolves to a server OTHER than the active browsing identity. Such a copy
+// belongs to another server: it must never be re-linked (rewriting its
+// manifest would move the other server's binding), and the UI offers a
+// download from this server instead, which lands in this server's own
+// abs-<hash> directory and touches nothing of the other copy. With no
+// reliable binding (§11.5), or a binding to this very server with a different
+// item id, false -- the existing explicit re-link question still applies.
+bool audiobookshelf_local_owned_elsewhere(const char *local_book);
 
 typedef enum {
 	ABS_SYNC_CHECKING, ABS_SYNC_LOCAL, ABS_SYNC_SETUP, ABS_SYNC_LINKED,

@@ -48,6 +48,9 @@ jobs:
       - name: Run the profile store unit tests (§11.6/§14.2)
         working-directory: ${{ github.workspace }}
         run: bash tools/audiobookshelf-profiles-test.sh
+      - name: Run the browse query and search-contract tests (§10.3)
+        working-directory: ${{ github.workspace }}
+        run: bash tools/audiobookshelf-browse-test.sh
       - name: Upload audiobook smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7

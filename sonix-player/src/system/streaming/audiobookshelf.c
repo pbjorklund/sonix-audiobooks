@@ -1071,10 +1071,89 @@ static bool abs_group_name_only(abs_browse_filter_t group) {
 	return group == ABS_FILTER_GENRE || group == ABS_FILTER_TAG;
 }
 
+// Decoded byte length of a JSON string -- exactly what json_str() would write
+// (same escape walk, including \u and surrogate pairs) -- but counted instead
+// of copied, and stopped once it passes `limit`: the caller only ever asks
+// whether a filter-group value fits its fixed contract, never its exact size.
+static int abs_hex4(const char *s) {
+	int value = 0;
+	for (int i = 0; i < 4; i++) {
+		char c = s[i];
+		value <<= 4;
+		if (c >= '0' && c <= '9') value |= c - '0';
+		else if (c >= 'a' && c <= 'f') value |= c - 'a' + 10;
+		else if (c >= 'A' && c <= 'F') value |= c - 'A' + 10;
+		else return -1;
+	}
+	return value;
+}
+
+static size_t json_decoded_len(const json_doc_t *doc, int tok, size_t limit) {
+	if (!doc || !doc->toks || tok < 0 || tok >= doc->count ||
+		doc->toks[tok].type != JSON_STRING) return 0;
+	const char *src = doc->text + doc->toks[tok].start;
+	int len = doc->toks[tok].end - doc->toks[tok].start;
+	size_t w = 0;
+	for (int i = 0; i < len && w <= limit; i++) {
+		if (src[i] != '\\') { w++; continue; }
+		if (i + 1 >= len) break;
+		char esc = src[++i];
+		switch (esc) {
+		case 'u': {
+			if (i + 4 >= len) { i = len; break; }
+			int cp = abs_hex4(src + i + 1);
+			if (cp < 0) { i = len; break; }
+			i += 4;
+			if (cp >= 0xD800 && cp <= 0xDBFF && i + 6 < len) {
+				int low = abs_hex4(src + i + 1);
+				if (low >= 0xDC00 && low <= 0xDFFF) {
+					cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+					i += 6;
+				}
+			}
+			// Same encoded sizes utf8_put() produces for these code points.
+			w += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+			break;
+		}
+		default:
+			w++; // every other escape decodes to exactly one byte
+			break;
+		}
+	}
+	return w;
+}
+
+// Fixed-size entries make the §10.2 byte bound structural: the projection's
+// memory is entries × sizeof(entry), so capping entries caps bytes. The
+// assert keeps that true if the struct ever grows.
+_Static_assert(ABS_FILTER_GROUP_LIMIT * (int)sizeof(audiobookshelf_library_t)
+				   <= ABS_FILTER_GROUP_BYTES_MAX,
+			   "512-entry group projection must fit the 192 KiB byte bound");
+
+// The tighter of the two §10.2 projection bounds.
+static int group_projection_cap(void) {
+	int by_bytes = ABS_FILTER_GROUP_BYTES_MAX / (int)sizeof(audiobookshelf_library_t);
+	return ABS_FILTER_GROUP_LIMIT < by_bytes ? ABS_FILTER_GROUP_LIMIT : by_bytes;
+}
+
+// Copies one filter-group value: for author/series the object ID is the
+// filter value, for genre/tag the raw string itself. A decoded value that
+// does not fit its contract is never silently truncated into a
+// working-looking but wrong filter: the visible head is kept for display and
+// the entry is flagged oversized.
+static void group_value_copy(const json_doc_t *doc, int value_tok, size_t contract,
+							 char *display, size_t display_size, bool *oversized) {
+	if (!json_str(doc, value_tok, display, display_size)) return;
+	*oversized = json_decoded_len(doc, value_tok, contract) > contract;
+}
+
 int audiobookshelf_groups_ex(const char *library_id, abs_browse_filter_t group,
-							 audiobookshelf_library_t **out) {
+							 audiobookshelf_library_t **out, bool *truncated_out,
+							 int *oversized_out) {
 	const char *key = abs_group_key(group);
 	if (out) *out = NULL;
+	if (truncated_out) *truncated_out = false;
+	if (oversized_out) *oversized_out = 0;
 	if (!library_id || !key || !out) return 0;
 	char id[ABS_ID_MAX * 3], path[384], *body = NULL;
 	http_url_encode(library_id, id, sizeof(id));
@@ -1083,36 +1162,62 @@ int audiobookshelf_groups_ex(const char *library_id, abs_browse_filter_t group,
 	json_doc_t doc;
 	if (!json_parse(body, &doc)) { free(body); set_error("Invalid library filters."); return -1; }
 	int array = json_get(&doc, json_root(&doc), key);
-	int count = json_len(&doc, array), written = 0;
-	audiobookshelf_library_t *groups = count > 0 ? calloc(count, sizeof(*groups)) : NULL;
+	int received = json_len(&doc, array);
+	// §10.2: response count and projection bytes are checked BEFORE anything
+	// is allocated. Past a bound only the first, still pageable set is
+	// retained (in received order, sorted afterwards) and the caller is told,
+	// so a multi-megabyte filterdata can never expand into unbounded memory.
+	int cap = group_projection_cap();
+	bool truncated = received > cap;
+	int count = truncated ? cap : received;
+	int oversized = 0, written = 0;
+	audiobookshelf_library_t *groups = count > 0 ? calloc((size_t)count, sizeof(*groups)) : NULL;
 	if (count > 0 && !groups) { json_free(&doc); free(body); set_error("Not enough memory for library filters."); return -1; }
 	for (int i = 0; i < count; i++) {
 		int entry = json_at(&doc, array, i);
+		if (entry < 0) continue;
 		audiobookshelf_library_t *slot = &groups[written];
 		if (!abs_group_name_only(group)) {
-			json_obj_str(&doc, entry, "id", slot->id, sizeof(slot->id));
-			json_obj_str(&doc, entry, "name", slot->name, sizeof(slot->name));
-			// An author/series choice needs id and name.
-			if (slot->id[0] && slot->name[0]) written++;
+			// Authors/series: {id,name} with both required. The ID is the
+			// filter value: an id that json_str() could not carry whole would
+			// encode a filter that matches nothing, so the entry is flagged
+			// oversized and retained for the caller's disabled display; an
+			// over-long name only affects what is shown.
+			int id_tok = json_get(&doc, entry, "id");
+			int name_tok = json_get(&doc, entry, "name");
+			if (!json_str(&doc, id_tok, slot->id, sizeof(slot->id)) ||
+				!json_str(&doc, name_tok, slot->name, sizeof(slot->name)))
+				continue; // missing id or name: absent from the projection
+			// An author/series choice needs both -- an empty id or name would
+			// encode a filter that matches nothing or a row nobody can read.
+			if (!slot->id[0] || !slot->name[0]) continue;
+			slot->oversized = json_decoded_len(&doc, id_tok, sizeof(slot->id) - 1)
+											  > (size_t)(sizeof(slot->id) - 1);
+			if (slot->oversized) oversized++;
+			written++;
 			continue;
 		}
-		// §10.1: a genre/tag choice's value is the string itself. The checked-
-		// in fixtures model the entries as {id,name} objects, reviewed servers
-		// as bare strings -- the name is what the filter encodes either way.
-		char text[ABS_NAME_MAX];
-		if (json_str(&doc, entry, text, sizeof(text)) && text[0])
-			snprintf(slot->name, sizeof(slot->name), "%s", text);
-		else
-			json_obj_str(&doc, entry, "name", slot->name, sizeof(slot->name));
-		if (slot->name[0]) written++;
+		// §10.1: a genre/tag choice's value is the string itself. Reviewed
+		// servers send bare strings, the checked-in fixtures {id,name} objects
+		// -- the name is what the filter encodes either way.
+		int value_tok = doc.toks[entry].type == JSON_STRING
+			? entry : json_get(&doc, entry, "name");
+		group_value_copy(&doc, value_tok, ABS_NAME_MAX - 1,
+						 slot->name, sizeof(slot->name), &slot->oversized);
+		if (!slot->name[0]) continue;
+		if (slot->oversized) oversized++;
+		written++;
 	}
 	if (written > 1) qsort(groups, written, sizeof(*groups), group_compare);
 	json_free(&doc); free(body); *out = groups;
+	if (truncated_out) *truncated_out = truncated;
+	if (oversized_out) *oversized_out = oversized;
 	return written;
 }
 
 int audiobookshelf_groups(const char *library_id, bool series, audiobookshelf_library_t **out) {
-	return audiobookshelf_groups_ex(library_id, series ? ABS_FILTER_SERIES : ABS_FILTER_AUTHOR, out);
+	return audiobookshelf_groups_ex(library_id, series ? ABS_FILTER_SERIES : ABS_FILTER_AUTHOR,
+									out, NULL, NULL);
 }
 
 void audiobookshelf_group_filter(bool series, const char *id, char *out, size_t size) {
@@ -1679,13 +1784,18 @@ static bool local_file_duration(const char *path, double *seconds) {
 	return *seconds > 0;
 }
 
-// True when the local manifest names this server item AND bound this same
-// server (§11.5): matching item_id alone let server B's copy of one book claim
-// server A's local link. A manifest without `server=` (0.5.0 vintage) resolves
-// to the persisted legacy_server; before any profile store exists it binds to
-// the sole configured identity, exactly as 0.5.0 did, and never to a guess.
-bool audiobookshelf_local_linked(const char *local_book, const char *item_id) {
-	if (!local_book || !local_book[0] || !item_id || !item_id[0]) return false;
+// Reads a local book's .audiobookshelf manifest (§11.5). True when the file
+// opened; the three answers are all collected regardless of what matches:
+// `server=` is written after `item_id=` in the manifest, so neither line may
+// stop the scan early, and `version=` is the manifest's own format commitment
+// (validate version and required fields before trusting the binding).
+static bool read_local_manifest(const char *local_book, bool *version_ok,
+								char *item_id, size_t item_id_size,
+								char *bound_server, size_t bound_size) {
+	if (version_ok) *version_ok = false;
+	if (item_id && item_id_size) item_id[0] = '\0';
+	if (bound_server && bound_size) bound_server[0] = '\0';
+	if (!local_book || !local_book[0]) return false;
 
 	char folder[ABS_LOCAL_PATH_MAX];
 	snprintf(folder, sizeof(folder), "%s", local_book);
@@ -1701,37 +1811,87 @@ bool audiobookshelf_local_linked(const char *local_book, const char *item_id) {
 	FILE *f = fopen(manifest, "r");
 	if (!f) return false;
 
-	// All three answers are collected: `server=` is written after `item_id=`
-	// in the manifest, so neither line may stop the scan early, and `version=`
-	// is the manifest's own format commitment (§11.5: validate version and
-	// required fields before trusting the binding).
-	bool id_matched = false;
-	bool version_ok = false;
-	char bound[ABS_SERVER_MAX] = "";
 	char line[ABS_SERVER_MAX + 32];
 	while (fgets(line, sizeof(line), f)) {
 		line[strcspn(line, "\r\n")] = '\0';
 		if (strncmp(line, "item_id=", 8) == 0) {
-			id_matched = line[8] != '\0' && strcmp(line + 8, item_id) == 0;
-		} else if (strncmp(line, "server=", 7) == 0 && !bound[0]) {
-			snprintf(bound, sizeof(bound), "%.*s", (int)sizeof(bound) - 1, line + 7);
+			if (item_id && item_id_size) snprintf(item_id, item_id_size, "%s", line + 8);
+		} else if (strncmp(line, "server=", 7) == 0 && (!bound_server || !bound_server[0])) {
+			if (bound_server) snprintf(bound_server, bound_size, "%.*s", (int)bound_size - 1, line + 7);
 		} else if (strcmp(line, "version=1") == 0) {
-			version_ok = true;
+			if (version_ok) *version_ok = true;
 		}
 	}
 	fclose(f);
+	return true;
+}
+
+// Resolves a manifest's server binding with the §11.5 rules: the raw `server=`
+// line or, for a 0.5.0 manifest without one, the persisted legacy server.
+// Empty output means no reliable binding -- an explicit re-link is required.
+static void manifest_bound_server(const char *bound_server, char *resolved, size_t size) {
+	resolved[0] = '\0';
+	if (!bound_server || !bound_server[0]) {
+		legacy_manifest_binding(resolved, size);
+		return;
+	}
+	abs_profiles_normalize_server(bound_server, resolved, size);
+}
+
+// True when the local book's manifest binds THIS server item: a valid
+// version=1 manifest whose resolved server and item_id both match (§11.5).
+// Matching item_id alone would let server B's copy of one book claim
+// server A's local files. A manifest without `server=` (0.5.0 vintage) resolves
+// to the persisted legacy_server; before any profile store exists it binds to
+// the sole configured identity, exactly as 0.5.0 did, and never to a guess.
+// With no reliable binding, false -- an explicit re-link is required and local
+// progress stays pending.
+// This lets the server library open a previously linked copy directly instead
+// of offering to link the same book again.
+bool audiobookshelf_local_linked(const char *local_book, const char *item_id) {
+	if (!item_id || !item_id[0]) return false;
+
+	bool version_ok = false;
+	char bound_item[ABS_ID_MAX], bound[ABS_SERVER_MAX] = "";
+	if (!read_local_manifest(local_book, &version_ok, bound_item, sizeof(bound_item),
+							 bound, sizeof(bound)))
+		return false;
 	// A manifest without a recognized version or a matching item id is not a
 	// linkable binding: it must never open a copy that some other state wrote.
-	if (!version_ok || !id_matched) return false;
+	if (!version_ok || strcmp(bound_item, item_id) != 0) return false;
 
 	char resolved[ABS_SERVER_MAX];
-	abs_profiles_normalize_server(bound, resolved, sizeof(resolved));
-	if (!resolved[0]) legacy_manifest_binding(resolved, sizeof(resolved));
+	manifest_bound_server(bound, resolved, sizeof(resolved));
 	if (!resolved[0]) return false; // §11.5: no reliable server -> explicit re-link, keep progress pending
 	char identity[ABS_SERVER_MAX], normalized_identity[ABS_SERVER_MAX];
 	if (!request_credentials_copy(NULL, identity, sizeof(identity), NULL, 0) || !identity[0]) return false;
 	abs_profiles_normalize_server(identity, normalized_identity, sizeof(normalized_identity));
 	return strcmp(resolved, normalized_identity) == 0;
+}
+
+// UI decision for a unique local match that is not linked to this server item
+// (§11.5): another server's copy. The manifest is a valid version=1 binding
+// that resolves to a server OTHER than the active browsing identity -- the
+// user is offered a download from this server, never a re-link (rewriting the
+// other server's manifest would move its binding), and the download lands in
+// this server's own abs-<hash> directory without touching that copy. With no
+// reliable binding, or a binding to this very server with a different item id
+// (an owned copy bound to a different server item), the existing explicit
+// re-link question still applies.
+bool audiobookshelf_local_owned_elsewhere(const char *local_book) {
+	bool version_ok = false;
+	char bound_item[ABS_ID_MAX], bound[ABS_SERVER_MAX] = "";
+	if (!read_local_manifest(local_book, &version_ok, bound_item, sizeof(bound_item),
+							 bound, sizeof(bound)) || !version_ok)
+		return false;
+	char resolved[ABS_SERVER_MAX];
+	manifest_bound_server(bound, resolved, sizeof(resolved));
+	if (!resolved[0]) return false; // no reliable binding -> re-link path, not "another server"
+	char identity[ABS_SERVER_MAX], normalized_identity[ABS_SERVER_MAX];
+	if (!request_credentials_copy(NULL, identity, sizeof(identity), NULL, 0) || !identity[0])
+		return false; // no active identity to compare against: keep the re-link path
+	abs_profiles_normalize_server(identity, normalized_identity, sizeof(normalized_identity));
+	return strcmp(resolved, normalized_identity) != 0;
 }
 
 bool audiobookshelf_link_local(const audiobookshelf_book_t *book, const char *local_book,

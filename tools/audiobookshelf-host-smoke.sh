@@ -190,24 +190,31 @@ fi
 click 356 160 1       # Home -> Streaming (upstream 1.3.0 home layout)
 click 124 704 2       # Streaming -> Audiobookshelf (fifth tile, bottom left)
 click 280 305 2       # library
-click 240 180 2       # Authors toolbar
+# §10.2 toolbar: Search / Sort / Filter. Authors and Series live inside the
+# Filter page now; the group values keep their rows (first row centre y=200).
+click 390 180 2       # Filter toolbar -> filter kinds
+scrot "$WORK/filter-kinds.png"
+click 240 200 2       # Authors kind
 scrot "$WORK/authors.png"
 click 240 200 2       # Test Author
 scrot "$WORK/author-books.png"
 click 43 88 1         # author books -> authors
-click 43 88 2         # authors -> all books
-click 390 180 2       # Series toolbar
+click 43 88 2         # authors -> filter kinds
+click 240 416 2       # Series kind (All books and Authors sit above the active filter)
 scrot "$WORK/series.png"
 click 240 200 2       # Fixture Series
 scrot "$WORK/series-books.png"
 click 43 88 1
-click 43 88 2
+click 43 88 2         # series books -> ... filter kinds
+click 43 88 2         # filter kinds -> books
 click 80 180 1        # search keyboard
 scrot "$WORK/search-keyboard.png"
 click 390 680 0.2     # m on keyboard
 click 430 754 2       # submit search
 scrot "$WORK/search-results.png"
-grep -q '/search?q=m&limit=40' "$WORK/progress.requests" || fail "search did not reach server"
+# §10.1/§10.5 wire contract: the search asks for the 101-match probe (never a
+# displayed 100), while authors/series filters keep their exact encodings.
+grep -q '/search?q=m&limit=101' "$WORK/progress.requests" || fail "search did not reach server"
 grep -q 'filter=authors.YXV0aG9yLTE' "$WORK/progress.requests" || fail "author filter missing"
 grep -q 'sort=sequence.*filter=series.c2VyaWVzLTE' "$WORK/progress.requests" || fail "series order/filter missing"
 click 43 88 1         # search results -> libraries

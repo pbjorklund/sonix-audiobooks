@@ -107,12 +107,67 @@ for ALIAS in $ALIASES; do
 	grep -q 'limit=40&page=1&' "$log" || fail "$ALIAS: second book page not requested"
 	grep -q 'filter=authors.YXV0aG9yLWZhLTE%3D' "$log" || fail "$ALIAS: author filter missing"
 	grep -q 'filter=series.c2VyaWVzLWZhLTE%3D' "$log" || fail "$ALIAS: series filter missing"
-	grep -q 'filter=tags.dGEtZmEtMQ%3D%3D' "$log" || fail "$ALIAS: tag filter missing"
-	grep -q 'filter=genres.Z2UtZmEtMQ%3D%3D' "$log" || fail "$ALIAS: genre id filter missing"
+	# §10.1: genre/tag filter values are the NAME strings. With the fixture's
+	# name-shaped data these round-trip to rows (see the positive check below);
+	# the id-spelled forms are now negative probes on the wire -- still
+	# constructed and logged, matching no rows at all.
+	grep -q 'filter=tags.Rml4dHVyZSBUYWcgQWxwaGE%3D' "$log" || fail "$ALIAS: tag name filter missing"
 	grep -q 'filter=genres.RmljdGlvbg%3D%3D' "$log" || fail "$ALIAS: genre name filter missing"
+	grep -q 'filter=tags.dGEtZmEtMQ%3D%3D' "$log" || fail "$ALIAS: id-spelled tag probe missing"
+	grep -q 'filter=genres.Z2UtZmEtMQ%3D%3D' "$log" || fail "$ALIAS: id-spelled genre probe missing"
 	# §10.5 search contract on the wire: 101 requested, never 100.
 	grep -q '/search?q=overflow&limit=101' "$log" || fail "$ALIAS: search 101 request missing"
 	grep -q '/search?q=hundred&limit=101' "$log" || fail "$ALIAS: search ceiling probe missing"
+
+	# §10.1/§10.3 positive round-trip, proven against the checked-in fixture
+	# bytes with the mock's own decode/filter helpers: the genre/tag NAME
+	# filters select the same rows the recorded expectations pin, and the
+	# id-spelled values select nothing. This closes the fixture-gap wave from
+	# the M2 backend report (name filters used to answer zero rows).
+	python3 - "$ROOT/tools/fixtures/audiobookshelf/$ALIAS" <<'PY' || fail "$ALIAS: name/filter round-trip mismatch"
+import base64, json, sys
+from pathlib import Path
+
+# The fixture dir's third parent is tools/, where the mock module lives.
+sys.path.insert(0, str(Path(sys.argv[1]).parents[2]))
+from audiobookshelf_mock import decode_filter, filter_rows  # noqa: E402
+
+dataset = json.load(open(Path(sys.argv[1]) / "scenario" / "dataset.json", encoding="utf-8"))
+rows = dataset["items"]["lib-list-1"]
+
+def wire(group, name):
+    value = base64.b64encode(name.encode()).decode()
+    decoded = decode_filter(f"{group}.{value}")
+    assert decoded == (group, name), decoded
+    return decoded
+
+def selected(group, name):
+    got, value = wire(group, name)
+    return filter_rows(rows, got, value)
+
+def expect(group, name, count, first, last):
+    got = selected(group, name)
+    assert len(got) == count, (group, name, len(got))
+    if count:
+        assert got[0]["id"] == first and got[-1]["id"] == last, (group, name, got[0]["id"], got[-1]["id"])
+
+# Positive: the NAME filters round-trip to the recorded expected rows.
+expect("genres", "Fiction", 15, "pg-bk-001", "pg-bk-071")
+expect("genres", "Nonfiction", 60, "pg-bk-002", "pg-bk-075")
+expect("tags", "Fixture Tag Alpha", 40, "pg-bk-001", "pg-bk-040")
+expect("tags", "Fixture Tag Beta", 35, "pg-bk-041", "pg-bk-075")
+# Negative: the fixture-internal ids are not filter values (§10.1).
+expect("genres", "ge-fa-1", 0, "", "")
+expect("tags", "ta-fa-1", 0, "", "")
+
+# The filterdata shape agrees with the row values (bare strings, §10.1).
+fd = dataset["filterdata"]["lib-list-1"]
+assert fd["genres"] == ["Fiction", "Nonfiction"], fd["genres"]
+assert fd["tags"] == ["Fixture Tag Alpha", "Fixture Tag Beta"], fd["tags"]
+row = rows[0]
+assert row["genres"] == ["Fiction"] and "genre_ids" not in row
+print("name/filter round-trip: positive + negative expectations verified")
+PY
 
 	kill -TERM "$MOCK_PID"
 	wait "$MOCK_PID" 2>/dev/null || true

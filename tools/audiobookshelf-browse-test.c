@@ -451,32 +451,37 @@ static void search_tests(void) {
 static void groups_tests(void) {
 	audiobookshelf_library_t *list = NULL;
 	int n = 0;
+	bool truncated = false;
+	int oversized = 0;
 
 	// Authors: {id,name} objects, both required, alphabetical output.
 	SPY_FILTERDATA("{\"authors\":[{\"id\":\"b-id\",\"name\":\"B Author\"},"
 				   "{\"id\":\"a-id\",\"name\":\"A Author\"},{\"id\":\"empty\",\"name\":\"\"}]}");
-	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_AUTHOR, &list);
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_AUTHOR, &list, &truncated, &oversized);
 	expect_int("author groups", n, 2);
+	expect_bool("small group not truncated", truncated, false);
+	expect_int("no oversized values", oversized, 0);
 	expect_str("sorted first", list[0].name, "A Author");
 	expect_str("id kept distinct from name", list[0].id, "a-id");
+	expect_bool("entry not oversized", list[0].oversized, false);
 	free(list);
 	list = NULL;
 
 	// Genres as bare strings (§10.1 real-server shape): the string is the
 	// display and the filter value; no object id exists.
 	SPY_FILTERDATA("{\"genres\":[\"Nonfiction\",\"Fiction\"]}");
-	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_GENRE, &list);
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_GENRE, &list, &truncated, &oversized);
 	expect_int("genre groups", n, 2);
 	expect_str("genre sorted", list[0].name, "Fiction");
 	expect_bool("genre has no object id", list[0].id[0] == '\0', true);
 	free(list);
 	list = NULL;
 
-	// Genre/tag entries as {id,name} objects (fixture shape): the NAME is the
-	// filter value and the object id is not carried (§10.1).
+	// Genre/tag entries as {id,name} objects (legacy fixture shape): the NAME
+	// is the filter value and the object id is not carried (§10.1).
 	SPY_FILTERDATA("{\"tags\":[{\"id\":\"ta-9\",\"name\":\"Zed Tag\"},"
 				   "{\"id\":\"ta-1\",\"name\":\"Alpha Tag\"}]}");
-	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_TAG, &list);
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_TAG, &list, &truncated, &oversized);
 	expect_int("tag groups", n, 2);
 	expect_str("tag display", list[0].name, "Alpha Tag");
 	expect_bool("tag object id not carried", list[0].id[0] == '\0', true);
@@ -485,15 +490,77 @@ static void groups_tests(void) {
 
 	// An empty group reports zero and keeps the output pointer NULL.
 	SPY_FILTERDATA("{\"tags\":[]}");
-	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_TAG, &list);
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_TAG, &list, &truncated, &oversized);
 	expect_int("empty group", n, 0);
 	assert(list == NULL);
 
 	// Malformed body is -1 with the M1 error text.
 	SPY_FILTERDATA("{\"authors\":");
-	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_AUTHOR, &list);
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_AUTHOR, &list, &truncated, &oversized);
 	expect_int("malformed filterdata", n, -1);
 	expect_str("filterdata error", audiobookshelf_last_error(), "Invalid library filters.");
+
+	// §10.6 boundary: a 255-byte genre fits the 256-byte query contract and
+	// stays usable; one byte more is oversized -- kept visible, flagged, counted.
+	char name255[ABS_NAME_MAX], name256[ABS_NAME_MAX + 8];
+	memset(name255, 'a', sizeof(name255) - 1); // 255 bytes
+	name255[sizeof(name255) - 1] = '\0';
+	snprintf(name256, sizeof(name256), "%sb", name255); // 256 bytes
+	snprintf(spy.body, sizeof(spy.body), "{\"genres\":[\"%s\",\"%s\"]}", name255, name256);
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_GENRE, &list, &truncated, &oversized);
+	expect_int("boundary group count", n, 2);
+	expect_int("one oversized value", oversized, 1);
+	expect_str("255-byte value usable", list[0].name, name255);
+	expect_bool("255-byte value not oversized", list[0].oversized, false);
+	expect_bool("256-byte value oversized", list[1].oversized, true);
+	free(list);
+	list = NULL;
+	truncated = false; oversized = 0;
+
+	// The same rule protects author/series ids (the encoded filter value):
+	// an id longer than the id contract is flagged, never silently truncated.
+	char long_id[200];
+	memset(long_id, 'i', sizeof(long_id) - 1);
+	long_id[sizeof(long_id) - 1] = '\0';
+	snprintf(spy.body, sizeof(spy.body), "{\"authors\":[{\"id\":\"%s\",\"name\":\"Long Id\"}]}",
+			 long_id);
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_AUTHOR, &list, &truncated, &oversized);
+	expect_int("long id author kept", n, 1);
+	expect_bool("long id flagged oversized", list[0].oversized, true);
+	expect_int("long id counted", oversized, 1);
+	free(list);
+	list = NULL;
+	oversized = 0;
+
+	// §10.6: filter groups at 512 and 513 entries. The projection is hard
+	// bounded to ABS_FILTER_GROUP_LIMIT entries BEFORE allocation; above that
+	// only the bounded first set is retained and TRUNCATED is reported.
+	char *p = spy.body;
+	char *end = spy.body + sizeof(spy.body);
+	p += snprintf(p, (size_t)(end - p), "{\"genres\":[");
+	for (int i = 0; i < ABS_FILTER_GROUP_LIMIT; i++)
+		p += snprintf(p, (size_t)(end - p), "%s\"Genre %04d\"", i ? "," : "", i);
+	snprintf(p, (size_t)(end - p), "]}");
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_GENRE, &list, &truncated, &oversized);
+	expect_int("exactly 512 entries", n, ABS_FILTER_GROUP_LIMIT);
+	expect_bool("exactly 512 not truncated", truncated, false);
+	expect_str("sorted first of 512", list[0].name, "Genre 0000");
+	free(list);
+	list = NULL;
+	truncated = false;
+
+	p = spy.body;
+	p += snprintf(p, (size_t)(end - p), "{\"genres\":[");
+	for (int i = 0; i < ABS_FILTER_GROUP_LIMIT + 1; i++)
+		p += snprintf(p, (size_t)(end - p), "%s\"Genre %04d\"", i ? "," : "", i);
+	snprintf(p, (size_t)(end - p), "]}");
+	n = audiobookshelf_groups_ex("lib-1", ABS_FILTER_GENRE, &list, &truncated, &oversized);
+	expect_int("513 entries cap to 512", n, ABS_FILTER_GROUP_LIMIT);
+	expect_bool("513 entries truncated", truncated, true);
+	expect_str("bounded set sorted first", list[0].name, "Genre 0000");
+	expect_str("bounded set sorted last", list[ABS_FILTER_GROUP_LIMIT - 1].name, "Genre 0511");
+	free(list);
+	list = NULL;
 
 	// The legacy series entry point still resolves through ids.
 	SPY_FILTERDATA("{\"series\":[{\"id\":\"s-2\",\"name\":\"S2\"},"
@@ -667,25 +734,38 @@ static void live_browse(void) {
 	expect_str("series position second", results[1].id, "pg-bk-003");
 	expect_str("series position last", results[37].id, "pg-bk-075");
 
-	// Tag and genre id values round-trip through the current fixture (the
-	// mock matches rows by the fixture's tag/genre ids). The client-side
-	// name-based construction is pinned in the offline and log tests; the
-	// fixture switches to §10.1 name semantics in the §10.3 wave.
-	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_TAG, "ta-fa-1", 0, false));
+	// §10.1 genre/tag filters encode the NAME, not an id. The fixture serves
+	// name-shaped genres/tags (bare strings in filterdata, name strings on
+	// the rows), so a name-based filter round-trips to real rows: the same
+	// row set the id shape used to pin (Alpha covers rows 1..40, Fiction is
+	// every 5th row starting at 1).
+	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_TAG, "Fixture Tag Alpha", 0, false));
 	audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total);
-	expect_int("tag filter total", total, 40);
+	expect_int("tag name filter total", total, 40);
 	expect_str("tag filter first", results[0].id, "pg-bk-001");
 	expect_str("tag filter last", results[39].id, "pg-bk-040");
 
+	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_GENRE, "Fiction", 0, false));
+	audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total);
+	expect_int("genre name filter total", total, 15);
+	expect_str("genre filter first", results[0].id, "pg-bk-001");
+	expect_str("genre filter last", results[14].id, "pg-bk-071");
+
+	// The §10.1 negative: the former fixture-internal ids are NOT filter
+	// values. An id-spelled genre/tag selects no rows at all -- failing
+	// closed, never by name/id coincidence.
+	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_TAG, "ta-fa-1", 0, false));
+	audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total);
+	expect_int("id-spelled tag selects nothing", total, 0);
+
 	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_GENRE, "ge-fa-1", 0, false));
 	audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total);
-	expect_int("genre filter total", total, 15);
-	expect_str("genre filter last", results[14].id, "pg-bk-071");
+	expect_int("id-spelled genre selects nothing", total, 0);
 }
 
 static void live_groups(void) {
 	audiobookshelf_library_t *list = NULL;
-	expect_int("authors", audiobookshelf_groups_ex(list_lib, ABS_FILTER_AUTHOR, &list), 3);
+	expect_int("authors", audiobookshelf_groups_ex(list_lib, ABS_FILTER_AUTHOR, &list, NULL, NULL), 3);
 	expect_str("author one sorted first", list[0].name, "Fixture Author One");
 	expect_str("author id distinct", list[0].id, "author-fa-1");
 	// Alphabetical: "One" < "Three" < "Two".
@@ -693,29 +773,46 @@ static void live_groups(void) {
 	expect_str("author two sorted last", list[2].name, "Fixture Author Two");
 	free(list);
 	list = NULL;
-	expect_int("series", audiobookshelf_groups_ex(list_lib, ABS_FILTER_SERIES, &list), 2);
+	expect_int("series", audiobookshelf_groups_ex(list_lib, ABS_FILTER_SERIES, &list, NULL, NULL), 2);
 	expect_str("series one", list[0].name, "Fixture Series One");
 	free(list);
 	list = NULL;
 	// Genre/tag groups: the returned `name` IS the filter value (§10.1) and
 	// the object id is not carried, whatever wire shape the server picked.
-	expect_int("genres", audiobookshelf_groups_ex(list_lib, ABS_FILTER_GENRE, &list), 2);
+	// The fixture serves the real-server bare-string shape now.
+	expect_int("genres", audiobookshelf_groups_ex(list_lib, ABS_FILTER_GENRE, &list, NULL, NULL), 2);
 	expect_str("genre name", list[0].name, "Fiction");
 	expect_bool("genre id empty", list[0].id[0] == '\0', true);
+	expect_bool("genre not oversized", list[0].oversized, false);
 	free(list);
 	list = NULL;
-	expect_int("tags", audiobookshelf_groups_ex(list_lib, ABS_FILTER_TAG, &list), 2);
+	expect_int("tags", audiobookshelf_groups_ex(list_lib, ABS_FILTER_TAG, &list, NULL, NULL), 2);
 	expect_str("tag name", list[0].name, "Fixture Tag Alpha");
 	expect_bool("tag id empty", list[0].id[0] == '\0', true);
 	free(list);
 	list = NULL;
 
-	// The name-based filter is built with abs_browse_query_init + browse:
-	// server currently answers zero (fixture gap), the construction itself is
-	// pinned offline and in the mock log, so no total is asserted here.
+	// §10.3 wave gate: the name-based genre filter round-trips to rows. The
+	// fixture's groups return NAME values (§10.1), the mock matches rows by
+	// name, so this browse is the positive end-to-end proof; the fixture gap
+	// from the M2 backend report (genres/tags served as ids) is closed.
 	abs_browse_query_t q;
 	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_GENRE, "Fiction", 0, false));
-	audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, NULL);
+	int total = 0;
+	int count = audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total);
+	expect_int("name filter round-trip count", count, 15);
+	expect_int("name filter round-trip total", total, 15);
+	expect_str("name filter round-trip first", results[0].id, "pg-bk-001");
+	expect_str("name filter round-trip last", results[14].id, "pg-bk-071");
+	// And the tag side, from the group value the GUI would be handed:
+	audiobookshelf_library_t *tags = NULL;
+	expect_int("tag groups refetch", audiobookshelf_groups_ex(list_lib, ABS_FILTER_TAG, &tags, NULL, NULL), 2);
+	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_TAG, tags[0].name, 0, false));
+	count = audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total);
+	expect_int("tag name round-trip count", count, 40);
+	expect_str("tag name round-trip first", results[0].id, "pg-bk-001");
+	expect_str("tag name round-trip last", results[39].id, "pg-bk-040");
+	free(tags);
 }
 
 static void live_search(void) {
