@@ -109,6 +109,8 @@ static void cover_accept(const char *path) {
 // The decode poll: coverloader finishes off-thread, this collects. A finished
 // decode without pixels is the "Cover unavailable" state (§9.7's text-only
 // fallback shape); a found one attaches the pixels and un-hides the widget.
+// Both land on the card the decode-time draw built for them, so the
+// transition needs no page rebuild (which would reset the page's scroll).
 static void cover_poll_cb(lv_timer_t *timer) {
 	(void)timer;
 	if (!screen_loaded || !cover_requested) return;
@@ -127,7 +129,13 @@ static void cover_poll_cb(lv_timer_t *timer) {
 	} else {
 		cover_unavailable = true;
 	}
-	if (cover_busy) lv_obj_set_hidden(cover_busy, true);
+	// The spinner dies rather than hides: it is an animated child, and one
+	// spinning inside a finished card keeps LVGL refreshing for nothing until
+	// the next rebuild.
+	if (cover_busy) {
+		lv_obj_delete(cover_busy);
+		cover_busy = NULL;
+	}
 	if (found && cover_widget) {
 		lv_image_set_src(cover_widget, &cover_pixels.dsc);
 		lv_obj_set_hidden(cover_widget, false);
@@ -402,6 +410,28 @@ static void draw_chapters(void) {
 // the spinner while the decode runs, or the "Cover unavailable" row. No block
 // at all when the §9.2 detail is text-only: the cover was never fetched,
 // failed to fetch, or the item has none on the server.
+//
+// While the decode runs, the card carries all three states -- the spinner
+// visible, the picture and the note built hidden. The poll's collect can
+// therefore land in place (fill the picture, or unhide the note) instead of
+// hiding the spinner next to widgets for neither of the finished states,
+// which left the card blank until whatever drew next.
+
+// The card's "Cover unavailable" line, shared by the finished state drawn
+// after the collect already landed and the hidden state the decode-time card
+// carries for the collect to unhide.
+static lv_obj_t *cover_note_create(lv_obj_t *box) {
+	lv_obj_t *label = lv_label_create(box);
+	lv_label_set_text(label, tr("audiobookshelf_detail_cover_unavailable"));
+	lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(label, lv_pct(90));
+	lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_add_style(label, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(label, &font_ui_20, 0);
+	lv_obj_center(label);
+	return label;
+}
+
 static void draw_cover_block(void) {
 	cover_widget = cover_busy = cover_note = NULL;
 	if (!cover_file[0]) return;
@@ -421,15 +451,17 @@ static void draw_cover_block(void) {
 	if (cover_requested && !cover_pixels.pixels) {
 		cover_busy = spinner_create(box, &icon_loader_big);
 		lv_obj_center(cover_busy);
+		// The two finished states ride along hidden, for the collect to land
+		// on: the picture is filled and shown, or the note unhidden, on the
+		// 100 ms tick the decode reports -- no page rebuild in between (that
+		// would yank the just-opened page back to its top).
+		cover_widget = lv_image_create(box);
+		lv_obj_center(cover_widget);
+		lv_obj_set_hidden(cover_widget, true);
+		cover_note = cover_note_create(box);
+		lv_obj_set_hidden(cover_note, true);
 	} else if (cover_unavailable) {
-		cover_note = lv_label_create(box);
-		lv_label_set_text(cover_note, tr("audiobookshelf_detail_cover_unavailable"));
-		lv_label_set_long_mode(cover_note, LV_LABEL_LONG_WRAP);
-		lv_obj_set_width(cover_note, lv_pct(90));
-		lv_obj_set_style_text_align(cover_note, LV_TEXT_ALIGN_CENTER, 0);
-		lv_obj_add_style(cover_note, &theme_style_text_dim, 0);
-		lv_obj_set_style_text_font(cover_note, &font_ui_20, 0);
-		lv_obj_center(cover_note);
+		cover_note = cover_note_create(box);
 	}
 
 	if (cover_pixels.pixels) {
