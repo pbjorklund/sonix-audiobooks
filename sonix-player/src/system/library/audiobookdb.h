@@ -54,6 +54,17 @@ bool audiobookdb_scan_running(void);
 int audiobookdb_scan_found(void);
 void audiobookdb_scan_stop(void);
 
+// Called once, on the scan thread, for every scan that ran through to the end
+// (a cancelled one never rebuilt a settled index). `generation` is the
+// audiobookdb revision the scan's commit produced. The listener runs instead
+// of a reader API: scanning stays where it is (the reader pages still poll
+// audiobookdb_scan_running()), and the one system-level consumer -- §8.3's
+// scan-completion import coordinator -- registers itself. One listener at a
+// time; NULL removes. Nothing calls it before the index is settled (§8.5
+// line 592: added only because no existing scan callback could supply this).
+typedef void (*audiobookdb_scan_done_cb)(void *user, unsigned generation);
+void audiobookdb_set_scan_done_listener(audiobookdb_scan_done_cb listener, void *user);
+
 // --- Reading ---
 typedef enum {
 	AUDIOBOOK_LIST_ALL,		 // every book

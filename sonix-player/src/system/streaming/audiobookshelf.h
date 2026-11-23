@@ -239,6 +239,15 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 // ---------------------------------------------------------------------------
 const abs_download_ops_t *audiobookshelf_queue_media_ops(void);
 
+// §8.3 line 556: registers the audiobookscan-completion listener that routes
+// every completed Audiobooks scan into the queue's per-row import coordinator
+// (abs_download_import_pending() over the index_pending DONE rows). Idempotent
+// and process-lifetime, so one call at the queue's init boundary (§8.5, the
+// ABS/storage lifecycle) covers boot and every card-attach re-init; the
+// coordinator itself refuses while the queue is disarmed. No scan is started
+// here and no page imports directly.
+void audiobookshelf_queue_import_install(void);
+
 // §8.2 step 1 / §8.1: the job's own credentials. Copies `profile_id`'s latest
 // token under the profile lock (an inactive profile owns its own token) — or,
 // only when the row carries no profile id, the active profile's — and rejects

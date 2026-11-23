@@ -78,6 +78,17 @@ static volatile bool scan_cancel;
 static volatile int scan_found;
 static char scan_root[512];
 
+// §8.5 line 592, the scan-generation notification. No existing scan-completion
+// callback exists (every reader polls audiobookdb_scan_running() and no
+// listener survives a scan's end), so the one consumer that must act at a
+// scan's end -- the system queue's import coordinator -- registers here. The
+// listener receives the generation the scan's commit produced and is called
+// once per scan that ran through to the end: a cancelled one never rebuilt a
+// settled index, so nothing of the recovery table's "resume only scan/import"
+// for DONE rows should read it yet.
+static audiobookdb_scan_done_cb scan_done_listener;
+static void *scan_done_user;
+
 // For statements that are expected to fail once the schema is already right:
 // the ALTER TABLEs below run on every open and say "duplicate column name" on
 // every open after the first.
@@ -2016,7 +2027,23 @@ static void *scan_thread_func(void *arg) {
 	bump_generation();
 	pthread_mutex_unlock(&db_lock);
 
-	printf("audiobooks: scan finished, %d books%s\n", scan_found, scan_cancel ? " (stopped early)" : "");
+	bool complete = !scan_cancel;
+	printf("audiobooks: scan finished, %d books%s\n", scan_found, complete ? "" : " (stopped early)");
+	if (complete) {
+		// Still inside the scan's ownership: scan_running stays true here, so
+		// a listener that acts on the index (the queue's import coordinator,
+		// §8.3) cannot race the next scan's wipe, and the listener reads the
+		// settled index its own generation names. The pointer is read under
+		// db_lock so a listener registered mid-notification is seen whole.
+		pthread_mutex_lock(&db_lock);
+		audiobookdb_scan_done_cb notify = scan_done_listener;
+		void *notify_user = scan_done_user;
+		unsigned notified = generation;
+		pthread_mutex_unlock(&db_lock);
+		if (notify) {
+			notify(notify_user, notified);
+		}
+	}
 	scan_running = false;
 	return NULL;
 }
@@ -2042,6 +2069,15 @@ bool audiobookdb_scan_start(const char *root) {
 }
 
 bool audiobookdb_scan_running(void) { return scan_running; }
+
+void audiobookdb_set_scan_done_listener(audiobookdb_scan_done_cb listener, void *user) {
+	pthread_mutex_lock(&db_lock);
+	// Read again under the same lock by the scan thread at its notification
+	// point, so a listener that arrives mid-scan is only ever seen whole.
+	scan_done_listener = listener;
+	scan_done_user = user;
+	pthread_mutex_unlock(&db_lock);
+}
 
 int audiobookdb_scan_found(void) { return scan_found; }
 

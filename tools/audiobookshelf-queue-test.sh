@@ -37,4 +37,21 @@ busy_window "$POWER" "$WIFI_LINE" "$((WIFI_LINE + 20))" | grep -q 'abs_download_
 busy_window "$POWER" "$BUSY_LINE" "$((BUSY_LINE + 20))" | grep -q 'abs_download_busy()' ||
 	fail_assert "power.c player_is_busy() must consult abs_download_busy() (§8.3/§8.5)"
 
+# §8.2 step 6 / §8.5 line 586 reconcile gate: the progress worker's
+# remote-import path (the sync path that writes LOCAL progress) must check the
+# FINALIZING sync barrier before writing. audiobookshelf.c compiles no
+# standalone unit beside the browse tests (reconcile_progress is its static
+# engine, driven live by the host smoke), so the call site is asserted
+# structurally like the busy gate above — the runtime truth of the barrier bit
+# itself is proven in the queue/transfer suites; the skip is proven live there.
+SYNC="$ROOT/sonix-player/src/system/streaming/audiobookshelf.c"
+SYNC_RECONCILE=$(grep -n 'static int reconcile_progress' "$SYNC" | cut -d: -f1)
+SYNC_IMPORT=$(grep -n 'if (!audiobook_sync_import(checkpoint' "$SYNC" | cut -d: -f1)
+SYNC_GATE=$(grep -n 'if (abs_download_sync_blocked(file)) return 0' "$SYNC" | cut -d: -f1)
+[ -n "$SYNC_RECONCILE" ] || fail_assert "audiobookshelf.c reconcile_progress() moved: gate assertion needs re-anchoring"
+[ -n "$SYNC_IMPORT" ] || fail_assert "audiobookshelf.c remote-progress import moved: gate assertion needs re-anchoring"
+[ -n "$SYNC_GATE" ] || fail_assert "audiobookshelf.c reconcile_progress() lost its abs_download_sync_blocked() gate (§8.2 step 6)"
+[ "$SYNC_GATE" -lt "$SYNC_IMPORT" ] ||
+	fail_assert "the reconcile gate must run before the local-progress write (§8.2 step 6)"
+
 printf 'audiobookshelf-queue-test.sh: power busy-gate consult asserted (wifi_in_use, player_is_busy)\n'

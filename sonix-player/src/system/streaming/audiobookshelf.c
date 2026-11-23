@@ -567,6 +567,17 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 				strcmp(owner, checkpoint->book) || access(file, R_OK)) return 0;
 			long long stamp = remote.updated_ms >= 1577836800000LL &&
 				remote.updated_ms <= remote.server_now_ms + 300000 ? remote.updated_ms : 0;
+			// §8.2 step 6 / §8.5 line 586: a destination inside its FINALIZING
+			// sync barrier must not have progress written over it. The queue
+			// is between exposing the new manifest and releasing the barrier
+			// at its DONE+ack_reset_done=1 commit, and importing remote
+			// progress for that book here would race the acknowledgement
+			// reset. Retain the checkpoint: this pass skips the destination,
+			// the row keeps its retry window, and the import happens after
+			// the barrier releases (§8.2 line 541: the reset is never re-run
+			// behind it). The barrier surface also covers DONE-but-unacked
+			// recovery rows, so a resumed finalize is covered the same way.
+			if (abs_download_sync_blocked(file)) return 0;
 			if (!audiobook_sync_import(checkpoint, server, file, seconds, remote.finished, stamp)) return 0;
 			printf("audiobookshelf: imported newer server progress %.1f s\n", remote.seconds);
 			return 2;
@@ -705,7 +716,17 @@ static void *progress_worker(void *unused) {
 static void progress_worker_start(void) {
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
+	// The device budget is 96 KiB and the sync path fits it (the host smoke
+	// runs the same GET/PATCH path inside it). The sanitizer harnesses inflate
+	// every frame with redzones and intercept copies, so a host test that runs
+	// this worker under ASan/UBSan overflows the 96 KiB thread on its first
+	// real GET -- the same accommodation the podcast downloader's 256 KiB
+	// network worker carries. Device builds are untouched.
+#ifdef HOST_BUILD
+	pthread_attr_setstacksize(&attr, 256 * 1024);
+#else
 	pthread_attr_setstacksize(&attr, 96 * 1024);
+#endif
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 	pthread_t thread;
 	progress_worker_ready = pthread_create(&thread, &attr, progress_worker, NULL) == 0;
@@ -3466,6 +3487,102 @@ static bool abs_queue_ack_reset(void *user, const abs_download_job_t *job, char 
 	return true;
 }
 
+// §8.3 line 556: the scan-completion coordinator's per-row import. Every
+// input comes from the DONE row itself — its persisted resume_file (a
+// local_track_name() basename from the finalize wave), the part-relative
+// resume_seconds it was saved with, its normalized server and its remote
+// finished/updated stamp — and the write is the existing compare-and-swap
+// `audiobookdb_abs_import()`, reached exactly the way the legacy page's
+// resume import reached it: resolve the book for the destination-resolved
+// file, save the position locally, mark finished, snapshot the fresh
+// checkpoint, import against it (§8.5 line 592: existing APIs as-is, revision
+// checks untouched). No singleton state, no scan starts, no page.
+//
+// Failure semantics (§8.3 line 556 / §8.2 line 541): a false return keeps the
+// row importable — the audio stays linked, ordinary background sync stays
+// authoritative, DONE is not downgraded and ack_reset is never re-run.
+// "Not indexed yet" is the ordinary shape here: the coordinator runs at scan
+// completions, and a scan that finished before the download did simply
+// retries at the next one (the GUI wave owns starting a follow-up scan after
+// per-job completion).
+static bool abs_queue_import_resume(void *user, const abs_download_job_t *job,
+									char *error, size_t error_size) {
+	(void)user;
+	if (!job) {
+		snprintf(error, error_size, "%s", "The queue handed the import an incomplete request.");
+		return false;
+	}
+	error[0] = '\0';
+	if (strcmp(job->kind, ABS_DL_KIND_BOOK) != 0) {
+		snprintf(error, error_size, "%s", "Episode resume imports are wired with the podcast wave.");
+		return false;
+	}
+	if (!job->destination[0] || !job->resume_file[0] || job->resume_seconds < 0) {
+		snprintf(error, error_size, "%s", "The downloaded book carries no resume position to import.");
+		return false;
+	}
+	char destination[SONIX_LINKED_PATH_MAX];
+	if (!abs_download_card_path(job->destination, destination, sizeof(destination))) {
+		snprintf(error, error_size, "%s", "The SD card for downloads is not available.");
+		return false;
+	}
+	char file[SONIX_LINKED_SIDECAR_PATH_MAX];
+	if ((size_t)snprintf(file, sizeof(file), "%.1270s/%.255s", destination, job->resume_file) >=
+		sizeof(file)) {
+		snprintf(error, error_size, "%s", "The downloaded book's path is too long to import.");
+		return false;
+	}
+	// The durable-row ceiling (§11.4): book/file/server all ride the 512-byte
+	// checkpoint row, so a book path past it cannot be imported faithfully —
+	// the same ceiling the legacy page's import ran under.
+	char book[SONIX_LINKED_DB_PATH_MAX];
+	if (!audiobookdb_book_for_file(file, book, sizeof(book))) {
+		snprintf(error, error_size, "%s", "The downloaded book is not indexed yet.");
+		return false;
+	}
+	// The legacy sequence: the local position first (so the book resumes even
+	// where the server stamp is unusable), then the finished marker, then the
+	// compare-and-swap acknowledgement row from a freshly read checkpoint.
+	audiobookdb_save_position(book, file, job->resume_seconds);
+	if (job->remote_finished) {
+		audiobookdb_mark_finished(book);
+	}
+	if (job->remote_updated_ms <= 0) {
+		// No server stamp: there is nothing to acknowledge and no CAS base,
+		// which is exactly what the legacy resume import did. The position is
+		// saved; ordinary background sync owns the rest.
+		return true;
+	}
+	audiobookdb_abs_checkpoint_t checkpoint;
+	if (!audiobookdb_abs_get(book, &checkpoint) ||
+		!audiobookdb_abs_import(&checkpoint, job->server, file, job->resume_seconds,
+								job->remote_finished, job->remote_updated_ms)) {
+		// Local position is already saved, so playback is right; the
+		// acknowledgement row just was not written. The row retries at the
+		// next completed scan, and until then background sync holds the
+		// authoritative copy of where the book stands (§8.3 line 556).
+		snprintf(error, error_size, "%s", "The book's progress could not be imported from the download.");
+		return false;
+	}
+	printf("audiobookshelf: imported download resume %.1f s into %s\n", job->resume_seconds, file);
+	return true;
+}
+
+// §8.3 line 556 / §8.5 line 592: the audiobook scan thread's notification
+// entry. Every completed Audiobooks scan (the notification exists only
+// because no scan callback did) hands the queue's per-row coordinator the
+// freshly settled index; it runs on the scan thread, single-flight inside the
+// queue module. No page involved; nothing here starts a scan.
+static void abs_queue_scan_done_bridge(void *user, unsigned generation) {
+	(void)user;
+	(void)generation;
+	abs_download_import_pending(NULL, 0);
+}
+
+void audiobookshelf_queue_import_install(void) {
+	audiobookdb_set_scan_done_listener(abs_queue_scan_done_bridge, NULL);
+}
+
 // Populated at call time, not as a file-scope initializer: a const table of
 // function pointers would root the whole adapter in every binary that links
 // this module (gc-sections cannot prune relocations out of kept data), and
@@ -3479,6 +3596,7 @@ const abs_download_ops_t *audiobookshelf_queue_media_ops(void) {
 	queue_media_ops.file_download = abs_queue_file_transfer;
 	queue_media_ops.finalize = abs_queue_finalize;
 	queue_media_ops.ack_reset = abs_queue_ack_reset;
+	queue_media_ops.import_resume = abs_queue_import_resume;
 	queue_media_ops.auth_acquire = abs_queue_auth_acquire;
 	queue_media_ops.auth_release = abs_queue_auth_release;
 	return &queue_media_ops;

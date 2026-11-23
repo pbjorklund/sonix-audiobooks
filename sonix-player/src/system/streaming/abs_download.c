@@ -181,6 +181,7 @@ static int active_stop;                 // what a PAUSING row resolves to
 
 static volatile int op_cancel;          // published into op contexts; stored atomically
 static bool op_running;                 // an ops callback is executing (mutex released)
+static bool import_running;             // the scan-completion import pass (§8.3) is executing
 
 // Mutex-external readers (the media ops) acquire-load this flag, so its
 // writers store release-evenly; queue-locked readers stay as they were.
@@ -1677,6 +1678,113 @@ void abs_download_network_changed(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Scan-completion import coordinator (§8.3 line 556)
+//
+// The one consumer of the DONE row's own values. Where the 0.5.0 page kept a
+// single pending import (the `downloaded_*` handoff and its
+// resume_import_cb() timer), the queue rows already carry per-row state, so
+// the coordinator is a plain iteration: every DONE+index_pending row runs the
+// injected compare-and-swap import with its own values, and only a successful
+// one clears its index_pending. No shared "current download" cell exists to
+// overwrite, several pending rows import independently, and a failed import
+// changes nothing about the row beyond leaving the flag set — DONE is never
+// downgraded, the audio stays linked, ack_reset (a FINALIZING-window step,
+// §8.2 step 8) is never re-run, and ordinary background sync stays
+// authoritative until the next completed scan retries.
+//
+// Concurrency: runs on the caller's thread (production: the audiobook scan
+// thread via the §8.5 line-592 notification). Each op window releases the
+// queue lock like every media surface. Single-flight: a second concurrent
+// pass finds one already running and reports nothing done. The caller may
+// quiesce mid-pass; then the remaining rows are skipped and a successful
+// import that can no longer be committed stays index_pending=1 on the closed
+// card — the next init's recovery preserves it and the next completed scan
+// imports it.
+// ---------------------------------------------------------------------------
+
+int abs_download_import_pending(char *error, size_t error_size) {
+	if (error_size) {
+		error[0] = '\0';
+	}
+	pthread_mutex_lock(&lock);
+	if (import_running) {
+		// A pass is already running on another thread: report nothing done.
+		pthread_mutex_unlock(&lock);
+		return 0;
+	}
+	if (storage_stale_locked() || !armed) {
+		snprintf(error, error_size, "The download queue is not available");
+		pthread_mutex_unlock(&lock);
+		return -1;
+	}
+	if (!cfg.ops || !cfg.ops->import_resume) {
+		pthread_mutex_unlock(&lock);
+		return 0;
+	}
+	// The candidates are copied once, under the lock: rows can disappear
+	// (Remove/Clear finished) or the card can be pulled while the pass runs,
+	// and each row is re-consulted durably right before its flag is cleared.
+	abs_download_job_t pending[ABS_DL_JOB_CAP];
+	int count = 0;
+	for (int i = 0; i < jobs_count && count < ABS_DL_JOB_CAP; i++) {
+		if (jobs[i].state == ABS_DL_DONE && jobs[i].index_pending) {
+			pending[count++] = jobs[i];
+		}
+	}
+	pthread_mutex_unlock(&lock);
+	int imported = 0;
+	char first_error[ABS_DL_ERROR_MAX] = {0};
+	for (int i = 0; i < count; i++) {
+		pthread_mutex_lock(&lock);
+		if (!armed || stale || stop_requested) {
+			pthread_mutex_unlock(&lock);
+			break; // the card went away or storage is closing: drop the rest
+		}
+		import_running = true;
+		pthread_mutex_unlock(&lock);
+
+		bool ok = cfg.ops->import_resume(cfg.ops->user, &pending[i], first_error,
+										 sizeof(first_error));
+
+		// A worker op window may be open while this runs: the import touches
+		// only DONE rows the worker never owns, and audiobookdb serializes
+		// its own access behind its db lock.
+
+		pthread_mutex_lock(&lock);
+		import_running = false;
+		if (ok && armed && !stale && db) {
+			// Clear index_pending only after a successful import, durably,
+			// against the row's live state (§8.3): it may have been removed
+			// under us (Remove/Clear finished), or it may already be cleared.
+			abs_download_job_t *live = job_by_id_locked(pending[i].id);
+			if (live && live->state == ABS_DL_DONE && live->index_pending) {
+				db_exec("BEGIN");
+				abs_download_job_t cleared = *live;
+				cleared.index_pending = 0;
+				if (persist_job_locked(&cleared) && db_exec("COMMIT")) {
+					reload_locked();
+					imported++;
+				} else {
+					db_exec("ROLLBACK"); // the durable flag stays 1; retry next scan
+				}
+			}
+		}
+		// A quiesce that raced the pass (armed=false here or on the next row)
+		// leaves the committed flag of the closed card untouched — recovery
+		// preserves the row and the next completed scan after re-init imports.
+		pthread_mutex_unlock(&lock);
+		if (!ok && !first_error[0]) {
+			// Defensive: a misbehaving op is treated like any other failure.
+			snprintf(first_error, sizeof(first_error), "The resume import failed");
+		}
+	}
+	if (first_error[0] && error_size > strlen(first_error)) {
+		snprintf(error, error_size, "%s", first_error);
+	}
+	return imported;
+}
+
+// ---------------------------------------------------------------------------
 // Worker engine (§8.1: one persistent worker, one active job, one active file)
 // ---------------------------------------------------------------------------
 
@@ -2445,6 +2553,7 @@ bool abs_download_init(const abs_download_config_t *config) {
 	stop_requested = false;
 	storage_paused = false;
 	wait_blocked = false;
+	import_running = false;
 	op_cancel_store(0);
 	op_running = false;
 	// §8.5 line 1028: the wake slot is module-lifetime state; re-init after a

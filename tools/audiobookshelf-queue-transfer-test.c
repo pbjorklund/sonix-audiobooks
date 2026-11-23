@@ -62,6 +62,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define CHECK(cond, ...)                                                    \
@@ -459,6 +460,31 @@ static char audiobook_db[1000];
 static void audiobook_db_open(void) {
 	snprintf(audiobook_db, sizeof(audiobook_db), "%.990s/audiobooks.db", work);
 	CHECK(audiobookdb_open(audiobook_db), "audiobookdb_open failed\n");
+	// The import/gate phases poll the durable rows from their own connections
+	// while the module (and the progress worker) write. Rollback-journal mode
+	// makes every such read a shared lock a writer's COMMIT can collide with
+	// (SQLITE_BUSY both ways); WAL takes that interleaving out of the harness.
+	// File-local, test-sandbox-only: the device index keeps its default mode.
+	sqlite3 *raw = NULL;
+	if (sqlite3_open(audiobook_db, &raw) == SQLITE_OK) {
+		sqlite3_exec(raw, "PRAGMA journal_mode=WAL", NULL, NULL, NULL);
+		sqlite3_close(raw);
+	}
+}
+
+// One raw read with the two retry steps the interleaving above can still
+// produce (a checkpoint being cut): callers see the settled state, not a
+// transient BUSY.
+static bool audiobook_sqlite_step_retry(sqlite3_stmt *stmt, bool *row) {
+	for (int try = 0; try < 3; try++) {
+		int rc = sqlite3_step(stmt);
+		if (rc == SQLITE_ROW || rc == SQLITE_DONE) {
+			*row = rc == SQLITE_ROW;
+			return true;
+		}
+		usleep(5000);
+	}
+	return false;
 }
 
 static void checkpoint_plant(const char *abs_book) {
@@ -484,12 +510,96 @@ static bool checkpoint_present(const char *abs_book) {
 		if (sqlite3_prepare_v2(raw, "SELECT 1 FROM AUDIOBOOK_ABS_SYNC WHERE book=?1", -1, &stmt,
 							   NULL) == SQLITE_OK) {
 			sqlite3_bind_text(stmt, 1, abs_book, -1, SQLITE_TRANSIENT);
-			present = sqlite3_step(stmt) == SQLITE_ROW;
+			bool row = false;
+			if (audiobook_sqlite_step_retry(stmt, &row)) {
+				present = row;
+			}
 			sqlite3_finalize(stmt);
 		}
 		sqlite3_close(raw);
 	}
 	return present;
+}
+
+// §8.3 import assertions, read straight back from the durable rows: what the
+// coordinator wrote for a book (AUDIOBOOK_TABLE resume) and what its
+// compare-and-swap acknowledgement row carries (AUDIOBOOK_ABS_SYNC).
+static bool audiobook_resume_row(const char *abs_book, char *file_out, size_t file_size,
+								 double *seconds_out, bool *finished_out) {
+	sqlite3 *raw = NULL;
+	bool found = false;
+	if (sqlite3_open(audiobook_db, &raw) == SQLITE_OK) {
+		sqlite3_stmt *stmt = NULL;
+		if (sqlite3_prepare_v2(raw, "SELECT resume_file,resume_pos,resume_completed FROM"
+								   " AUDIOBOOK_TABLE WHERE path=?1",
+							   -1, &stmt, NULL) == SQLITE_OK) {
+			sqlite3_bind_text(stmt, 1, abs_book, -1, SQLITE_TRANSIENT);
+			bool row = false;
+			if (audiobook_sqlite_step_retry(stmt, &row) && row) {
+				snprintf(file_out, file_size, "%s", (const char *)sqlite3_column_text(stmt, 0));
+				*seconds_out = sqlite3_column_double(stmt, 1);
+				*finished_out = sqlite3_column_int(stmt, 2) != 0;
+				found = true;
+			}
+			sqlite3_finalize(stmt);
+		}
+		sqlite3_close(raw);
+	}
+	return found;
+}
+
+static bool audiobook_sync_row(const char *abs_book, char *server_out, size_t server_size,
+							   char *file_out, size_t file_size, double *seconds_out,
+							   bool *finished_out, long long *server_updated_ms_out,
+							   int *linked_out) {
+	sqlite3 *raw = NULL;
+	bool found = false;
+	if (sqlite3_open(audiobook_db, &raw) == SQLITE_OK) {
+		sqlite3_stmt *stmt = NULL;
+		if (sqlite3_prepare_v2(raw, "SELECT server,file,seconds,finished,server_updated_ms,linked"
+								   " FROM AUDIOBOOK_ABS_SYNC WHERE book=?1",
+							   -1, &stmt, NULL) == SQLITE_OK) {
+			sqlite3_bind_text(stmt, 1, abs_book, -1, SQLITE_TRANSIENT);
+			bool row = false;
+			if (audiobook_sqlite_step_retry(stmt, &row) && row) {
+				snprintf(server_out, server_size, "%s", (const char *)sqlite3_column_text(stmt, 0));
+				snprintf(file_out, file_size, "%s",
+						 sqlite3_column_text(stmt, 1) ? (const char *)sqlite3_column_text(stmt, 1) : "");
+				*seconds_out = sqlite3_column_double(stmt, 2);
+				*finished_out = sqlite3_column_int(stmt, 3) != 0;
+				*server_updated_ms_out = sqlite3_column_int64(stmt, 4);
+				*linked_out = sqlite3_column_int(stmt, 5) != 0;
+				found = true;
+			}
+			sqlite3_finalize(stmt);
+		}
+		sqlite3_close(raw);
+	}
+	return found;
+}
+
+// Bounded wait for the queue mirror to clear index_pending (the scan thread
+// runs the coordinator's import pass inside its notification, so the caller
+// cannot observe the clear synchronously).
+static void wait_index_pending_cleared(const char *item, long long *job_out) {
+	for (int i = 0; i < 4000; i++) {
+		abs_download_snapshot_t snap;
+		CHECK(abs_download_snapshot(&snap), "snapshot during import wait\n");
+		bool any_pending = false;
+		for (int k = 0; k < snap.job_count; k++) {
+			if (strcmp(snap.jobs[k].item_id, item) == 0) {
+				*job_out = snap.jobs[k].id;
+				if (snap.jobs[k].state == ABS_DL_DONE && snap.jobs[k].index_pending) {
+					any_pending = true;
+				}
+			}
+		}
+		if (!any_pending) {
+			return;
+		}
+		usleep(1000);
+	}
+	CHECK(0, "index_pending never cleared for %s\n", item);
 }
 
 // A crash child re-enters the card in a fresh process. The finalize-wave
@@ -1113,6 +1223,104 @@ static void offline_phase_done(void) {
 	printf("ok\n");
 }
 
+// Phase A2 (§8.3 line 556): the scan-completion import coordinator over the
+// REAL adapter. Before the audiobook index exists the import must refuse and
+// leave the DONE row exactly as it is; the real scan (the §8.5 line-592
+// notification wired through audiobookshelf_queue_import_install()) then
+// imports through the compare-and-swap, and the durable rows must carry
+// EXACTLY the row's stored values. The acknowledgement reset is never re-run
+// behind any of it: the imported sync row survives the coordinator pass.
+static void offline_phase_import(void) {
+	printf("transfer test: offline import coordinator (§8.3)... ");
+	phase_card("fin-import");
+	audiobook_db_open();
+	offline_create_media();
+	char want_dest[600], dest_abs[1400], final1[1400], final2[1400];
+	offline_paths(want_dest, sizeof(want_dest), dest_abs, sizeof(dest_abs), final1, sizeof(final1),
+				  final2, sizeof(final2));
+	char abs_book[1400];
+	snprintf(abs_book, sizeof(abs_book), "%s", dest_abs);
+	checkpoint_plant(abs_book);
+
+	// The scan-completion listener is registered exactly like main.c wires it.
+	audiobookshelf_queue_import_install();
+
+	queue_init();
+	long long id = offline_enqueue();
+	CHECK(pump_until_terminal(id) == ABS_DL_DONE, "the job must finish DONE\n");
+	abs_download_job_t done = snapshot_job(id);
+	CHECK(done.ack_reset_done == 1 && done.index_pending == 1, "DONE flags\n");
+	CHECK(!checkpoint_present(abs_book), "the real reset must have died with the job\n");
+	long long requests_before = stub_requests; // exactly the one identity fetch
+
+	// -- Before any index exists: the row's own import refuses --------------
+	char error[256] = {0};
+	int imported = abs_download_import_pending(error, sizeof(error));
+	CHECK(imported == 0, "nothing can import without the index, got %d\n", imported);
+	CHECK(strstr(error, "not indexed") != NULL, "refusal text: %s\n", error);
+	abs_download_job_t kept = snapshot_job(id);
+	CHECK(kept.state == ABS_DL_DONE && kept.index_pending == 1,
+		  "a refused import must keep the row importable (state %s/%d)\n",
+		  abs_download_state_name(kept.state), kept.index_pending);
+	CHECK(kept.error[0] == '\0', "a soft import failure must not smear an error onto DONE: %s\n",
+		  kept.error);
+	CHECK(stub_requests == requests_before, "the coordinator must not touch the server\n");
+	CHECK(!checkpoint_present(abs_book), "the refusal must not create a sync row\n");
+
+	// -- The real scan completes and the listener imports the row -----------
+	printf("(scan)... ");
+	char scan_root[600];
+	snprintf(scan_root, sizeof(scan_root), "%.580s/Audiobooks", card);
+	CHECK(audiobookdb_scan_start(scan_root), "audiobook scan refused\n");
+	for (int i = 0; i < 4000 && audiobookdb_scan_running(); i++) {
+		usleep(5000);
+	}
+	CHECK(!audiobookdb_scan_running(), "the scan never finished\n");
+	wait_index_pending_cleared(STUB_ID, &id);
+	CHECK(job_state(id) == ABS_DL_DONE, "DONE must survive the import\n");
+
+	// -- The durable rows carry exactly the row's stored values -------------
+	// The stub identity carried currentTime 13.0 / lastUpdate 1700000000000,
+	// which audiobookshelf_resume_target() mapped to part two at 3.0 s
+	// (§8.2 step 5, asserted on the row at DONE time in phase A).
+	double seconds = -1;
+	bool finished = true;
+	char resume_file[600];
+	CHECK(audiobook_resume_row(abs_book, resume_file, sizeof(resume_file), &seconds, &finished),
+		  "the imported book must be in the index\n");
+	CHECK(strcmp(resume_file, final2) == 0, "imported resume file %s, wanted %s\n", resume_file,
+		  final2);
+	CHECK(fabs(seconds - 3.0) < 1e-9, "imported resume seconds %f, wanted 3.0\n", seconds);
+	CHECK(!finished, "an unfinished download must not mark the book finished\n");
+	char server_row[ABS_SERVER_MAX], file_row[SONIX_LINKED_DB_PATH_MAX];
+	int linked = 0;
+	long long stamp = 0;
+	bool row_finished = true;
+	double row_seconds = -1;
+	CHECK(audiobook_sync_row(abs_book, server_row, sizeof(server_row), file_row, sizeof(file_row),
+							 &row_seconds, &row_finished, &stamp, &linked),
+		  "the compare-and-swap sync row must exist\n");
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(STUB_SERVER, normalized, sizeof(normalized));
+	CHECK(strcmp(server_row, normalized) == 0, "sync server %s\n", server_row);
+	CHECK(strcmp(file_row, final2) == 0, "sync file %s\n", file_row);
+	CHECK(fabs(row_seconds - 3.0) < 1e-9, "sync seconds %f\n", row_seconds);
+	CHECK(!row_finished && linked == 1, "sync flags\n");
+	CHECK(stamp == 1700000000000LL, "sync stamp %lld, wanted the row's remote_updated_ms\n", stamp);
+	// Idempotence in the real chain: the imported acknowledgement row survives
+	// the pass that created it — the coordinator never re-runs a reset
+	// (§8.2 line 541), which would have deleted this very row.
+	CHECK(checkpoint_present(abs_book), "the imported sync row must survive its own pass\n");
+	CHECK(stub_requests == requests_before, "the coordinator pass must not touch the server\n");
+
+	// -- A second pass has nothing to do ------------------------------------
+	CHECK(abs_download_import_pending(error, sizeof(error)) == 0, "empty pass after import\n");
+	// The audiobookdb handle stays open for the later crash phases (they plant
+	// and reset through the same module state); the offline main closes it.
+	queue_stop();
+	printf("ok\n");
+}
+
 // Phase B: manifest close/rename failure -> the job fails at the finalize
 // stage, the barrier releases into the recoverable failed state, and nothing
 // pretends the destination was committed.
@@ -1348,6 +1556,7 @@ int main(int argc, char **argv) {
 	// The finalize wave (§8.2 steps 5–8): one phase per fresh card so every
 	// crash child arms a queue nobody has armed in-process before the fork.
 	offline_phase_done();
+	offline_phase_import();
 	offline_phase_manifest_fail();
 	offline_phase_crash_valid();
 	offline_phase_crash_incomplete();
@@ -2222,6 +2431,175 @@ static void live_run(void) {
 		seen_404 = snapshot_job(missing404);
 		CHECK(seen_404.destination[0] == '\0', "a failed fetch must not claim a destination\n");
 	}
+
+	// ------------------------------------------------------------------
+	// Phase 6 — §8.3 scan-completion import over the REAL audiobook index,
+	// and the §8.2 step 6 reconcile gate against the real progress worker.
+	//
+	// a. Before any scan exists, the per-row import refuses on both DONE rows
+	//    (job2 and job3) and leaves them DONE + index_pending.
+	// b. The real Audiobooks scan completes; the §8.5 line-592 notification
+	//    wired through audiobookshelf_queue_import_install() runs the
+	//    coordinator on the scan thread and both rows clear, having written
+	//    exactly their stored resume values into audiobookdb.
+	// c. While a second re-download sits inside its FINALIZING sync barrier,
+	//    the progress worker's newer-remote import must SKIP the destination;
+	//    the pass runs (the request log proves it) and writes nothing.
+	// d. After the DONE transaction releases the barrier, the same newer
+	//    remote import goes through, and job4's own row imports from the
+	//    coordinator. The media transfer count never moves: no re-download.
+	// ------------------------------------------------------------------
+	printf("transfer test: live scan-completion import... ");
+	audiobookshelf_queue_import_install();
+	char import_error[256] = {0};
+	CHECK(abs_download_import_pending(import_error, sizeof(import_error)) == 0, "no index yet\n");
+	CHECK(strstr(import_error, "not indexed") != NULL, "refusal text: %s\n", import_error);
+	CHECK(job_state(job2) == ABS_DL_DONE && job_state(job3) == ABS_DL_DONE,
+		  "a refused import must keep DONE\n");
+	{
+		abs_download_job_t p2 = snapshot_job(job2);
+		abs_download_job_t p3 = snapshot_job(job3);
+		CHECK(p2.index_pending == 1 && p3.index_pending == 1,
+			  "refused rows must stay importable\n");
+	}
+	long long media1_before_import = count_log_lines_with("/api/items/mock-book/file/1");
+	long long media2_before_import = count_log_lines_with("/api/items/mock-book/file/2");
+
+	// (b) the real scan; the listener chain does the importing
+	char scan_root[600];
+	snprintf(scan_root, sizeof(scan_root), "%.580s/Audiobooks", card);
+	CHECK(audiobookdb_scan_start(scan_root), "the audiobook scan refused\n");
+	for (int i = 0; i < 4000 && audiobookdb_scan_running(); i++) {
+		usleep(5000);
+	}
+	CHECK(!audiobookdb_scan_running(), "the scan never finished\n");
+	{
+		abs_download_snapshot_t snap;
+		CHECK(abs_download_snapshot(&snap), "snapshot after the import pass\n");
+		for (int k = 0; k < snap.job_count; k++) {
+			if (snap.jobs[k].state == ABS_DL_DONE) {
+				CHECK(snap.jobs[k].index_pending == 0, "row %lld never imported\n",
+					  snap.jobs[k].id);
+			}
+		}
+	}
+	double import_seconds = -1;
+	bool import_finished = true;
+	char import_file[600];
+	CHECK(audiobook_resume_row(abs_book, import_file, sizeof(import_file), &import_seconds,
+							   &import_finished),
+		  "the imported book must be in the index\n");
+	CHECK(strcmp(import_file, final2) == 0, "imported resume file %s, wanted %s\n", import_file,
+		  final2);
+	CHECK(fabs(import_seconds - want_resume_seconds[0]) < 0.001,
+		  "imported resume seconds %f, wanted %f\n", import_seconds, want_resume_seconds[0]);
+	CHECK(!import_finished, "an unfinished download must not mark the book finished\n");
+	{
+		char srv[ABS_SERVER_MAX], f[SONIX_LINKED_DB_PATH_MAX];
+		int linked = 0;
+		long long stamp = 0;
+		bool fin = true;
+		double s = -1;
+		CHECK(audiobook_sync_row(abs_book, srv, sizeof(srv), f, sizeof(f), &s, &fin, &stamp,
+								 &linked),
+			  "the compare-and-swap sync row must exist\n");
+		char normalized_live[ABS_SERVER_MAX];
+		abs_profiles_normalize_server(live_server, normalized_live, sizeof(normalized_live));
+		CHECK(linked == 1 && strcmp(srv, normalized_live) == 0 && strcmp(f, final2) == 0 &&
+				  fabs(s - want_resume_seconds[0]) < 0.001 && !fin && stamp == 1700000000000LL,
+			  "sync row drifted: %s %s %f %lld\n", srv, f, s, stamp);
+	}
+	printf("ok (import)... ");
+
+	// (c) the reconcile gate: a held FINALIZING barrier must make the sync
+	// worker skip the destination. The override progress file is the mock's
+	// external channel for mock-book (the same one the smoke's conflict test
+	// uses), and a stamp newer than the imported one turns the next
+	// reconciliation into the local-progress import this gate guards.
+	char progress_override[1000];
+	snprintf(progress_override, sizeof(progress_override), "%.700s/progress.json", work);
+	char progress_json[128];
+	snprintf(progress_json, sizeof(progress_json),
+			 "{\"currentTime\":5.0,\"isFinished\":false,\"lastUpdate\":%lld}",
+			 (long long)time(NULL) * 1000 + 1000);
+	write_bytes_abs(progress_override, progress_json, strlen(progress_json));
+
+	double pre_seconds = -1;
+	bool pre_finished = true;
+	char pre_file[600];
+	CHECK(audiobook_resume_row(abs_book, pre_file, sizeof(pre_file), &pre_seconds, &pre_finished),
+		  "the imported resume row must exist before the gate\n");
+
+	long long job4 = enqueue_book(live_profile, live_server, "mock-book", "The Mock Journey");
+	pump_to(job4, ABS_DL_FINALIZING); // barrier held; the finalize op has not run
+	CHECK(abs_download_sync_blocked(want_dest), "the re-download must hold the barrier\n");
+	long long gets_before = count_log_lines_with("/api/me/progress/mock-book");
+	// §11.4 step 6: the immediate hint re-arms the row (its fresh
+	// acknowledgement would otherwise be skipped as recently attempted) and
+	// wakes the worker for one pass.
+	audiobookshelf_queue_progress(abs_book, final2, want_resume_seconds[0], false, true);
+	bool pass_ran = false;
+	for (int i = 0; i < 5000 && !pass_ran; i++) {
+		if (count_log_lines_with("/api/me/progress/mock-book") > gets_before) {
+			pass_ran = true;
+		}
+		usleep(1000);
+	}
+	CHECK(pass_ran, "the sync worker never ran a pass while the barrier was held\n");
+	{
+		char f[600];
+		double s = -1;
+		bool fin = true;
+		CHECK(audiobook_resume_row(abs_book, f, sizeof(f), &s, &fin),
+			  "the resume row vanished under the gate\n");
+		CHECK(strcmp(f, final2) == 0 && fabs(s - want_resume_seconds[0]) < 0.001,
+			  "the gated worker must not write local progress (got %s %f)\n", f, s);
+	}
+
+	// (d) the DONE transaction releases the barrier; the same newer remote
+	// import must then go through, and job4's own row imports from the queue.
+	CHECK(pump_until_terminal(job4) == ABS_DL_DONE, "the re-download must reach DONE\n");
+	CHECK(!abs_download_sync_blocked(want_dest), "the DONE transaction must release the barrier\n");
+	CHECK(abs_download_import_pending(import_error, sizeof(import_error)) == 1,
+		  "the released row must import\n");
+	gets_before = count_log_lines_with("/api/me/progress/mock-book");
+	audiobookshelf_queue_progress(abs_book, final2, want_resume_seconds[0], false, true);
+	bool imported_remote = false;
+	for (int i = 0; i < 8000 && !imported_remote; i++) {
+		char f[600];
+		double s = -1;
+		bool fin = true;
+		if (audiobook_resume_row(abs_book, f, sizeof(f), &s, &fin) && strcmp(f, final1) == 0 &&
+			fabs(s - 5.0) < 0.001) {
+			imported_remote = true;
+		}
+		usleep(2000);
+	}
+	CHECK(imported_remote, "after the barrier released, the newer remote must import\n");
+	{
+		char srv[ABS_SERVER_MAX], f[SONIX_LINKED_DB_PATH_MAX];
+		int linked = 0;
+		long long stamp = 0;
+		bool fin = true;
+		double s = -1;
+		CHECK(audiobook_sync_row(abs_book, srv, sizeof(srv), f, sizeof(f), &s, &fin, &stamp,
+								 &linked),
+			  "the acknowledged sync row must exist after the worker import\n");
+		CHECK(strcmp(f, final1) == 0 && fabs(s - 5.0) < 0.001 && !fin && linked == 1,
+			  "worker-imported sync row drifted: %s %f\n", f, s);
+		// The remote stamp carried through the import: the worker's CAS wrote
+		// exactly the override's lastUpdate, and the clock may have ticked a
+		// little since the override was written.
+		CHECK(llabs(stamp - ((long long)time(NULL) * 1000 + 1000)) < 60000,
+			  "the remote stamp must have carried through: %lld\n", stamp);
+	}
+	// No re-download anywhere in the import/gate phase.
+	CHECK(count_log_lines_with("/api/items/mock-book/file/1") == media1_before_import &&
+			  count_log_lines_with("/api/items/mock-book/file/2") == media2_before_import,
+		  "the import and gate phases must never re-download (file1 %lld, file2 %lld)\n",
+		  count_log_lines_with("/api/items/mock-book/file/1"),
+		  count_log_lines_with("/api/items/mock-book/file/2"));
+	printf("ok (gate)... ");
 
 	// ------------------------------------------------------------------
 	// Token-leak scans: card tree, queue database, mock request log

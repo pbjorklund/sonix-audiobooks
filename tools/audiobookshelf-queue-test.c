@@ -26,6 +26,7 @@
 #include "src/system/streaming/abs_download.h"
 
 #include <errno.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -203,6 +204,34 @@ static bool block_stream_next;       // wake tests: the file transfer blocks the
 static bool probe_cancelled_prev;    // wake tests: the NEXT fetch must see the previous job acknowledged
 static long long prev_job_probe;
 
+// Per-row import-coordinator knobs (§8.3): every DONE row must carry its OWN
+// values, so tests stamp distinct plan/resume values per queued job and the
+// import op records what it was handed, per call.
+static double fake_plan_progress;    // plan->remote_progress  (default 0.5)
+static bool fake_plan_finished;      // plan->remote_finished  (default false)
+static long long fake_plan_updated_ms; // plan->remote_updated_ms (default 12345)
+static char fake_resume_name[ABS_DL_NAME_MAX]; // finalize's resume mapping (default "track01.mp3")
+static double fake_resume_seconds;   // finalize's part-relative seconds (default 12.5)
+
+// The injected import op's call log: one entry per row it accepted, exactly as
+// the row carried it. Refusals are declared by item id and logged separately
+// so per-row independence is observable.
+typedef struct {
+	long long job;
+	char item[ABS_DL_ID_MAX];
+	char destination[ABS_DL_DEST_MAX];
+	char resume_file[ABS_DL_NAME_MAX];
+	double resume_seconds;
+	bool finished;
+	long long updated_ms;
+	char server[ABS_SERVER_MAX];
+} import_call_t;
+#define IMPORT_CALL_CAP 32
+static import_call_t import_calls[IMPORT_CALL_CAP];
+static int import_call_count;
+static char import_fail_items[8][ABS_DL_ID_MAX];
+static int import_refusals;
+
 static void fake_reset(void) {
 	memset(plan_files, 0, sizeof(plan_files));
 	memset(&fake_plan, 0, sizeof(fake_plan));
@@ -233,6 +262,17 @@ static void fake_reset(void) {
 	block_stream_next = false;
 	probe_cancelled_prev = false;
 	prev_job_probe = 0;
+	// The §8.3 import-coordinator surface: same defaults every section saw
+	// before the knobs existed, so prior assertions are unchanged.
+	fake_plan_progress = 0.5;
+	fake_plan_finished = false;
+	fake_plan_updated_ms = 12345;
+	snprintf(fake_resume_name, sizeof(fake_resume_name), "%s", "track01.mp3");
+	fake_resume_seconds = 12.5;
+	memset(import_calls, 0, sizeof(import_calls));
+	import_call_count = 0;
+	memset(import_fail_items, 0, sizeof(import_fail_items));
+	import_refusals = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,9 +489,9 @@ static bool op_fetch_identity(void *user, const abs_download_op_ctx_t *ctx,
 	fake_plan.destination = plan_dest_buf;
 	fake_plan.files = plan_files;
 	fake_plan.file_count = count;
-	fake_plan.remote_progress = 0.5;
-	fake_plan.remote_finished = 0;
-	fake_plan.remote_updated_ms = 12345;
+	fake_plan.remote_progress = fake_plan_progress;
+	fake_plan.remote_finished = fake_plan_finished;
+	fake_plan.remote_updated_ms = fake_plan_updated_ms;
 	*plan = fake_plan;
 	return true;
 }
@@ -568,9 +608,36 @@ static bool op_finalize(void *user, const abs_download_op_ctx_t *ctx, const abs_
 	mkpath(plan_dest_buf);
 	write_bytes(manifest, 96, 'm');
 	write_bytes(tags, 48, 't');
-	snprintf(resume_file_buf, sizeof(resume_file_buf), "track01.mp3");
+	snprintf(resume_file_buf, sizeof(resume_file_buf), "%s", fake_resume_name);
 	snprintf(resume_out->resume_file, sizeof(resume_out->resume_file), "%s", resume_file_buf);
-	resume_out->resume_seconds = 12.5;
+	resume_out->resume_seconds = fake_resume_seconds;
+	return true;
+}
+
+// §8.3: the coordinator's per-row import. Logs the exact values the row
+// carried so the test can prove no shared state ever replaced them.
+static bool op_import_resume(void *user, const abs_download_job_t *job, char *error,
+							 size_t error_size) {
+	(void)user;
+	CHECK(job != NULL, "import without job\n");
+	for (int i = 0; i < (int)(sizeof(import_fail_items) / sizeof(import_fail_items[0])); i++) {
+		if (import_fail_items[i][0] && strcmp(import_fail_items[i], job->item_id) == 0) {
+			import_refusals++;
+			snprintf(error, error_size, "fake import: refused for %s", job->item_id);
+			return false;
+		}
+	}
+	CHECK(import_call_count < IMPORT_CALL_CAP, "import call log overflow\n");
+	import_call_t *c = &import_calls[import_call_count++];
+	memset(c, 0, sizeof(*c));
+	c->job = job->id;
+	snprintf(c->item, sizeof(c->item), "%s", job->item_id);
+	snprintf(c->destination, sizeof(c->destination), "%s", job->destination);
+	snprintf(c->resume_file, sizeof(c->resume_file), "%s", job->resume_file);
+	c->resume_seconds = job->resume_seconds;
+	c->finished = job->remote_finished;
+	c->updated_ms = job->remote_updated_ms;
+	snprintf(c->server, sizeof(c->server), "%s", job->server);
 	return true;
 }
 
@@ -589,6 +656,7 @@ static const abs_download_ops_t fake_ops = {
 	.file_download = op_file_download,
 	.finalize = op_finalize,
 	.ack_reset = op_ack_reset,
+	.import_resume = op_import_resume,
 	.auth_acquire = op_auth_acquire,
 	.auth_release = op_auth_release,
 };
@@ -635,6 +703,16 @@ static long long enqueue_book(const char *item, const char *title) {
 	long long id = 0;
 	char err[128] = {0};
 	abs_download_enqueue_t req = book_req(item, title, FAKE_DEST);
+	CHECK(abs_download_enqueue_book(&req, &id, NULL, err, sizeof(err)), "enqueue %s: %s\n", item, err);
+	return id;
+}
+
+// A distinct destination per row: the coordinator's per-row proof needs rows
+// whose destinations (and stamped resume values) differ.
+static long long enqueue_book_dest(const char *item, const char *title, const char *dest) {
+	long long id = 0;
+	char err[128] = {0};
+	abs_download_enqueue_t req = book_req(item, title, dest);
 	CHECK(abs_download_enqueue_book(&req, &id, NULL, err, sizeof(err)), "enqueue %s: %s\n", item, err);
 	return id;
 }
@@ -1736,6 +1814,133 @@ static void test_storage_lifecycle(void) {
 }
 
 // ---------------------------------------------------------------------------
+// 11. Scan-completion import coordinator (§8.3 line 556). The per-row import
+//     surface: every DONE+index_pending row is handled from its own stored
+//     values, success alone clears index_pending, a failure leaves DONE/ack
+//     state exactly as it was (no re-download, no re-reset — §8.2 line 541),
+//     and the pass is honest about refusal while the storage is down. Where
+//     the 0.5.0 page kept one shared `downloaded_*` cell and one pending
+//     import, several rows import here completely independently.
+// ---------------------------------------------------------------------------
+
+// The row must import exactly once per accepted pass; refused rows return
+// false here so the test can tell "called and refused" from "never called".
+static bool import_call_for(const char *item, const import_call_t **out) {
+	int calls = 0;
+	for (int i = 0; i < import_call_count; i++) {
+		if (strcmp(import_calls[i].item, item) == 0) {
+			calls++;
+			if (out) *out = &import_calls[i];
+		}
+	}
+	return calls == 1;
+}
+
+static void test_import_coordinator(void) {
+	printf("import coordinator... ");
+	const char *root = mkcard("importcoord");
+	fake_reset();
+	abs_download_config_t cfg = make_config(root, false);
+	CHECK(abs_download_init(&cfg), "init\n");
+	char err[128] = {0};
+
+	// Three DONE rows, each carrying its own destination and its own stamped
+	// resume/remote values — the per-row state the old singleton import could
+	// never hold two of at once.
+	long long a = enqueue_book_dest("ia", "Import A", FAKE_DEST);
+	run_to_done(a);
+	fake_plan_progress = 0.9;
+	fake_plan_finished = true;
+	fake_plan_updated_ms = 900111;
+	fake_resume_seconds = 44.5;
+	snprintf(fake_resume_name, sizeof(fake_resume_name), "%s", "track02.mp3");
+	long long b = enqueue_book_dest("ib", "Import B", FAKE_DEST "-B");
+	run_to_done(b);
+	fake_plan_progress = 0.25;
+	fake_plan_finished = false;
+	fake_plan_updated_ms = 700222;
+	fake_resume_seconds = 7.25;
+	snprintf(fake_resume_name, sizeof(fake_resume_name), "%s", "track03.mp3");
+	long long c = enqueue_book_dest("ic", "Import C", FAKE_DEST "-C");
+	run_to_done(c);
+
+	abs_download_snapshot_t snap;
+	const abs_download_job_t *j = snap_job(c, &snap);
+	CHECK(j->state == ABS_DL_DONE && j->index_pending == 1, "DONE flags on c\n");
+	CHECK(fabs(j->resume_seconds - 7.25) < 1e-9 && strcmp(j->resume_file, "track03.mp3") == 0,
+		  "row c resume values: %s %f\n", j->resume_file, j->resume_seconds);
+	int acks = ack_resets; // one per finished job: three
+	long long writes_before =
+		file_writes[1] + file_writes[2] + file_writes[3]; // downloads only
+
+	// -- one refused row: the others must still import, per-row -------------
+	snprintf(import_fail_items[0], sizeof(import_fail_items[0]), "%s", "ic");
+	int imported = abs_download_import_pending(err, sizeof(err));
+	CHECK(imported == 2, "imported %d, wanted the two unrefused rows\n", imported);
+	CHECK(job_state(a) == ABS_DL_DONE && job_state(b) == ABS_DL_DONE &&
+			  job_state(c) == ABS_DL_DONE,
+		  "no row may leave DONE\n");
+	j = snap_job(a, &snap);
+	CHECK(j->index_pending == 0, "row a must clear on success\n");
+	j = snap_job(b, &snap);
+	CHECK(j->index_pending == 0, "row b must clear on success\n");
+	abs_download_job_t c_row = *snap_job(c, &snap);
+	CHECK(c_row.index_pending == 1, "a failed import must keep index_pending for the next scan\n");
+	CHECK(strcmp(c_row.error, "") == 0, "a failed import must not smear an error onto DONE: %s\n",
+		  c_row.error);
+	CHECK(ack_resets == acks,
+		  "the coordinator must never re-run an acknowledgement (§8.2 line 541)\n");
+	CHECK(import_refusals == 1, "refusal count\n");
+	CHECK(file_writes[1] + file_writes[2] + file_writes[3] == writes_before,
+		  "a failed import must not re-download anything\n");
+
+	// -- the accepted calls carried each row's OWN values (no singleton) ----
+	const import_call_t *call = NULL;
+	CHECK(import_call_for("ia", &call), "row a must import exactly once\n");
+	CHECK(call->job == a && !call->finished && strcmp(call->server, FAKE_SERVER) == 0 &&
+			  strcmp(call->destination, FAKE_DEST) == 0 &&
+			  strcmp(call->resume_file, "track01.mp3") == 0 &&
+			  fabs(call->resume_seconds - 12.5) < 1e-9 && call->updated_ms == 12345,
+		  "row a values drifted: %s %s %f %lld\n", call->destination, call->resume_file,
+		  call->resume_seconds, call->updated_ms);
+	CHECK(import_call_for("ib", &call), "row b must import exactly once\n");
+	CHECK(call->job == b && call->finished && strcmp(call->destination, FAKE_DEST "-B") == 0 &&
+			  strcmp(call->resume_file, "track02.mp3") == 0 &&
+			  fabs(call->resume_seconds - 44.5) < 1e-9 && call->updated_ms == 900111,
+		  "row b values drifted: %s %s %f %lld\n", call->destination, call->resume_file,
+		  call->resume_seconds, call->updated_ms);
+	CHECK(!import_call_for("ic", &call), "the refused row must not have imported\n");
+
+	// -- the retry imports only what is left, again from the row itself -----
+	import_fail_items[0][0] = '\0'; // the retry is the success path for this row
+	int calls_before = import_call_count;
+	imported = abs_download_import_pending(err, sizeof(err));
+	CHECK(imported == 1, "the retry imports exactly the failed row\n");
+	j = snap_job(c, &snap);
+	CHECK(j->index_pending == 0, "row c clears after its successful import\n");
+	CHECK(ack_resets == acks, "ack idempotence extends through the coordinator path\n");
+	CHECK(import_call_count == calls_before + 1, "one call for the retry\n");
+	CHECK(import_call_for("ic", &call), "row c must import exactly once\n");
+	CHECK(call->job == c && strcmp(call->destination, FAKE_DEST "-C") == 0 &&
+			  strcmp(call->resume_file, "track03.mp3") == 0 &&
+			  fabs(call->resume_seconds - 7.25) < 1e-9 && !call->finished &&
+			  call->updated_ms == 700222,
+		  "row c values drifted: %s %f %lld\n", call->resume_file, call->resume_seconds,
+		  call->updated_ms);
+
+	// -- an empty pass: nothing pending, nothing imported -------------------
+	calls_before = import_call_count;
+	CHECK(abs_download_import_pending(err, sizeof(err)) == 0, "no pending rows\n");
+	CHECK(import_call_count == calls_before, "an empty pass must not call the op\n");
+
+	// -- quiesced storage refuses with the queue's English message ----------
+	abs_download_quiesce_storage();
+	CHECK(abs_download_import_pending(err, sizeof(err)) == -1, "quiesced refusal\n");
+	CHECK(strstr(err, "not available") != NULL, "quiesced error: %s\n", err);
+	printf("ok\n");
+}
+
+// ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
 	if (argc != 2 || !argv[1][0]) {
@@ -1765,6 +1970,7 @@ int main(int argc, char **argv) {
 	test_wake_cancel_next_job_ordering();
 	test_busy_gate();
 	test_storage_lifecycle();
+	test_import_coordinator();
 
 	printf("audiobookshelf-queue-test: queue foundation passed\n");
 	return 0;

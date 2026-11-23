@@ -54,6 +54,18 @@ SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
 	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c
 	src/system/streaming/abs_download.c
 	src/system/library/audiobookdb.c src/system/library/library.c
+	# The test drives the REAL audiobookscan (the §8.3 scan-completion import
+	# runs through the §8.5 line-592 notification), so the scanner's own stack
+	# is linked; --gc-sections keeps everything not reached by the scan path.
+	# audiobook.c/audio.c carry the progress worker's local-progress writer
+	# (the §8.2 step 6 reconcile gate is proven live through it); offline,
+	# nothing references the player-side writer and the sections drop out.
+	src/system/library/metadata.c src/system/library/oggtags.c src/system/library/cue.c
+	src/system/library/id3chap.c src/system/library/vorbischap.c src/system/library/mp4flac.c
+	src/system/library/folderorder.c src/system/playback/playlist.c
+	src/system/playback/audiobook.c src/system/audio/audio.c
+	src/system/decode/decode.c src/system/decode/mp4.c src/system/decode/apedec.c
+	src/system/decode/sndfile.c src/system/image/png_scaled.c
 	src/system/core/config.c src/system/core/json.c src/system/core/pathlimits.c
 	src/system/core/sha256.c src/system/core/utils.c src/system/db/sqlite3_impl.c
 	src/system/core/lang.c)
@@ -155,14 +167,19 @@ PY
 	if [[ $(grep -ac "^track=" "$DEST/.audiobookshelf") != 2 ]]; then
 		fail "$ALIAS: manifest track lines != 2"
 	fi
-	# §8.2 step 8: exactly one DONE row, acknowledgement + import flags set.
+	# §8.2 step 8: exactly one DONE row, acknowledgement set. index_pending is
+	# 1 while the §8.3 scan-completion coordinator has not imported the row
+	# yet, and 0 once it has — the run's binary asserts which shape it left
+	# behind, and both are terminal DONE+ack states (the import never
+	# downgrades DONE, §8.3 line 556).
 	python3 - "$ADIR/card/.local/audiobookshelf-downloads.db" <<PY || fail "$ALIAS: DONE row wrong"
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
 state, ack, index_pending = db.execute(
     "SELECT state, ack_reset_done, index_pending FROM DOWNLOAD_JOB WHERE item_id='mock-book'"
     " ORDER BY id DESC LIMIT 1").fetchone()
-assert (state, ack, index_pending) == ("DONE", 1, 1), (state, ack, index_pending)
+assert (state, ack) == ("DONE", 1), (state, ack, index_pending)
+assert index_pending in (0, 1), (state, ack, index_pending)
 PY
 	if find "$ADIR/card" -name "*.part" | grep -q .; then
 		fail "$ALIAS: a .part survived the finished run"

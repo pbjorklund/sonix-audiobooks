@@ -225,6 +225,20 @@ typedef struct abs_download_ops {
 	// before the DONE+ack_reset_done=1 transaction releases the barrier.
 	bool (*ack_reset)(void *user, const abs_download_job_t *job, char *error, size_t error_size);
 
+	// §8.3 line 556: the scan-completion import of ONE DONE row's resume
+	// state into the audiobook index. Per-row by construction: the op receives
+	// only this row's own stored values (destination, resume_file basename,
+	// part-relative resume_seconds, remote finished/updated_ms) plus the
+	// normalized server, and performs the existing compare-and-swap import
+	// exactly like the legacy page's resume import did. It runs on the thread
+	// that called abs_download_import_pending() — typically the audiobook scan
+	// thread — without the queue lock. False (error filled, sanitized English)
+	// keeps the row's index_pending=1 for the next completed scan: audio stays
+	// linked, ordinary background sync stays authoritative, DONE is not
+	// downgraded and ack_reset is never re-run for it (§8.2 line 541).
+	bool (*import_resume)(void *user, const abs_download_job_t *job, char *error,
+						  size_t error_size);
+
 	// Auth snapshot for the active job (§8.1). acquire copies the latest token
 	// under the profile lock; release zeroes it when the job ends.
 	bool (*auth_acquire)(void *user, const char *profile_id, const char *server,
@@ -293,6 +307,25 @@ bool abs_download_sync_blocked(const char *destination);
 // QUEUED (bounded per-job backoff applies), the worker wakes and continues
 // the FIFO (§8.1, §8.4).
 void abs_download_network_changed(void);
+
+// ---------------------------------------------------------------------------
+// Scan-completion import coordinator (§8.3 line 556)
+// ---------------------------------------------------------------------------
+
+// Iterates every DONE row with index_pending=1 and runs ops->import_resume()
+// once per row with EXACTLY that row's stored values (remote progress mapped
+// into the persisted resume_file/resume_seconds, destination, normalized
+// server). index_pending clears only after a successful import; a failed one
+// leaves the row DONE and importable again at the next completed scan.
+//
+// Driven by the audiobook scan-completion notification (§8.5 line 592) — the
+// coordinator never starts a scan and no page imports directly. Each row is
+// handled from its own copy: there is no shared "current download" state to
+// overwrite, so several pending rows import independently. Runs on the
+// caller's thread (the ops like every media surface, without the queue lock,
+// single-flight); returns how many rows imported this pass (>= 0), or -1 when
+// the queue is disarmed or has seen a card swap (error filled, English).
+int abs_download_import_pending(char *error, size_t error_size);
 
 // ---------------------------------------------------------------------------
 // Commands (all transactional; false + English `error` when they cannot run)

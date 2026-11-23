@@ -2218,6 +2218,13 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "main: the Audiobookshelf download queue did not start on %s\n",
 					gui_cfg.sd_root_path);
 		}
+		// §8.3 line 556: with the queue armed (or after any card-attach
+		// re-init below), every completed Audiobooks scan runs the queue's
+		// import coordinator from the scan-completion notification — DONE
+		// rows carry their own resume values, so nothing imports from a page
+		// or a shared pending-import cell. Idempotent; registered once for
+		// the process lifetime.
+		audiobookshelf_queue_import_install();
 	}
 
 	// TLS, so an https:// station can be opened at all. Warmed up here rather
