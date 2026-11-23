@@ -26,11 +26,20 @@
 // album carousel takes 84..89; and the cover at the head of an album's tracks
 // takes 90; the podcasts on the card take 91..102 for their twelve rows, 103
 // for the cover at the head of one of them and 104..107 for the episodes being
-// listened to -- so the pools never trample each other's requests.
-#define COVERLOADER_SLOTS 108
+// listened to; the Audiobookshelf book-detail screen takes 108 -- so the pools
+// never trample each other's requests.
+#define COVERLOADER_SLOTS 109
 #define COVERLOADER_SEARCH_BASE 36
 #define COVERLOADER_SEARCH_COUNT 24
 #define COVERLOADER_AUDIOBOOKS_BASE 60
+
+// The Audiobookshelf book-detail screen's cover (§9.2): one request, a box
+// the shape of the R1's contain view rather than the square thumbnail the
+// list slots draw, and pixels nobody else references. It is also the slot the
+// screen releases the moment its cover opens full-screen (imageview), so the
+// §9.3 "only one retained remote detail/fullscreen image" rule holds by
+// construction.
+#define COVERLOADER_ABS_DETAIL 108
 
 // The album carousel's six places take 84..89 -- five that can be seen and one
 // that is always just off an edge, because the column scrolls through the
@@ -50,6 +59,14 @@ void coverloader_start(void);
 // Asks for the artwork of `path` at `size` pixels, for `slot`. Returns
 // immediately. Any earlier request on this slot is abandoned.
 void coverloader_request(int slot, const char *path, int size);
+
+// A whole picture file fitted (CONTAIN) into a box_w x box_h box, rather than
+// the square thumbnail the list slots make: the Audiobookshelf detail cover
+// (§9.2) asks with this, for its 450x640-shape view. The decode is
+// cover_load_image_file() itself, with its real transient encoded allocation
+// -- the whole file is read before it is decoded, which is the allocation the
+// §9.5 budget accounts for.
+void coverloader_request_image(int slot, const char *path, int box_w, int box_h);
 
 // The same, with the picture made from the player's own cover of the file at
 // player_w x player_h and scaled to `size` (cover_load_shared): the player's

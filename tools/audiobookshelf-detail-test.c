@@ -1,6 +1,10 @@
-// Focused WS3 (§9.3/§9.4) host tests for the M4 book-detail wave 1: the §9.3
+// Focused WS3 (§9.3/§9.4) host tests for the M4 book-detail waves: the §9.3
 // detail model/parser and the pure description helper it shares with local
-// ingestion.
+// ingestion (wave 1), plus the authenticated §9.1/§9.3 cover subsystem
+// (wave 2): the 2 MiB encoded cap, the hashed cache name, the LRU ceilings
+// of eight files / 16 MiB, quiescence/cancellation, and the real decode path
+// the detail and full-screen viewers feed on (cover_load_image_file, linked
+// through the objcopy trick below).
 //
 // Offline mode (default): an http_request() stub with a canned body pins the
 // request mapping (GET /api/items/{id}?expanded=1&include=progress,authors
@@ -9,29 +13,44 @@
 // equivalence, chapter bounds 0/1/400/401 with the overflow row, invalid
 // times, long strings, malformed JSON, and the ownership invariants (freed
 // models, free-of-NULL, exact chapter heap, no inline download tracks in
-// the wrapper).
+// the wrapper). A second stub, for the streaming entry points
+// abs_cover_fetch() reads, does the same for the cover: pinning the §9.1
+// endpoint (GET /api/items/{id}/cover?format=jpeg&width=900&height=1280 with
+// the pinned Bearer), serving programmable bodies for the cap/LRU/cancel
+// cases, and serving a real JPEG for the decode ones.
 //
 // Live mode (-DABS_DETAIL_TEST_LIVE): the real HTTP stack against the
 // provenance mock, once per checked-in fixture alias, parsing the REAL
 // expanded detail bytes the fixtures record (bk-full/bk-minimal, the
-// 0/1/400/401-chapter books, mock-book) with every §9.1 field.
+// 0/1/400/401-chapter books, mock-book) with every §9.1 field, and fetching
+// the cover into the real cache layout (the mock's request log carries the
+// authenticated request; the cache hit then asks for nothing).
 //
 // No GUI and no LVGL here: the §9.2 screen is exercised by the committed
 // GUI smokes (audiobookshelf-host-smoke.sh now walks the detail for all of
 // its download/link/play modes), and the wrong-server binding truth table
 // the detail's Play/Link decisions rest on lives in tools/
-// audiobookshelf-absdirs-test.c.
+// audiobookshelf-absdirs-test.c. ASan's leak check IS the repeated
+// fetch/decode/evict leak gate: any cycle that leaks pixels or encoded
+// buffers fails the suite at exit.
 
 #include "src/system/core/config.h"
+#include "src/system/core/sha256.h"
+#include "src/gui/nowplaying/cover.h"
 #include "src/system/net/http.h"
+#include "src/system/streaming/abs_cover.h"
 #include "src/system/streaming/abs_profiles.h"
 #include "src/system/streaming/audiobookshelf.h"
 #include "src/system/library/description.h"
 
 #include <assert.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 static const char *work; // argv[1]
 #define STUB_SERVER "http://stub.invalid"
@@ -74,6 +93,86 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 
 const char *http_last_error(void) { return ""; }
 long long http_last_server_time_ms(void) { return 0; }
+
+// ---------------------------------------------------------------------------
+// Streaming stub for abs_cover_fetch() (§9.3): cap what is served, drive it
+// from a program, and pin the §9.1 endpoint reaching this point.
+// ---------------------------------------------------------------------------
+
+static struct {
+	char url[2200];
+	char headers[1100];
+	long long opens;
+} stream_spy;
+
+static struct {
+	size_t length;               // patterned body length
+	unsigned char base;          // first pattern byte; byte i = base + i
+	const char *raw;             // when set: exact bytes (a real JPEG)
+	size_t raw_len;
+	const volatile int *cancel;  // external flag the read stub flips
+	size_t cancel_after;         // ... after this many served bytes
+	bool die_mid_body;           // read returns -1 after one chunk
+	size_t pos;                  // served so far
+	bool died;
+} stream_body;
+
+static void stream_program(size_t length, unsigned char base) {
+	memset(&stream_body, 0, sizeof(stream_body));
+	stream_body.length = length;
+	stream_body.base = base;
+}
+
+static void stream_program_raw(const char *raw, size_t len) {
+	memset(&stream_body, 0, sizeof(stream_body));
+	stream_body.raw = raw;
+	stream_body.raw_len = len;
+}
+
+bool http_stream_open_ex(http_stream_t *st, const char *url, const char *extra_headers, int timeout_secs) {
+	(void)timeout_secs;
+	snprintf(stream_spy.url, sizeof(stream_spy.url), "%s", url ? url : "");
+	snprintf(stream_spy.headers, sizeof(stream_spy.headers), "%s", extra_headers ? extra_headers : "");
+	stream_spy.opens++;
+	memset(st, 0, sizeof(*st));
+	st->content_length = (long long)(stream_body.raw ? stream_body.raw_len : stream_body.length);
+	if (stream_body.length == 0 && !stream_body.raw) st->content_length = 0;
+	// Every open serves the same programmed body from byte zero, the way a
+	// fresh HTTP response would.
+	stream_body.pos = 0;
+	stream_body.died = false;
+	return true;
+}
+
+int http_stream_read(http_stream_t *st, void *buf, int len) {
+	(void)st;
+	if (stream_body.die_mid_body && stream_body.pos > 0 && !stream_body.died) {
+		// One clean chunk, then the socket dies mid-body.
+		stream_body.died = true;
+		return -1;
+	}
+	size_t total = stream_body.raw ? stream_body.raw_len : stream_body.length;
+	if (stream_body.pos >= total) return 0;
+	if (stream_body.cancel && stream_body.cancel_after > 0 &&
+		stream_body.pos + (size_t)len > stream_body.cancel_after) {
+		// A pause/cancel from another thread lands mid-transfer.
+		__atomic_store_n((volatile int *)stream_body.cancel, 1, __ATOMIC_SEQ_CST);
+	}
+	size_t want = total - stream_body.pos;
+	if (want > (size_t)len) want = (size_t)len;
+	unsigned char *out = buf;
+	if (stream_body.raw) {
+		memcpy(out, stream_body.raw + stream_body.pos, want);
+	} else {
+		for (size_t i = 0; i < want; i++) out[i] = stream_body.base + (unsigned char)(stream_body.pos + i);
+	}
+	stream_body.pos += want;
+	return (int)want;
+}
+
+void http_stream_close(http_stream_t *st) {
+	if (st) st->fd = -1;
+}
 
 static const char *captured_path(void) {
 	size_t skip = strlen(STUB_SERVER);
@@ -127,6 +226,121 @@ static void configure_profile(const char *server, const char *token) {
 	assert(abs_profiles_init() == 0);
 	char id[ABS_PROFILE_ID_MAX];
 	assert(abs_profiles_add("Test", server, token, id, sizeof(id)));
+}
+
+// ---------------------------------------------------------------------------
+// Cover helpers (wave 2)
+// ---------------------------------------------------------------------------
+
+static int dir_file_count(const char *dir) {
+	DIR *d = opendir(dir);
+	if (!d) return -1;
+	int count = 0;
+	struct dirent *e;
+	while ((e = readdir(d)) != NULL) {
+		if (e->d_name[0] == '.') continue;
+		count++;
+	}
+	closedir(d);
+	return count;
+}
+
+static bool dir_has_file(const char *dir, const char *suffix) {
+	DIR *d = opendir(dir);
+	if (!d) return false;
+	bool found = false;
+	struct dirent *e;
+	while ((e = readdir(d)) != NULL) {
+		if (e->d_name[0] == '.') continue;
+		if (suffix && strstr(e->d_name, suffix)) found = true;
+	}
+	closedir(d);
+	return found;
+}
+
+// Stamps BOTH timestamps to `sec` so the eviction order is test-owned: the
+// fetch's own touch uses "now", and the crafted stamps sit far in the past.
+static void craft_atime(const char *path, long long sec) {
+	struct timespec stamps[2] = {{sec, 0}, {sec, 0}};
+	assert(utimensat(AT_FDCWD, path, stamps, 0) == 0);
+}
+
+static long long file_size(const char *path) {
+	struct stat st;
+	return stat(path, &st) == 0 ? (long long)st.st_size : -1;
+}
+
+static bool file_bytes_equal(const char *path, const char *data, size_t len) {
+	if (file_size(path) != (long long)len) return false;
+	FILE *f = fopen(path, "rb");
+	if (!f) return false;
+	char *got = malloc(len + 1);
+	assert(got);
+	size_t read = fread(got, 1, len + 1, f);
+	fclose(f);
+	bool same = read == len && memcmp(got, data, len) == 0;
+	free(got);
+	return same;
+}
+
+static bool is_hex(char c) { return strchr("0123456789abcdef", c) != NULL; }
+
+// The pinned browsing-identity snapshot (§11.3) the cover fetch pins.
+static void cover_credentials(abs_auth_snapshot_t *snap, const char *token) {
+	assert(audiobookshelf_browse_credentials(snap));
+	assert(snap->token[0] && snap->server[0]);
+	if (token) expect_str("browse credentials token", snap->token, token);
+	expect_str("browse credentials server", snap->server, STUB_SERVER);
+}
+
+// The base64 of the smallest real baseline RGB JPEG the fixtures use
+// (identical policy to tools/abs_fixtures_generate.py: deterministic bytes,
+// no runtime dependency). The decode tests prove the fetched cache file is
+// decodable by the exact loader the §9.2 screen and the full-screen viewer
+// use afterwards.
+static const char *const COVER_JPEG_B64 =
+	"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoM"
+	"DAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsN"
+	"FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAAR"
+	"CAAwACADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAA"
+	"AgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkK"
+	"FhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWG"
+	"h4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl"
+	"5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREA"
+	"AgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYk"
+	"NOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOE"
+	"hYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk"
+	"5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD85NF0D7vy13ui6B935at6LoH3flrvdF0D"
+	"7vy16lGB7PD2bfDqU9F0D7vy13ui6B935auaLoH3flrvdF0D7vy17lGB/TvD2bfDqeI6LoH3"
+	"flrvNF0D7vy1c0XQPu/LXe6LoH3flriowP8APvh3Nvh1Kei6B935a73RdA+78tW9F0D7vy13"
+	"ui6B935a9ujA/p3h3Nvh1PEdF0D7vy13ui6B935auaLoH3flrvNF0D7vy1xUYH+ffDubfDqV"
+	"NF0D7vy1tzt5H+i2v+t6SSD+D2Hv/L69Lc7eRm1tf9b0kkH8PsPf+X16aOi6B935a/nvxD8R"
+	"vq/PkmST9/apUX2e8Yv+b+aX2dl713H+tuEsVflqVH6I/9k=";
+static unsigned char cover_jpeg[2048];
+static size_t cover_jpeg_len;
+
+static void decode_base64(const char *in, unsigned char *out, size_t out_size, size_t *len_out) {
+	size_t o = 0;
+	unsigned acc = 0;
+	int bits = 0;
+	for (; *in; in++) {
+		if (*in == '=') break;
+		int v;
+		if (*in >= 'A' && *in <= 'Z') v = *in - 'A';
+		else if (*in >= 'a' && *in <= 'z') v = *in - 'a' + 26;
+		else if (*in >= '0' && *in <= '9') v = *in - '0' + 52;
+		else if (*in == '+') v = 62;
+		else if (*in == '/') v = 63;
+		else continue; // ignored padding between lines
+		acc = (acc << 6) | (unsigned)v;
+		bits += 6;
+		if (bits >= 8) {
+			bits -= 8;
+			if (o >= out_size) break;
+			out[o++] = (unsigned char)(acc >> bits);
+		}
+	}
+	*len_out = o;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +739,267 @@ static void ownership_tests(void) {
 // local manifest, two profiles -- the §11.5 truth the worker's mapping runs
 // on (the full truth table lives in audiobookshelf-absdirs-test.c; this is
 // the detail-shaped slice: same item id, two servers).
+// ---------------------------------------------------------------------------
+// Wave 2 (§9.1/§9.3): the authenticated cover cache
+// ---------------------------------------------------------------------------
+
+// §9.1 endpoint, pinned Bearer, hashed cache name with no token in it, byte
+// round-trip, and the cache hit that asks for nothing.
+static void cover_basic_tests(void) {
+	abs_cover_set_root(work);
+	char err[256] = "", path[512] = "";
+	abs_auth_snapshot_t snap;
+	cover_credentials(&snap, "stub-token");
+
+	stream_program(8192, 0x41);
+	expect_true("cover fetch succeeds", abs_cover_fetch(&snap, "it-cover", NULL, path, sizeof(path), err, sizeof(err)));
+	expect_bool("cover error empty on success", err[0] == '\0', true);
+	expect_str("§9.1 cover request path", stream_spy.url,
+			  STUB_SERVER "/api/items/it-cover/cover?format=jpeg&width=900&height=1280");
+	expect_str("§9.1 cover Bearer pinned", stream_spy.headers, "Authorization: Bearer stub-token\r\n");
+
+	const char *name = strrchr(path, '/');
+	assert(name);
+	name++;
+	expect_bool("hashed cache name length", strlen(name) == 12 + 1 + 12 + 4, true);
+	expect_bool("hashed cache name separator", name[12] == '-', true);
+	for (int i = 0; i < 25; i++) {
+		if (i == 12) continue;
+		expect_bool("hashed cache name is hex", is_hex(name[i]), true);
+	}
+	expect_bool("hashed cache name extension", strcmp(name + 25, ".jpg") == 0, true);
+	expect_bool("cache layout root", strstr(path, "/.local/abs-cover-cache/") != NULL, true);
+	// The name carries two hashes and nothing else: neither the token, nor
+	// any fragment of the request, ever reaches the card.
+	expect_bool("no token in the cached path", strstr(path, "stub-token") == NULL, true);
+	expect_bool("no header material in the path", strstr(path, "Bearer") == NULL, true);
+
+	char expected[8192];
+	for (size_t i = 0; i < sizeof(expected); i++) expected[i] = (char)(0x41 + (unsigned char)i);
+	expect_int("cover bytes complete", (long)file_size(path), 8192);
+	expect_true("cover bytes round-trip", file_bytes_equal(path, expected, 8192));
+	{
+		char dir[600];
+		snprintf(dir, sizeof(dir), "%s/.local/abs-cover-cache", work);
+		bool part = false;
+		DIR *d = opendir(dir);
+		if (d) {
+			struct dirent *e;
+			while ((e = readdir(d)) != NULL)
+				if (strstr(e->d_name, ".part")) part = true;
+			closedir(d);
+		}
+		expect_bool("no .part in the cache after success", part, false);
+	}
+
+	// The cache hit answers from the card and asks for nothing (§9.3).
+	long long opens_after_fetch = stream_spy.opens;
+	char hit[512] = "";
+	expect_true("cover cache hit succeeds", abs_cover_fetch(&snap, "it-cover", NULL, hit, sizeof(hit), err, sizeof(err)));
+	expect_str("cache hit returns the same file", hit, path);
+	expect_bool("cache hit made no request", stream_spy.opens == opens_after_fetch, true);
+}
+
+// §9.1's 2 MiB encoded cap: a stated-oversize response is refused before one
+// byte lands; a body that grows past the cap is stopped mid-stream; exactly
+// the cap stores. Both refusals are sanitized.
+static void cover_cap_tests(void) {
+	abs_auth_snapshot_t snap;
+	cover_credentials(&snap, NULL);
+
+	char err[256] = "", path[512] = "";
+	stream_program((size_t)ABS_COVER_ENCODED_MAX + 1, 0x20);
+	expect_bool("encode cap refuses oversize", !abs_cover_fetch(&snap, "it-big", NULL, path, sizeof(path), err, sizeof(err)), true);
+	expect_bool("oversize refusal is sanitized", err[0] != 0, true);
+	expect_bool("no URL in the oversize refusal", strstr(err, "/api") == NULL, true);
+	expect_bool("no token in the oversize refusal", strstr(err, "stub-token") == NULL, true);
+	expect_bool("oversize leaves no file", file_size(path) < 0, true);
+
+	stream_program((size_t)ABS_COVER_ENCODED_MAX, 0x7E);
+	expect_true("encode exactly 2 MiB stores", abs_cover_fetch(&snap, "it-exact", NULL, path, sizeof(path), err, sizeof(err)));
+	expect_int("exactly-cap file size", (long)file_size(path), ABS_COVER_ENCODED_MAX);
+}
+
+// Cancellation and a dead socket: both stop between read units, both leave
+// no file, both are sanitized.
+static void cover_cancel_tests(void) {
+	abs_auth_snapshot_t snap;
+	cover_credentials(&snap, NULL);
+	char err[256] = "", path[512] = "";
+
+	volatile int cancel = 0;
+	stream_program(60000, 0x33);
+	memset(&stream_body.cancel_after, 0, sizeof(stream_body.cancel_after));
+	stream_body.cancel = &cancel;
+	stream_body.cancel_after = 30000;
+	expect_bool("cancellation stops the fetch",
+				!abs_cover_fetch(&snap, "it-cancel", &cancel, path, sizeof(path), err, sizeof(err)), true);
+	expect_bool("cancelled refusal names it", strstr(err, "cancel") != NULL, true);
+	expect_bool("cancel leaves no file", file_size(path) < 0, true);
+	stream_body.cancel = NULL;
+	stream_body.cancel_after = 0;
+
+	// stream_program() resets the whole program: death is armed AFTER it.
+	stream_program(90000, 0x44);
+	stream_body.die_mid_body = true;
+	expect_bool("a dead socket interrupts the fetch",
+				!abs_cover_fetch(&snap, "it-died", NULL, path, sizeof(path), err, sizeof(err)), true);
+	expect_bool("interrupt refusal is sanitized", err[0] != 0 && strstr(err, "stub-token") == NULL, true);
+	stream_body.die_mid_body = false;
+}
+
+// §9.3 LRU: eight files kept, the ninth evicts the oldest USED; a re-open
+// refreshes a file's recency; the byte ceiling evicts exactly the same way at
+// exactly/over 16 MiB.
+static void cover_lru_tests(void) {
+	char err[256] = "", path[512], item[32];
+	abs_auth_snapshot_t snap;
+	cover_credentials(&snap, NULL);
+
+	char lru_root[600];
+	snprintf(lru_root, sizeof(lru_root), "%s/lru", work);
+	mkdir_s(lru_root);
+	abs_cover_set_root(lru_root);
+
+	long long base = (long long)time(NULL) - 100000;
+	char files[10][600];
+
+	// Nine fetches; each cached file is stamped with its own, increasing
+	// "last use" so the eviction order is deterministic.
+	stream_program(8192, 0x10);
+	for (int i = 0; i < 9; i++) {
+		snprintf(item, sizeof(item), "it-l%d", i);
+		expect_true("lru fetch stores", abs_cover_fetch(&snap, item, NULL, path, sizeof(path), err, sizeof(err)));
+		snprintf(files[i], sizeof(files[i]), "%s", path);
+		craft_atime(path, base + i);
+	}
+	char dir[700];
+	snprintf(dir, sizeof(dir), "%s/.local/abs-cover-cache", lru_root);
+	expect_int("nine fetches keep eight files", dir_file_count(dir), 8);
+	expect_bool("the oldest file was evicted", file_size(files[0]) < 0, true);
+	for (int i = 1; i < 9; i++) expect_bool("the kept eight survived", file_size(files[i]) > 0, true);
+
+	// LRU is by use, not by age: re-opening the second cache file makes IT
+	// untouchable and the next fetch evicts the then-oldest (l2).
+	long long opens_before = stream_spy.opens;
+	expect_true("re-open of l1 is a cache hit", abs_cover_fetch(&snap, "it-l1", NULL, path, sizeof(path), err, sizeof(err)));
+	expect_bool("re-open made no request", stream_spy.opens == opens_before, true);
+	expect_true("fetched l9 stores", abs_cover_fetch(&snap, "it-l9", NULL, path, sizeof(path), err, sizeof(err)));
+	expect_int("still eight files after the tenth", dir_file_count(dir), 8);
+	expect_bool("the then-oldest (l2) was evicted", file_size(files[2]) < 0, true);
+	expect_bool("recently-used l1 survived", file_size(files[1]) > 0, true);
+	expect_bool("the fresh file survived pruning", file_size(path) > 0, true);
+
+	// Byte ceiling, exactly 16 MiB: each cached cover is at most the §9.1
+	// 2 MiB encoded cap, so the ceiling shape is 8 × 2 MiB. Eight fills
+	// WITHOUT eviction (exactly the ceiling); nothing is dropped at the edge.
+	char byte_root[600];
+	snprintf(byte_root, sizeof(byte_root), "%s/bytes", work);
+	mkdir_s(byte_root);
+	abs_cover_set_root(byte_root);
+	char byte_dir[700];
+	snprintf(byte_dir, sizeof(byte_dir), "%s/.local/abs-cover-cache", byte_root);
+	stream_program((size_t)ABS_COVER_ENCODED_MAX, 0x50);
+	char byte_files[10][600];
+	for (int i = 0; i < 8; i++) {
+		snprintf(item, sizeof(item), "it-b%d", i);
+		expect_true("exactly-16 fetch stores", abs_cover_fetch(&snap, item, NULL, path, sizeof(path), err, sizeof(err)));
+		expect_int("capped cover file size", (long)file_size(path), ABS_COVER_ENCODED_MAX);
+		snprintf(byte_files[i], sizeof(byte_files[i]), "%s", path);
+		craft_atime(path, base + 200 + i);
+	}
+	expect_bool("the exactly-16-MiB ceiling keeps all eight", dir_file_count(byte_dir) == 8, true);
+
+	// One more capped cover pushes to 18 MiB (over 16): the oldest by use
+	// goes, exactly one, and the fresh file is never its own eviction.
+	expect_true("ninth fetch stores", abs_cover_fetch(&snap, "it-b9", NULL, path, sizeof(path), err, sizeof(err)));
+	snprintf(byte_files[8], sizeof(byte_files[8]), "%s", path);
+	craft_atime(path, base + 300);
+	expect_bool("over 16 MiB evicts back to eight", dir_file_count(byte_dir) == 8, true);
+	expect_bool("evicted the oldest by use", file_size(byte_files[0]) < 0, true);
+	expect_bool("the fresh oversize ceiling cover survived", file_size(byte_files[8]) > 0, true);
+	(void)byte_root;
+}
+
+// Card close and unconfigured snapshots refuse before any network or card
+// write, and re-attach restores them.
+static void cover_lifecycle_tests(void) {
+	abs_auth_snapshot_t snap;
+	cover_credentials(&snap, NULL);
+	char err[256] = "", path[512] = "";
+
+	abs_cover_quiesce();
+	stream_program(1024, 0x21);
+	expect_bool("card close refuses the fetch",
+				!abs_cover_fetch(&snap, "it-card", NULL, path, sizeof(path), err, sizeof(err)), true);
+	expect_bool("card-close refusal is sanitized", err[0] != 0 && strstr(err, "stub-token") == NULL, true);
+	expect_bool("card close wrote nothing", file_size(path) < 0, true);
+
+	abs_cover_set_root(work); // card back: same restore shape card_databases_attach() runs
+	expect_true("card re-attach restores the cache", abs_cover_fetch(&snap, "it-card", NULL, path, sizeof(path), err, sizeof(err)));
+
+	abs_auth_snapshot_t broken = {.server = "", .token = ""};
+	expect_bool("no login refuses the fetch",
+				!abs_cover_fetch(&broken, "it-x", NULL, path, sizeof(path), err, sizeof(err)), true);
+	expect_bool("no-login refusal is sanitized", err[0] != 0 && strstr(err, "stub-token") == NULL, true);
+}
+
+// The decode the GUI runs on a fetched file: a real cover decodes through
+// cover_load_image_file (the exact loader slot 108 and the full-screen
+// viewer use, with its real transient encoded allocation), and undecodable
+// bytes arrive as a fetch success that refuses to decode -- which §9.2 maps
+// to the text-only detail with the "Cover unavailable" note. The leak gate:
+// forty fetch → decode → release cycles must leave the heap empty (ASan's
+// leak check) and the cache bounded.
+static void cover_decode_tests(void) {
+	char err[256] = "", path[512] = "";
+	abs_auth_snapshot_t snap;
+	cover_credentials(&snap, NULL);
+	mkdir_s(work);
+	abs_cover_set_root(work);
+
+	if (!cover_jpeg_len) decode_base64(COVER_JPEG_B64, cover_jpeg, sizeof(cover_jpeg), &cover_jpeg_len);
+	expect_int("embedded test jpeg decodes to bytes", (long)cover_jpeg_len, 899);
+
+	// A real JPEG cover: fetched, then decoded into the §9.5 contain shape.
+	stream_program_raw((const char *)cover_jpeg, cover_jpeg_len);
+	expect_true("jpeg cover fetched", abs_cover_fetch(&snap, "it-jpg", NULL, path, sizeof(path), err, sizeof(err)));
+	cover_image_t image;
+	expect_true("the decoded cover the detail shows", cover_load_image_file(path, 90, 128, COVER_FIT_CONTAIN, &image));
+	expect_bool("decoded cover carries pixels", image.pixels != NULL, true);
+	expect_bool("decoded cover fits the box", image.dsc.header.w <= 90 && image.dsc.header.h <= 128, true);
+	cover_free(&image);
+
+	// Undecodable bytes: the cache stores what the server sent (opaque),
+	// and the decoder refuses -- the screen's text-only fallback contract.
+	stream_program_raw("\x00\x11\x22\x33not an image at all\x00\x00", 22);
+	expect_bool("garbage cover bytes still cached (server is authoritative)",
+				abs_cover_fetch(&snap, "it-garbage", NULL, path, sizeof(path), err, sizeof(err)), true);
+	cover_image_t junk;
+	expect_bool("garbage bytes never decode", !cover_load_image_file(path, 90, 128, COVER_FIT_CONTAIN, &junk), true);
+	cover_free(&junk);
+
+	// Repeated detail/fullscreen entry-exit: fetch → decode → release, forty
+	// times. The cache stays at its §9.3 ceilings and nothing leaks.
+	stream_program_raw((const char *)cover_jpeg, cover_jpeg_len);
+	for (int c = 0; c < 40; c++) {
+		char item[32];
+		snprintf(item, sizeof(item), "it-mm%d", c);
+		char cycle_path[512] = "";
+		expect_true("cycle fetch", abs_cover_fetch(&snap, item, NULL, cycle_path, sizeof(cycle_path), err, sizeof(err)));
+		cover_image_t cycle;
+		if (cover_load_image_file(cycle_path, 90, 128, COVER_FIT_CONTAIN, &cycle)) {
+			cover_free(&cycle);
+		}
+	}
+	char dir[700];
+	snprintf(dir, sizeof(dir), "%s/.local/abs-cover-cache", work);
+	int files = dir_file_count(dir);
+	expect_bool("cycles leave the cache bounded", files >= 1 && files <= ABS_COVER_FILES_MAX, true);
+	printf("cover-test: cache settled at %d of %d files after the leak cycles\n", files,
+		   ABS_COVER_FILES_MAX);
+}
+
 static void two_servers_tests(void) {
 	char folder[1024], manifest[1200], audio[1300];
 	snprintf(folder, sizeof(folder), "%s/sd/Audiobooks/Author/Book", work);
@@ -570,9 +1045,16 @@ int main(int argc, char **argv) {
 	long_string_tests();
 	failure_tests();
 	ownership_tests();
+	decode_base64(COVER_JPEG_B64, cover_jpeg, sizeof(cover_jpeg), &cover_jpeg_len);
+	cover_basic_tests();
+	cover_cap_tests();
+	cover_cancel_tests();
+	cover_lru_tests();
+	cover_lifecycle_tests();
+	cover_decode_tests();
 	two_servers_tests();
 
-	printf("audiobookshelf-detail-test: offline parse/helper matrix passed\n");
+	printf("audiobookshelf-detail-test: offline parse/helper/cover matrix passed\n");
 	return 0;
 }
 
@@ -619,6 +1101,50 @@ static void live_detail_expectations(const char *id, int chapters_want, bool ove
 	audiobookshelf_detail_free(d);
 }
 
+// Wave 2, live: the cover endpoint against the provenance mock. The fetch
+// runs through the real HTTP stack (Bearer required by the mock), lands in
+// the real §9.3 cache layout, carries the fixture's exact bytes, and the
+// second fetch is a cache hit that asks the server for nothing. The mock's
+// request log assertions (the .sh) pin the §9.1 endpoint on the wire.
+static void live_cover_tests(void) {
+	const char *fixture = getenv("SONIX_DETAIL_FIXTURE_COVER");
+	assert(fixture && fixture[0]);
+	long long fixture_size = file_size(fixture);
+	assert(fixture_size > 0);
+	char fixture_bytes[2048];
+	{
+		FILE *f = fopen(fixture, "rb");
+		assert(f);
+		size_t got = fread(fixture_bytes, 1, sizeof(fixture_bytes), f);
+		fclose(f);
+		assert((long long)got == fixture_size);
+	}
+
+	abs_cover_set_root(work);
+	abs_auth_snapshot_t snap;
+	assert(audiobookshelf_browse_credentials(&snap));
+	assert(snap.server[0] && snap.token[0]);
+
+	char err[256] = "", path[512] = "";
+	expect_true("live cover fetched", abs_cover_fetch(&snap, "bk-full", NULL, path, sizeof(path), err, sizeof(err)));
+	expect_bool("cover error empty on success", err[0] == '\0', true);
+	expect_bool("cover lands in the §9.3 cache layout", strstr(path, "/.local/abs-cover-cache/") != NULL, true);
+	expect_bool("cover names carry no credential", strstr(path, "Bearer") == NULL && strstr(path, snap.token) == NULL, true);
+	expect_int("cover bytes are the fixture's", (long)file_size(path), (long)fixture_size);
+	expect_true("cover bytes round-trip", file_bytes_equal(path, fixture_bytes, (size_t)fixture_size));
+
+	char hit[512] = "";
+	expect_true("live cover cache hit", abs_cover_fetch(&snap, "bk-full", NULL, hit, sizeof(hit), err, sizeof(err)));
+	expect_str("cache hit returns the same file", hit, path);
+
+	// Every alias must serve its own book: a different item id maps to a
+	// different cache name (fetch it, keep both files).
+	char second[512] = "";
+	expect_true("second item's cover fetched",
+				abs_cover_fetch(&snap, "bk-minimal", NULL, second, sizeof(second), err, sizeof(err)));
+	expect_bool("per-item cache names", strcmp(second, path) != 0, true);
+}
+
 int main(int argc, char **argv) {
 	if (argc != 2) {
 		fprintf(stderr, "usage: %s <workdir> (against the fixture mock)\n", argv[0]);
@@ -641,6 +1167,8 @@ int main(int argc, char **argv) {
 	live_detail_expectations("bk-chapters-401", 400, true, "", "", "", "");
 	live_detail_expectations("mock-book", 0, false, "", "Fixture Series", "2",
 							 "A downloaded fixture used to prove resume import.");
+
+	live_cover_tests();
 
 	printf("audiobookshelf-detail-test: live fixture detail matrix passed\n");
 	return 0;

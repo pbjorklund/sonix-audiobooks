@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
-# M4 WS3 wave-1 detail tests (Bob spec §9.1–§9.4), ASan+UBSan.
+# M4 WS3 detail tests (Bob spec §9.1–§9.4), ASan+UBSan.
 #
 #   * offline: tools/audiobookshelf-detail-test.c with a stubbed http_request
-#     pins the §9.1 request mapping, the pure description policy (shared with
-#     metadata.c), descriptionPlain/HTML/entity equivalence, chapter bounds
-#     0/1/400/401 + overflow + invalid times, long strings, malformed JSON,
-#     ownership/freedom of the §9.3 model, and the two-server detail slice.
+#     AND a stubbed streaming entry pins the §9.1 request mapping, the pure
+#     description policy (shared with metadata.c), descriptionPlain/HTML/entity
+#     equivalence, chapter bounds 0/1/400/401 + overflow + invalid times, long
+#     strings, malformed JSON, ownership/freedom of the §9.3 model, the
+#     two-server detail slice — and, wave 2, the authenticated cover: the
+#     §9.1 cover endpoint under the pinned Bearer, the hashed card-only cache
+#     name, the §9.1 2 MiB encoded cap, cancellation/interruption, the §9.3
+#     LRU ceilings (8 files / 16 MiB, by use), card-close quiescence, the
+#     REAL decode the detail and full-screen viewers run (cover_load_image_file
+#     via the objcopy-pruned cover object), and the forty-cycle leak gate.
 #
 #   * live: the same binary compiled against the real HTTP stack, once per
 #     checked-in fixture alias (pinned-3563d49, current-5de038d, eric-v2.38.0):
 #     the REAL expanded detail bytes the fixtures record (full/minimal books,
-#     the 0/1/400/401-chapter corpus, mock-book) parse with every §9.1 field.
+#     the 0/1/400/401-chapter corpus, mock-book) parse with every §9.1 field,
+#     and the cover fetches land in the real cache with the fixture's exact
+#     bytes — the authenticated request exactly once, then served from cache.
 #
 # The §9.2 screen itself has no LVGL harness here: it is exercised end to end
 # by tools/audiobookshelf-host-smoke.sh (its download/link modes now walk the
@@ -32,8 +40,9 @@ need gcc
 need python3
 
 # --------------------------------------------------------------- structure --
-# The §9.2 screen strings exist in the R1 language file, and the wave's file
-# layout matches §9.4: the description helper is a separate pure unit.
+# The §9.2 screen strings exist in the R1 language file, and the waves' file
+# layout matches §9.4: the description helper is a separate pure unit, the
+# cover subsystem its own.
 INIFILE="$ROOT/sonix-packer/assets/R1/usr/resource/sonix/language/English.ini"
 for key in audiobookshelf_detail audiobookshelf_detail_loading audiobookshelf_detail_failed \
 	audiobookshelf_detail_author audiobookshelf_detail_narrator audiobookshelf_detail_duration \
@@ -41,16 +50,33 @@ for key in audiobookshelf_detail audiobookshelf_detail_loading audiobookshelf_de
 	audiobookshelf_detail_about audiobookshelf_detail_no_description audiobookshelf_detail_summary \
 	audiobookshelf_detail_chapters audiobookshelf_detail_chapters_none \
 	audiobookshelf_detail_chapters_overflow audiobookshelf_detail_queue \
-	audiobookshelf_detail_play_local audiobookshelf_link audiobookshelf_downloads; do
+	audiobookshelf_detail_play_local audiobookshelf_link audiobookshelf_downloads \
+	audiobookshelf_detail_cover_unavailable; do
 	grep -q "^$key = " "$INIFILE" || fail "English.ini lost detail key $key"
 done
 [[ -f "$PLAYER/src/system/library/description.h" && -f "$PLAYER/src/system/library/description.c" ]] ||
 	fail "§9.4: the shared description helper is missing"
-# Wave boundary: no cover subsystem may appear while wave 1 is the scope.
-for forbidden in abs_cover coverloader; do
-	grep -rq "$forbidden" "$PLAYER/src/gui/streaming/audiobookshelfdetail.c" &&
-		fail "the detail screen reached cover territory before wave 2"
-done
+[[ -f "$PLAYER/src/system/streaming/abs_cover.h" && -f "$PLAYER/src/system/streaming/abs_cover.c" ]] ||
+	fail "§9.4: the authenticated cover unit is missing"
+# §9.4 ownership rows for wave 2: slot 108 exists for the detail and the slot
+# table grew to 109.
+grep -q "COVERLOADER_SLOTS 109" "$PLAYER/src/gui/nowplaying/coverloader.h" ||
+	fail "§9.4: the detail slot never raised COVERLOADER_SLOTS to 109"
+grep -q "define COVERLOADER_ABS_DETAIL 108" "$PLAYER/src/gui/nowplaying/coverloader.h" ||
+	fail "§9.4: the detail slot number is missing from coverloader.h"
+# qobuzart stays unauthenticated, per §9.4: no ABS integration, no token/ABS
+# URL surface may reach it.
+if grep -qiE "abs_cover|audiobookshelf|Bearer|Authorization" "$PLAYER/src/gui/streaming/qobuzart.c"; then
+	fail "§9.4: qobuzart received ABS integration it must never get"
+fi
+# The full-screen viewer stays a local-path page: it never networked, and the
+# §9.3 ownership rule (hash-named cache files, no tokens) holds there too.
+if grep -qE "http_|Bearer|Authorization|token" "$PLAYER/src/gui/library/imageview.c"; then
+	fail "§9.4: imageview grew networking; it reads local paths only"
+fi
+# The cover request stays the §9.1 endpoint with the reviewed parameters.
+grep -q "format=jpeg&width=900&height=1280" "$PLAYER/src/system/streaming/abs_cover.c" ||
+	fail "§9.1: the cover endpoint left the reviewed parameters"
 # The detail requests the queue's expanded endpoint; never a raw publisher
 # HTML pass-through (the parse goes through the shared helper).
 grep -q 'expanded=1&include=progress,authors' "$PLAYER/src/system/streaming/audiobookshelf.c" ||
@@ -76,22 +102,40 @@ LINK_FLAGS=(-Wl,--gc-sections -lm -lpthread -ldl)
 cd "$PLAYER"
 
 # ---------------------------------------------------------------------------
-# Offline: request mapping, description policy, chapter bounds, ownership
+# Offline: request mapping, description policy, chapter bounds, ownership,
+# cover subsystem
 # ---------------------------------------------------------------------------
-# The stub replaces http_request()/http_last_error(), but the REAL
-# http_url_encode() must be exercised: the §9.1 item id is URL-encoded on the
-# wire. objcopy keeps the encoder from the compiled http.o (gc-sections then
-# prunes the rest), so the stub and the real object link together.
+# The stubs replace http_request()/http_stream_open_ex()/http_stream_read/
+# http_stream_close/http_last_error(), but the REAL http_url_encode() must be
+# exercised: the §9.1 item id is URL-encoded on the wire. objcopy keeps the
+# encoder from the compiled http.o (gc-sections then prunes the rest), so the
+# stub and the real object link together.
 gcc "${COMPILE_FLAGS[@]}" -c src/system/net/http.c -o "$UNIT_WORK/http_full.o"
 objcopy --keep-global-symbol=http_url_encode "$UNIT_WORK/http_full.o" "$UNIT_WORK/http_url.o"
+# The decode side of the cover tests runs the REAL loader, cover
+#_load_image_file(), with its transient encoded allocation: objcopy keeps
+# just that entry point and cover_free() from the compiled cover object, and
+# gc-sections then prunes the thumbnail cache and every other dependency so
+# the image decoders and utils are all that remain.
+gcc "${COMPILE_FLAGS[@]}" -c src/gui/nowplaying/cover.c -o "$UNIT_WORK/cover_full.o"
+objcopy --keep-global-symbol=cover_load_image_file --keep-global-symbol=cover_free \
+	"$UNIT_WORK/cover_full.o" "$UNIT_WORK/cover_img.o"
+gcc "${COMPILE_FLAGS[@]}" -c src/system/image/stb_image_impl.c -o "$UNIT_WORK/stb_image_impl.o"
+gcc "${COMPILE_FLAGS[@]}" -c src/system/image/art_shrink.c -o "$UNIT_WORK/art_shrink.o"
+gcc "${COMPILE_FLAGS[@]}" -c src/system/image/jpeg_scaled.c -o "$UNIT_WORK/jpeg_scaled.o"
+gcc "${COMPILE_FLAGS[@]}" -c src/system/image/png_scaled.c -o "$UNIT_WORK/png_scaled.o"
+IMAGE_OBJS=("$UNIT_WORK/cover_img.o" "$UNIT_WORK/stb_image_impl.o" "$UNIT_WORK/art_shrink.o" \
+	"$UNIT_WORK/jpeg_scaled.o" "$UNIT_WORK/png_scaled.o")
 # The §11.5 manifest readers behind the two-server slice walk the real
 # scanner's folder-book logic; gc-sections keeps the rest of the DB out.
 gcc "${COMPILE_FLAGS[@]}" "$ROOT/tools/audiobookshelf-detail-test.c" \
 	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c \
+	src/system/streaming/abs_cover.c \
 	src/system/library/description.c \
 	src/system/core/config.c src/system/core/json.c src/system/core/pathlimits.c \
 	src/system/core/sha256.c src/system/core/utils.c \
 	src/system/library/audiobookdb.c src/system/db/sqlite3_impl.c \
+	"${IMAGE_OBJS[@]}" \
 	"${LINK_FLAGS[@]}" "$UNIT_WORK/http_url.o" -o "$UNIT_WORK/detail-test"
 mkdir -p "$UNIT_WORK/work"
 "$UNIT_WORK/detail-test" "$UNIT_WORK/work"
@@ -156,18 +200,33 @@ for ALIAS in $ALIASES; do
 	[[ -s "$port_file" ]] || fail "mock for $ALIAS never opened a port"
 	PORT=$(cat "$port_file")
 
-	# The live binary uses the real http stack (no stub; -DABS_DETAIL_TEST_LIVE).
+	# The live binary uses the real http stack (no stub; -DABS_DETAIL_TEST_LIVE),
+	# plus the cover unit and the pruned decode object.
 	gcc "${COMPILE_FLAGS[@]}" -DABS_DETAIL_TEST_LIVE "$ROOT/tools/audiobookshelf-detail-test.c" \
 		src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c \
+		src/system/streaming/abs_cover.c \
 		src/system/library/description.c \
-		src/system/core/config.c src/system/core/json.c src/system/net/http.c \
-		src/system/net/tls.c "${LINK_FLAGS[@]}" -o "$UNIT_WORK/detail-live"
+		src/system/core/config.c src/system/core/json.c src/system/core/utils.c \
+		src/system/core/sha256.c src/system/net/http.c \
+		src/system/net/tls.c "${IMAGE_OBJS[@]}" "${LINK_FLAGS[@]}" -o "$UNIT_WORK/detail-live"
+	export SONIX_DETAIL_FIXTURE_COVER="$ROOT/tools/fixtures/audiobookshelf/$ALIAS/scenario/media/covers/fixture-cover.jpg"
+	[[ -s "$SONIX_DETAIL_FIXTURE_COVER" ]] || fail "$ALIAS: the fixture cover is missing"
 	SONIX_AUDIOBOOKSHELF_SERVER="http://127.0.0.1:$PORT" SONIX_AUDIOBOOKSHELF_TOKEN="sonix-detail-$ALIAS" \
 		"$UNIT_WORK/detail-live" "$alias_dir"
+	unset SONIX_DETAIL_FIXTURE_COVER
 
 	# §9.1 on the wire: the exact expanded-item endpoint, per alias.
 	grep -q 'GET /api/items/bk-full?expanded=1&include=progress,authors ' "$alias_dir/progress.requests" ||
 		fail "$ALIAS: the expanded detail request never reached the server"
+
+	# §9.1 wave 2 on the wire: the authenticated cover exactly once — the
+	# second fetch is a cache hit and asks the server for nothing.
+	for item in bk-full bk-minimal; do
+		count=$(grep -c "GET /api/items/$item/cover?format=jpeg&width=900&height=1280 " \
+			"$alias_dir/progress.requests" || true)
+		[[ "$count" == 1 ]] ||
+			fail "$ALIAS: the cover request for $item did not arrive exactly once (count $count)"
+	done
 
 	kill -TERM "$MOCK_PID"
 	wait "$MOCK_PID" 2>/dev/null || true

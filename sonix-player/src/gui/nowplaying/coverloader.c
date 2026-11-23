@@ -16,6 +16,11 @@ typedef struct {
 	// Above zero: the picture is made from the player's cover at this size
 	// (cover_load_shared) rather than as a list thumbnail.
 	int share_w, share_h;
+	// Above zero: the file is a whole picture (cover_load_image_file) fitted
+	// into this box, not a track's artwork thumbnail. The Audiobookshelf
+	// detail cover asks with it. One slot mode at a time; the request calls
+	// zero the other pair.
+	int img_w, img_h;
 
 	uint32_t generation; // bumped by every request and every release
 	bool pending;		 // asked for, not started
@@ -245,6 +250,7 @@ static void *worker(void *arg) {
 		memcpy(path, slot->path, sizeof(path));
 		int size = slot->size;
 		int share_w = slot->share_w, share_h = slot->share_h;
+		int img_w = slot->img_w, img_h = slot->img_h;
 		uint32_t generation = slot->generation;
 
 		slot->pending = false;
@@ -252,7 +258,8 @@ static void *worker(void *arg) {
 		pthread_mutex_unlock(&lock);
 
 		cover_image_t image;
-		bool found = share_w > 0 ? cover_load_shared(path, share_w, share_h, size, &image)
+		bool found = img_w > 0 ? cover_load_image_file(path, img_w, img_h, COVER_FIT_CONTAIN, &image)
+					: share_w > 0 ? cover_load_shared(path, share_w, share_h, size, &image)
 								  : cover_thumb_load(path, false, size, &image);
 
 		pthread_mutex_lock(&lock);
@@ -359,6 +366,8 @@ void coverloader_request(int slot_index, const char *path, int size) {
 	slot->size = size;
 	slot->share_w = 0;
 	slot->share_h = 0;
+	slot->img_w = 0;
+	slot->img_h = 0;
 	slot->pending = true;
 
 	pthread_cond_signal(&wakeup);
@@ -379,6 +388,33 @@ void coverloader_request_shared(int slot_index, const char *path, int size, int 
 	slot->size = size;
 	slot->share_w = player_w;
 	slot->share_h = player_h;
+	slot->img_w = 0;
+	slot->img_h = 0;
+	slot->pending = true;
+
+	pthread_cond_signal(&wakeup);
+	pthread_mutex_unlock(&lock);
+}
+
+// The Audiobookshelf detail's whole-file fit (§9.2/§9.4). Same slot
+// discipline as every other request: whatever the slot held — queued, running
+// or decoded — is abandoned and freed through the generation bump.
+void coverloader_request_image(int slot_index, const char *path, int box_w, int box_h) {
+	if (slot_index < 0 || slot_index >= COVERLOADER_SLOTS || !path || box_w <= 0 || box_h <= 0) {
+		return;
+	}
+
+	pthread_mutex_lock(&lock);
+
+	slot_t *slot = &slots[slot_index];
+	discard(slot);
+
+	snprintf(slot->path, sizeof(slot->path), "%s", path);
+	slot->size = 0;
+	slot->share_w = 0;
+	slot->share_h = 0;
+	slot->img_w = box_w;
+	slot->img_h = box_h;
 	slot->pending = true;
 
 	pthread_cond_signal(&wakeup);

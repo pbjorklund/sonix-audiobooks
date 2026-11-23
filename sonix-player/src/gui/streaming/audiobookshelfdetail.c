@@ -10,19 +10,34 @@
 #include "audiobookshelfqueue.h"
 
 #include "src/gui/fonts/fonts.h"
+#include "src/gui/library/imageview.h"
+#include "src/gui/nowplaying/coverloader.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/gui/shell/icons.h"
 #include "src/gui/shell/settingsrow.h"
+#include "src/gui/shell/spinner.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
 #include "src/system/core/lang.h"
 
 // ---------------------------------------------------------------------------
-// The §9.2 detail screen, wave 1: everything but the cover.
+// The §9.2 detail screen, wave 2: everything, including the cover.
 //
 // Presentation only. The expanded model is parsed by the engine
 // (audiobookshelf_detail(), §9.3) on the browse page's worker, which also
-// runs the local-catalog scan there; this screen holds the results between
-// an open (identity copied as values) and the unload that releases them.
+// runs the local-catalog scan there and fetches the authenticated cover into
+// the abs-cover-cache (§9.1/§9.3); this screen holds the results between an
+// open (identity copied as values) and the unload that releases them.
+//
+// The cover (wave 2, §9.1/§9.3/§9.4): the accepted completion carries a
+// local cache-file path -- no token in it, by the cache's construction. The
+// decode runs off-thread on coverloader slot 108 into a 450x640-shape
+// contain box; a tap releases the detail's own pixels FIRST and then opens
+// the full-screen viewer (imageview) on the same local file under the book's
+// title. Decode and viewer decodes therefore never overlap with retained
+// pixels: exactly one remote cover image is alive at any moment, and every
+// pixel/encoded buffer dies with the unload (release_state) or the stale
+// generation.
 //
 // Only Summary or Chapters is populated at once (§9.2): the toggle repaints
 // the content container, so the chapter pool exists only while the chapter
@@ -55,9 +70,99 @@ static char failure[256];
 static bool screen_loaded;
 static bool show_chapters;
 
+// The cover (wave 2, §9.3): the cached file, the state of its decode, and
+// the ONE retained cover image (§9.5). `cover_file` names a card file only
+// -- the hashed cache name carries no credential.
+static char cover_file[512];
+static cover_image_t cover_pixels;
+static bool cover_requested;   // decode queued on slot 108, result not collected yet
+static bool cover_unavailable; // the decode finished and could not
+static lv_obj_t *cover_widget, *cover_busy, *cover_note;
+static int cover_box_w, cover_box_h;
+static lv_timer_t *cover_timer;
+
 static void draw(void);
 
+// Lets go of the whole cover state: the decode slot (a queued, running or
+// decoded result there is stale/free in every path that gets here), the one
+// retained image, and the file name. The widget pointers ride the next
+// draw()'s rebuild.
+static void cover_release(void) {
+	cover_requested = false;
+	cover_unavailable = false;
+	coverloader_release(COVERLOADER_ABS_DETAIL);
+	cover_free(&cover_pixels); // NULL-safe: cover_free zeroes the struct
+	cover_file[0] = '\0';
+	cover_widget = cover_busy = cover_note = NULL;
+}
+
+// A new model's cover. Stale slot results and stale pixels die here first
+// (§9.3); an empty path is the §9.2 text-only detail and requests nothing.
+static void cover_accept(const char *path) {
+	cover_release();
+	snprintf(cover_file, sizeof(cover_file), "%s", path ? path : "");
+	if (!cover_file[0]) return;
+	coverloader_request_image(COVERLOADER_ABS_DETAIL, cover_file, cover_box_w, cover_box_h);
+	cover_requested = true;
+}
+
+// The decode poll: coverloader finishes off-thread, this collects. A finished
+// decode without pixels is the "Cover unavailable" state (§9.7's text-only
+// fallback shape); a found one attaches the pixels and un-hides the widget.
+static void cover_poll_cb(lv_timer_t *timer) {
+	(void)timer;
+	if (!screen_loaded || !cover_requested) return;
+
+	cover_image_t image;
+	bool finished = false;
+	bool found = coverloader_take(COVERLOADER_ABS_DETAIL, &image, &finished);
+	if (!finished) return; // still decoding; the poll is a locked no-op
+
+	cover_requested = false;
+	if (found) {
+		// The pixels moved in: the slot keeps nothing (take's contract),
+		// this screen keeps the ONE retained image.
+		cover_pixels = image;
+		cover_pixels.dsc.data = cover_pixels.pixels;
+	} else {
+		cover_unavailable = true;
+	}
+	if (cover_busy) lv_obj_set_hidden(cover_busy, true);
+	if (found && cover_widget) {
+		lv_image_set_src(cover_widget, &cover_pixels.dsc);
+		lv_obj_set_hidden(cover_widget, false);
+	} else if (!found && cover_note) {
+		lv_obj_set_hidden(cover_note, false);
+	}
+}
+
+// The tap on the cover: full-screen (§9.2 "tap for screen-fit view") of the
+// SAME local cache file. §9.3's ownership rule runs here in order: the
+// viewer's path and title are copied FIRST, the detail's pixels leave the
+// screen (source off), the slot is released and the retained image freed --
+// and only then does the viewer open, starting its own decode. One retained
+// remote cover image across the whole pair, and, because the viewer's worker
+// serializes its decodes and the detail's decode finished before the tap
+// could even aim at a picture, the two never overlap.
+static void cover_tap_cb(lv_event_t *e) {
+	(void)e;
+	if (!screen_loaded || !cover_file[0] || !cover_pixels.pixels) return;
+
+	char file[sizeof(cover_file)];
+	snprintf(file, sizeof(file), "%s", cover_file);
+	char title[ABS_NAME_MAX];
+	snprintf(title, sizeof(title), "%s", model && model->item.title[0] ? model->item.title : open_title);
+
+	if (cover_widget) lv_image_set_src(cover_widget, NULL); // no dangling src while we free
+	coverloader_release(COVERLOADER_ABS_DETAIL);
+	cover_free(&cover_pixels);
+	imageview_open_named(file, title);
+	// The screen switch above unloads this screen (and so releases
+	// everything else); nothing else may run after the viewer opens.
+}
+
 static void release_state(void) {
+	cover_release();
 	audiobookshelf_detail_free(model);
 	model = NULL;
 	local = ABS_DETAIL_LOCAL_NONE;
@@ -292,6 +397,49 @@ static void draw_chapters(void) {
 	abs_list_set_count(list, model->chapter_count + (model->chapters_overflow ? 1 : 0));
 }
 
+// The cover block (§9.2, between the summary|chapters content and the
+// actions): a card the shape of the §9.5 contain view, showing either the
+// decoded picture (tappable), the spinner while the decode runs, or the
+// "Cover unavailable" row. No block at all when the §9.2 detail is
+// text-only: the cover was never fetched, failed to fetch, or the item has
+// none on the server.
+static void draw_cover_block(void) {
+	cover_widget = cover_busy = cover_note = NULL;
+	if (!cover_file[0]) return;
+
+	lv_obj_t *box = lv_obj_create(content);
+	lv_obj_set_size(box, cover_box_w, cover_box_h);
+	lv_obj_set_style_pad_all(box, 0, 0);
+	lv_obj_add_style(box, &theme_style_card, 0);
+	lv_obj_set_style_border_width(box, 0, 0);
+	lv_obj_set_style_shadow_width(box, 0, 0);
+	lv_obj_set_style_radius(box, 12, 0);
+	lv_obj_set_scrollable(box, false);
+	// A tap aims at the whole card once a picture is in it; while the decode
+	// runs the callback guards itself closed.
+	lv_obj_add_event_cb(box, cover_tap_cb, LV_EVENT_CLICKED, NULL);
+
+	if (cover_requested && !cover_pixels.pixels) {
+		cover_busy = spinner_create(box, &icon_loader_big);
+		lv_obj_center(cover_busy);
+	} else if (cover_unavailable) {
+		cover_note = lv_label_create(box);
+		lv_label_set_text(cover_note, tr("audiobookshelf_detail_cover_unavailable"));
+		lv_label_set_long_mode(cover_note, LV_LABEL_LONG_WRAP);
+		lv_obj_set_width(cover_note, lv_pct(90));
+		lv_obj_set_style_text_align(cover_note, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_add_style(cover_note, &theme_style_text_dim, 0);
+		lv_obj_set_style_text_font(cover_note, &font_ui_20, 0);
+		lv_obj_center(cover_note);
+	}
+
+	if (cover_pixels.pixels) {
+		cover_widget = lv_image_create(box);
+		lv_image_set_src(cover_widget, &cover_pixels.dsc);
+		lv_obj_center(cover_widget);
+	}
+}
+
 static void draw(void) {
 	lv_obj_clean(content);
 
@@ -330,6 +478,7 @@ static void draw(void) {
 	pills_row();
 	if (show_chapters) draw_chapters();
 	else draw_summary();
+	draw_cover_block();
 	draw_actions();
 }
 
@@ -355,6 +504,14 @@ static void unloaded_cb(lv_event_t *e) {
 
 void audiobookshelfdetail_init(gui_config_t *cfg, const audiobookshelfdetail_delegate_t *delegate) {
 	if (delegate) actions = *delegate;
+	// The §9.5 contain shape: the screen's content width, at the 450:640
+	// shape the cover view is fitted to, clamped to the screen the fit runs
+	// in (a small display shows a smaller picture, not an oversized box).
+	cover_box_w = cfg->screen_width - 2 * cfg->padding;
+	cover_box_h = cover_box_w * 640 / 450;
+	int cover_max_h = cfg->screen_height - settingsrow_content_top(cfg) - 2 * cfg->padding;
+	if (cover_box_h > cover_max_h) cover_box_h = cover_max_h;
+	cover_timer = lv_timer_create(cover_poll_cb, 100, NULL);
 	detail_screen = lv_obj_create(NULL);
 	lv_obj_add_style(detail_screen, &theme_style_screen, 0);
 	content = settingsrow_page(detail_screen, cfg, "audiobookshelf_detail");
@@ -418,6 +575,9 @@ bool audiobookshelfdetail_receive(const audiobookshelfdetail_receive_t *in) {
 	snprintf(local_path, sizeof(local_path), "%s", in->local_path ? in->local_path : "");
 	if (!in->detail) {
 		audiobookshelf_detail_free(in->detail); // NULL-safe by contract
+		// §9.2: a fetch failure is the text-only detail; nothing from the
+		// previous state (cover included) rides on under the error.
+		cover_accept(NULL);
 		snprintf(failure, sizeof(failure), "%s",
 				 in->error && in->error[0] ? in->error : tr("audiobookshelf_detail_failed"));
 		draw();
@@ -425,6 +585,9 @@ bool audiobookshelfdetail_receive(const audiobookshelfdetail_receive_t *in) {
 	}
 	model = in->detail;
 	failure[0] = '\0';
+	// §9.1 wave 2: accept the cached cover file and start its off-thread
+	// decode (§9.4's slot 108). Stale pixels die inside cover_accept.
+	cover_accept(in->cover_path);
 	draw();
 	return true;
 }

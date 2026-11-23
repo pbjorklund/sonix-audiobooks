@@ -28,6 +28,7 @@
 #include "src/system/library/audiobookdb.h"
 #include "src/system/net/wifi.h"
 #include "src/system/playback/audiobook.h"
+#include "src/system/streaming/abs_cover.h"
 #include "src/system/streaming/abs_download.h"
 #include "src/system/streaming/abs_profiles.h"
 #include "src/system/streaming/audiobookshelf.h"
@@ -169,6 +170,11 @@ typedef struct {
 	audiobookshelf_detail_t *payload;
 	abs_detail_local_t local;
 	char local_path[1280];
+	// §9.1 wave 2: the cached authenticated cover file for the accepted
+	// model, empty when the cover could not be fetched (§9.2: the detail
+	// stays text-only; the metadata job is not failed by it). A path only --
+	// the hashed cache name carries no credential by construction (§9.3).
+	char cover_path[1280];
 } job_result_t;
 static job_result_t result;
 
@@ -1312,11 +1318,13 @@ static void job_done_async(void *user) {
 		// §9.3: the model's ownership moves here, once, on the GUI thread.
 		// The detail module keeps it only while its screen stays loaded; the
 		// page records the worker's local-match outcome for its actions
-		// (Play/Link/Queue) when it was accepted.
+		// (Play/Link/Queue) when it was accepted. The cover path rides along
+		// (§9.1 wave 2): empty means text-only.
 		audiobookshelfdetail_receive_t deliver = {
 			.detail = done.payload,
 			.local = done.local,
 			.local_path = done.local_path,
+			.cover_path = done.cover_path,
 		};
 		if (audiobookshelfdetail_receive(&deliver)) {
 			snprintf(selected_local_book, sizeof(selected_local_book), "%s", done.local_path);
@@ -1467,6 +1475,27 @@ static void *worker_main(void *user) {
 						done.local = ABS_DETAIL_LOCAL_LINK;
 					}
 					snprintf(done.local_path, sizeof(done.local_path), "%s", local);
+				}
+				// §9.1/§9.3 wave 2: the authenticated cover, fetched by this
+				// same job under the browsing identity's pinned snapshot so
+				// its origin is exactly the one the expanded model came
+				// from. Best-effort by §9.2: any cover failure (unconfigured
+				// snapshot, network, oversize, a full or closed card) leaves
+				// the text-only detail and never touches done.ok/.payload.
+				// The decode happens later, GUI-side, from this local file.
+				abs_auth_snapshot_t cover_auth;
+				if (audiobookshelf_browse_credentials(&cover_auth)) {
+					char cover_error[256] = "";
+					if (!abs_cover_fetch(&cover_auth, job.id, NULL, done.cover_path,
+										 sizeof(done.cover_path), cover_error, sizeof(cover_error))) {
+						done.cover_path[0] = '\0';
+						// One worker log line for diagnosability; the reason
+						// is sanitized (no URL, no token) and stays off the
+						// screen -- the §9.2 cover state is text-only, not an
+						// error popup.
+						if (cover_error[0]) printf("abs-cover: %s\n", cover_error);
+					}
+					abs_profiles_snapshot_wipe(&cover_auth);
 				}
 				done.payload = detail;
 				done.ok = true;

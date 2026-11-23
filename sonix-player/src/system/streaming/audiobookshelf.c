@@ -2756,6 +2756,34 @@ void audiobookshelf_queue_auth_forget(abs_auth_snapshot_t *snapshot) {
 	abs_profiles_snapshot_wipe(snapshot); // volatile sink keeps the pass alive
 }
 
+// §9.1/§11.3: the browsing identity as a one-operation credential snapshot --
+// the exact copy api_request() resolves for its own requests (the active
+// profile's complete pair, or the 0.5.0 pair while the profile store provides
+// nothing). The detail cover fetch pins this snapshot so its bytes travel the
+// same origin the expanded-model request just authenticated against. Tokens
+// never leave the engine except inside such a snapshot, wiped by the caller
+// when its one operation is over.
+bool audiobookshelf_browse_credentials(abs_auth_snapshot_t *out) {
+	if (!out) return false;
+	memset(out, 0, sizeof(*out));
+
+	char server[ABS_SERVER_MAX], token[ABS_TOKEN_MAX];
+	if (!request_credentials_copy(NULL, server, sizeof(server), token, sizeof(token))) {
+		memset(token, 0, sizeof(token));
+		set_error("Audiobookshelf is not configured.");
+		return false;
+	}
+	snprintf(out->server, sizeof(out->server), "%s", server);
+	snprintf(out->token, sizeof(out->token), "%s", token);
+	memset(token, 0, sizeof(token));
+	memset(server, 0, sizeof(server));
+	// The profile id rides along for symmetry with the queue's snapshots (and
+	// stays empty with them for the §11.1 migration window; the cover fetch
+	// itself reads only the server+token pair).
+	if (!abs_profiles_active(out->profile_id, sizeof(out->profile_id))) out->profile_id[0] = '\0';
+	return true;
+}
+
 static bool abs_queue_auth_acquire(void *user, const char *profile_id, const char *server,
 								   abs_auth_snapshot_t *out) {
 	(void)user;

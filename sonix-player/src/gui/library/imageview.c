@@ -23,7 +23,42 @@ static lv_obj_t *failed; // the file is not a picture this player can decode
 static int box_w, box_h;
 
 static cover_image_t shown; // what `picture` draws
-static unsigned generation; // a decode for a picture no longer wanted is thrown away
+
+// ---------------------------------------------------------------------------
+// The decode thread.
+//
+// Decoding a photograph takes fractions of a second to seconds, so it never
+// happens on the interface thread -- but until 0.6.0 every open spawned a
+// detached thread of its own, so two quick opens had two decodes running at
+// once, each paying the full read-and-decode cost of the §9.5 budget. The
+// screen that cares (Audiobookshelf: detail, then full-screen of the same
+// cover, then back) now shares ONE worker thread instead:
+//
+//   * a request while a decode runs only replaces the queued path -- the
+//     worker never starts a second decode before the one in flight is
+//     finished, so image-view decodes are serial by construction;
+//   * `generation` is bumped by every open and every unload, and a decode
+//     that finishes for a picture nobody waits for any more has its pixels
+//     freed on the spot rather than shown;
+//   * when the Audiobookshelf detail opens its full-screen view it has
+//     already freed its own (slot's) decoded pixels, so at most one
+//     retained cover image is alive at a time (§9.3).
+//
+// No URL networking on this page: the callers hand over a local path, and
+// whatever bytes the file holds were already fetched and size-capped where
+// they came from.
+// ---------------------------------------------------------------------------
+
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
+static bool worker_started;
+
+// The queued request: newest wins, nothing starts before the previous decode
+// ends. Guarded by `lock`.
+static char next_path[1024];
+static bool have_next;
+
+static unsigned generation; // bumped by every open and every unload
 
 typedef struct {
 	unsigned generation;
@@ -41,6 +76,7 @@ static void drop_picture(void) {
 static void decoded(void *user) {
 	decode_job_t *job = user;
 	if (job->generation != generation) {
+		// The page moved on while the decode ran: nobody wants the pixels.
 		cover_free(&job->image);
 		free(job);
 		return;
@@ -58,48 +94,110 @@ static void decoded(void *user) {
 	free(job);
 }
 
+// One persistent worker. It takes the queued path only when idle, so the
+// "prior decode finished" half of the §9.4 quiescence rule holds without the
+// interface thread ever waiting for a decode.
 static void *decode_worker(void *arg) {
-	decode_job_t *job = arg;
-	job->ok = cover_load_image_file(job->path, job->w, job->h, COVER_FIT_CONTAIN, &job->image);
-	if (!gui_post(decoded, job)) {
-		cover_free(&job->image);
-		free(job);
+	(void)arg;
+	for (;;) {
+		pthread_mutex_lock(&lock);
+		while (!have_next) {
+			pthread_cond_wait(&wake, &lock);
+		}
+		decode_job_t *job = calloc(1, sizeof(*job));
+		if (!job) {
+			// The request cannot be served; drop it rather than spinning on
+			// it. The page keeps its spinner until the next open.
+			have_next = false;
+			pthread_mutex_unlock(&lock);
+			continue;
+		}
+		memcpy(job->path, next_path, sizeof(job->path));
+		job->w = box_w;
+		job->h = box_h;
+		job->generation = generation;
+		have_next = false;
+		pthread_mutex_unlock(&lock);
+
+		job->ok = cover_load_image_file(job->path, job->w, job->h, COVER_FIT_CONTAIN, &job->image);
+
+		if (!gui_post(decoded, job)) {
+			// The interface is gone: the pixels die with the post failure.
+			cover_free(&job->image);
+			free(job);
+		}
 	}
 	return NULL;
 }
 
-void imageview_open(const char *path) {
+static bool worker_start(void) {
+	pthread_mutex_lock(&lock);
+	if (worker_started) {
+		pthread_mutex_unlock(&lock);
+		return true;
+	}
+	worker_started = true;
+	pthread_mutex_unlock(&lock);
+
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, decode_worker, NULL) != 0) {
+		pthread_mutex_lock(&lock);
+		worker_started = false;
+		pthread_mutex_unlock(&lock);
+		return false;
+	}
+	pthread_detach(thread);
+	return true;
+}
+
+void imageview_open_named(const char *path, const char *title) {
+	if (!path || !path[0]) return;
+
+	// §9.4 quiescence, the "newer wins" half: whatever was queued is
+	// replaced, and the generation bump frees the result of any decode the
+	// previous open still has in flight -- and the single worker never starts
+	// a second decode before the one in flight is finished, so this page's
+	// decodes are serial by construction.
+	bool started = worker_start();
+	pthread_mutex_lock(&lock);
 	generation++;
+	snprintf(next_path, sizeof(next_path), "%s", path);
+	have_next = started;
+	pthread_cond_signal(&wake);
+	pthread_mutex_unlock(&lock);
+
 	drop_picture();
 	lv_obj_set_hidden(picture, true);
 	lv_obj_set_hidden(failed, true);
-	lv_obj_set_hidden(busy, false);
+	// The page is up with the spinner until the decode lands in decoded();
+	// without a worker thread the decode cannot even start (the "unreadable"
+	// note takes its place).
+	lv_obj_set_hidden(busy, !started);
 
-	const char *slash = strrchr(path, '/');
-	lv_label_set_text(title_label, slash ? slash + 1 : path);
+	if (title && title[0]) {
+		lv_label_set_text(title_label, title);
+	} else {
+		const char *slash = strrchr(path, '/');
+		lv_label_set_text(title_label, slash ? slash + 1 : path);
+	}
 	switch_screen(imageview_screen);
+}
 
-	decode_job_t *job = calloc(1, sizeof(*job));
-	if (!job) {
-		return;
-	}
-	job->generation = generation;
-	job->w = box_w;
-	job->h = box_h;
-	snprintf(job->path, sizeof(job->path), "%s", path);
-	pthread_t thread;
-	if (pthread_create(&thread, NULL, decode_worker, job) != 0) {
-		free(job);
-		return;
-	}
-	pthread_detach(thread);
+void imageview_open(const char *path) {
+	imageview_open_named(path, NULL);
 }
 
 // Leaving the page lets the picture go: a photo the size of the screen is the
-// better part of a megabyte, and nothing else needs it.
+// better part of a megabyte, and nothing else needs it. An in-flight decode
+// is invalidated through the generation bump -- its pixels are freed when it
+// posts. A queued-but-not-started decode is dropped here, so leaving the page
+// cannot leave a decode running only to free it moments later.
 static void unloaded_cb(lv_event_t *e) {
 	(void)e;
+	pthread_mutex_lock(&lock);
 	generation++;
+	have_next = false;
+	pthread_mutex_unlock(&lock);
 	drop_picture();
 }
 

@@ -168,6 +168,30 @@ audiobookshelf_detail_t *audiobookshelf_detail(const char *item_id);
 // Releases the chapters and the object. NULL is allowed.
 void audiobookshelf_detail_free(audiobookshelf_detail_t *detail);
 
+// ---------------------------------------------------------------------------
+// §9.1 wave 2, the authenticated cover. The detail cover is fetched by the
+// same worker job that parsed the expanded model, under a credential snapshot
+// resolved HERE first:
+//
+//   audiobookshelf_browse_credentials()
+//       the browsing identity as a one-operation snapshot (§11.3): the exact
+//       credential pair api_request() resolves -- the active profile's
+//       server+token, or the 0.5.0 pair in the migration window. Tokens exist
+//       only inside snapshots; wipe it (abs_profiles_snapshot_wipe) after the
+//       one operation.
+//
+//   abs_cover_fetch()                       -- abs_cover.h
+//       streams GET /api/items/{itemId}/cover?format=jpeg&width=900&height=1280
+//       from the snapshot's own server into <card>/.local/abs-cover-cache/
+//       <server-hash>-<item-hash>.jpg (same-origin by construction, 2 MiB
+//       encoded cap, .part + checked close + atomic rename), then applies the
+//       §9.3 LRU ceilings of eight files / 16 MiB.
+//
+// Any cover failure is the §9.2 text-only detail; it never fails the jobs
+// whose metadata already succeeded.
+// ---------------------------------------------------------------------------
+bool audiobookshelf_browse_credentials(abs_auth_snapshot_t *out);
+
 // Reads the saved server address and bearer token. Call after config_init().
 void audiobookshelf_init(void);
 

@@ -36,6 +36,7 @@
 #include "src/system/input/hookclicks.h"
 #include "src/system/input/keymap.h"
 #include "src/system/core/panel.h"
+#include "src/system/streaming/abs_cover.h"
 #include "src/system/streaming/abs_download.h"
 #include "src/system/streaming/audiobookshelf.h"
 #include "src/system/streaming/qobuzcache.h"
@@ -825,6 +826,10 @@ static void card_databases_detach(void) {
 	// snapshot from before the removal can survive the cycle.
 	abs_download_quiesce_storage();
 
+	// §8.5, §9.3: the cover cache refuses new work beside the queue -- the
+	// card's .local tree is going away under every in-flight or fresh fetch.
+	abs_cover_quiesce();
+
 	podcaststate_set_root(NULL);
 
 	logging_suspend_for_usb(); // closes the on-card log file
@@ -889,6 +894,7 @@ static void card_databases_attach(const char *root) {
 	podcastcache_set_root(root);
 	podcastsubs_set_root(root);
 	podcaststate_set_root(root);
+	abs_cover_set_root(root); // §9.3: the cover cache reattaches with the card
 	dlna_set_root(root);
 	gbdb_set_root(root);
 

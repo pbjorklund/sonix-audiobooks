@@ -82,11 +82,21 @@ bool audiobookshelfdetail_identity(char *profile_id, size_t profile_size,
 // this screen is loaded; a completion that arrives after the user left is
 // freed on the spot (a return re-fetches). Returns true when a model was
 // accepted -- the caller then records the local match for its actions.
+//
+// `cover_path`, wave 2 (§9.1/§9.3): the cached authenticated cover file, a
+// local hashed-name path with no credential in it. Empty means the §9.2
+// text-only detail (no cover on the server, or the fetch failed); present
+// means the screen decodes it off-thread (coverloader slot 108) into its
+// 450x640-shape view, and a tap opens the full-screen viewer on the same
+// file. Only ONE remote cover image stays retained across either of those,
+// and every pixel dies with the screen unload or the generation it went
+// stale in.
 typedef struct {
 	audiobookshelf_detail_t *detail; // NULL with `error` on failure
 	const char *error;               // sanitized English, never a URL/token
 	abs_detail_local_t local;
 	const char *local_path;          // unique local copy, when one matched
+	const char *cover_path;          // cached cover file, NULL/empty = text-only
 } audiobookshelfdetail_receive_t;
 
 bool audiobookshelfdetail_receive(const audiobookshelfdetail_receive_t *in);
