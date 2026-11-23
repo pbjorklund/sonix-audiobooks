@@ -2,6 +2,10 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 0.6.2 - 2026-11-23
+
+- **Book detail cover:** The book cover now renders at the top of the detail page (it was previously placed below the fold and could render as a blank card until a later redraw). Fixed the cover decode completing without a repaint.
+
 ## Sonix Audiobooks 0.6.1 - 2026-11-23
 
 - **Hat Blue Theme:** New iOS-inspired dark theme with royal-blue `#135EDB` accents on near-black `#08090C` screens and `#191B21` cards. Menu tiles are now flat with 22px rounded corners.
