@@ -44,6 +44,13 @@ static char bearer_token[1024];
 static pthread_mutex_t credentials_lock = PTHREAD_MUTEX_INITIALIZER;
 static __thread char last_error[256];
 
+// §8.3: one large-JSON catalog fetch at a time. The detail page (and its
+// download/link callers) and the download queue's expanded identity fetch are
+// guarded by this mutex, so two 3 MB-class response bodies can never be
+// buffered at once and double the transient envelope. Queue progress GET/PATCH
+// never waits for it, and audio transfer never holds it (§8.3).
+static pthread_mutex_t abs_catalog_lock = PTHREAD_MUTEX_INITIALIZER;
+
 #define ABS_PROGRESS_PATH_MAX 1280
 
 typedef struct {
@@ -279,23 +286,15 @@ static void error_from_response(int status, const char *body) {
 	set_error(message);
 }
 
-// One URL join + Bearer + buffered request (§11.3). `expected_server`, when
-// given, is the manifest's bound server: the immutable snapshot comparison of
-// the old global-race check. Credentials always come from
-// request_credentials_copy(), which re-reads the owning profile under the
-// store lock immediately before the request.
-static bool api_request(const char *path, const http_req_t *request, char **body, int *status_out,
-						const char *expected_server) {
+// One URL join + Bearer + buffered request (§11.3). `server`/`token` are the
+// exact credential copies the caller resolved (the queue's §8.1 attempt
+// snapshot, or api_request()'s own resolution below); never the mutable
+// globals mid-request. `server` is the identity the URL is joined against.
+static bool api_request_with(const char *server, const char *token, const char *path,
+							 const http_req_t *request, char **body, int timeout_secs, int *status_out) {
 	char url[ABS_URL_MAX];
-	char server[ABS_SERVER_MAX], token[ABS_TOKEN_MAX];
-	if (!request_credentials_copy(expected_server, server, sizeof(server), token, sizeof(token)) ||
-		(expected_server && strcmp(server, expected_server) != 0)) {
-		memset(token, 0, sizeof(token));
-		set_error("Audiobookshelf settings changed; checkpoint retained.");
-		return false;
-	}
-	if (!path || (size_t)snprintf(url, sizeof(url), "%s%s", server, path) >= sizeof(url)) {
-		memset(token, 0, sizeof(token));
+	if (!server || !server[0] ||
+		!path || (size_t)snprintf(url, sizeof(url), "%s%s", server, path) >= sizeof(url)) {
 		// Bounded APIs (§10.3) refuse over-long queries before asking the
 		// network; here the joined URL itself is over the ABS_URL_MAX ceiling.
 		set_error("The request is too long for this server address.");
@@ -303,14 +302,12 @@ static bool api_request(const char *path, const http_req_t *request, char **body
 	}
 	char headers[ABS_TOKEN_MAX + 32];
 	snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", token);
-	memset(token, 0, sizeof(token));
 	http_req_t req = request ? *request : (http_req_t){0};
 	req.extra_headers = headers;
 	req.want_error_body = true;
 
 	int status = 0;
-	bool received = http_request(url, &req, body, NULL, ABS_BODY_LIMIT,
-								 expected_server ? 10 : ABS_TIMEOUT_SECS, &status);
+	bool received = http_request(url, &req, body, NULL, ABS_BODY_LIMIT, timeout_secs, &status);
 	if (!received || status < 200 || status >= 300) {
 		const char *why = http_last_error();
 		if (status >= 400) error_from_response(status, body && *body ? *body : NULL);
@@ -321,6 +318,26 @@ static bool api_request(const char *path, const http_req_t *request, char **body
 	if (status_out) *status_out = status;
 	set_error("");
 	return true;
+}
+
+// One URL join + Bearer + buffered request (§11.3). `expected_server`, when
+// given, is the manifest's bound server: the immutable snapshot comparison of
+// the old global-race check. Credentials always come from
+// request_credentials_copy(), which re-reads the owning profile under the
+// store lock immediately before the request.
+static bool api_request(const char *path, const http_req_t *request, char **body, int *status_out,
+						const char *expected_server) {
+	char server[ABS_SERVER_MAX], token[ABS_TOKEN_MAX];
+	if (!request_credentials_copy(expected_server, server, sizeof(server), token, sizeof(token)) ||
+		(expected_server && strcmp(server, expected_server) != 0)) {
+		memset(token, 0, sizeof(token));
+		set_error("Audiobookshelf settings changed; checkpoint retained.");
+		return false;
+	}
+	bool ok = api_request_with(server, token, path, request, body, expected_server ? 10 : ABS_TIMEOUT_SECS,
+							   status_out);
+	memset(token, 0, sizeof(token));
+	return ok;
 }
 
 static bool update_progress(const char *item_id, double current, double duration, bool finished,
@@ -1304,21 +1321,17 @@ int audiobookshelf_search_ex(const char *library_id, const char *query, audioboo
 	return written;
 }
 
-bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out) {
-	if (!item_id || !item_id[0] || !out) return false;
-	memset(out, 0, sizeof(*out));
-	char id[ABS_ID_MAX * 3];
-	http_url_encode(item_id, id, sizeof(id));
-	char path[384];
-	snprintf(path, sizeof(path), "/api/items/%s?expanded=1&include=progress,authors", id);
-	char *body = NULL;
-	if (!api_request(path, NULL, &body, NULL, NULL)) {
-		free(body);
-		return false;
-	}
+// One expanded server item into the caller's book: item identity, first
+// author/series, description, first-progress stamp and the full track list.
+//
+// `reject_overflow` selects the queue rule (§8.2 step 2): more than
+// ABS_TRACK_MAX tracks is an explicit unsupported error — never the silent
+// display truncation the legacy detail page keeps (its caller needs bounded
+// data, not a refusal). One parser, so the two readings can never disagree
+// about a field.
+static bool abs_parse_expanded(const char *body, bool reject_overflow, audiobookshelf_book_t *out) {
 	json_doc_t doc;
 	if (!json_parse(body, &doc)) {
-		free(body);
 		set_error("Audiobookshelf returned invalid book details.");
 		return false;
 	}
@@ -1327,12 +1340,18 @@ bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out) {
 	int media = json_get(&doc, root, "media");
 	int metadata = json_get(&doc, media, "metadata");
 	json_obj_str(&doc, metadata, "description", out->description, sizeof(out->description));
-	first_series(&doc, metadata, out->item.series, sizeof(out->item.series), out->series_part, sizeof(out->series_part));
+	first_series(&doc, metadata, out->item.series, sizeof(out->item.series), out->series_part,
+				 sizeof(out->series_part));
 	int progress = json_get(&doc, root, "userMediaProgress");
 	out->progress_updated_ms = json_obj_llong(&doc, progress, "lastUpdate", 0);
 
 	int tracks = json_get(&doc, media, "tracks");
 	int count = json_len(&doc, tracks);
+	if (reject_overflow && count > ABS_TRACK_MAX) {
+		json_free(&doc);
+		set_error("This item has more than 256 files; the queue does not support it yet");
+		return false;
+	}
 	if (count > ABS_TRACK_MAX) count = ABS_TRACK_MAX;
 	for (int i = 0; i < count; i++) {
 		int object = json_at(&doc, tracks, i);
@@ -1343,7 +1362,11 @@ bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out) {
 		json_obj_str(&doc, object, "title", track->title, sizeof(track->title));
 		json_obj_str(&doc, object, "contentUrl", track->content_url, sizeof(track->content_url));
 		json_obj_str(&doc, object, "mimeType", track->mime, sizeof(track->mime));
-		json_obj_str(&doc, json_get(&doc, object, "metadata"), "filename", track->filename, sizeof(track->filename));
+		json_obj_str(&doc, json_get(&doc, object, "metadata"), "filename", track->filename,
+					 sizeof(track->filename));
+		// The server's exact byte size when it states one; -1 keeps an absent
+		// field "unknown" for the queue's expected_size records.
+		track->size = json_obj_llong(&doc, json_get(&doc, object, "metadata"), "size", -1);
 		if (!track->filename[0]) {
 			size_t title_len = strnlen(track->title, sizeof(track->title));
 			if (title_len >= sizeof(track->filename)) title_len = sizeof(track->filename) - 1;
@@ -1354,12 +1377,32 @@ bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out) {
 	out->track_count = count;
 	out->item.tracks = count;
 	json_free(&doc);
-	free(body);
 	if (count == 0) {
 		set_error("This Audiobookshelf item has no downloadable audio tracks.");
 		return false;
 	}
 	return true;
+}
+
+bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out) {
+	if (!item_id || !item_id[0] || !out) return false;
+	memset(out, 0, sizeof(*out));
+	char id[ABS_ID_MAX * 3];
+	http_url_encode(item_id, id, sizeof(id));
+	char path[384];
+	snprintf(path, sizeof(path), "/api/items/%s?expanded=1&include=progress,authors", id);
+	// §8.3: one large-JSON catalog fetch at a time. The detail page and the
+	// queue's identity fetch share this mutex, so two 3 MB-class bodies can
+	// never be buffered at once and double the transient envelope.
+	pthread_mutex_lock(&abs_catalog_lock);
+	char *body = NULL;
+	bool fetched = api_request(path, NULL, &body, NULL, NULL);
+	if (fetched) {
+		fetched = abs_parse_expanded(body, false, out);
+	}
+	pthread_mutex_unlock(&abs_catalog_lock);
+	free(body);
+	return fetched;
 }
 
 // ---------------------------------------------------------------------------
@@ -2189,4 +2232,705 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 	audiobookdb_abs_reset(folder);
 	set_error("");
 	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The download queue's real media surface (§8.2 steps 1–4, §8.5 split)
+//
+// One active job at a time (§8.1): the resolved auth snapshot, the expanded
+// book and the computed destination below are module state valid for the
+// active job's attempt. The queue worker runs exactly one op at a time and
+// never from the LVGL thread, so these statics — like the progress worker's
+// own state — need no extra lock; every entry point asserts the attempt it
+// belongs to before touching anything. The expanded book is held only while
+// its job is the active one and dies with the attempt snapshot (§8.2
+// steps 2, 8: freed before the next job starts).
+//
+// Cancel/pause reach every op through ctx->cancel (§8.1): the transfer polls
+// it between read units and the identity fetch polls it while waiting for the
+// shared catalog mutex. Finalize and the acknowledgement reset are the §8.2
+// steps 5–8 wave: they report explicit "not wired yet" refusals so a queue
+// driven with this adapter fails FINALIZING honestly instead of faking a
+// commit.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+	long long job_id;                 // re-armed by the identity fetch
+	char server[ABS_SERVER_MAX];      // normalized job server identity
+	char destination[ABS_DL_DEST_MAX]; // card-relative, computed at fetch
+	abs_auth_snapshot_t auth;         // the attempt's own snapshot (§8.1)
+	audiobookshelf_book_t book;       // §8.2 step 2: held for the active job
+	bool held;                        // auth+server valid between attempt steps
+} abs_queue_media_t;
+
+static abs_queue_media_t queue_media;
+// Plan scratch: strings the plan points at must live until the queue ingests
+// it (plan_ingest copies them into DOWNLOAD_FILE rows) — the next op for this
+// job is the only thing allowed to overwrite them.
+static abs_download_file_req_t queue_plan_files[ABS_TRACK_MAX];
+static char queue_plan_urls[ABS_TRACK_MAX][ABS_DL_URL_MAX];
+static char queue_plan_names[ABS_TRACK_MAX][ABS_DL_NAME_MAX];
+
+// Progress rows are polled at >=4 Hz (§8.1); one publish per 64 KiB keeps the
+// mutex traffic bounded without stretching the visible bar.
+#define ABS_QUEUE_PROGRESS_COALESCE_BYTES (long long)(64 * 1024)
+// Bounded bound of the cancellable wait for the shared catalog mutex: longer
+// than any single catalog fetch can legally take (§8.3 serializes two of
+// them), so a wedged holder cannot stall the worker forever.
+#define ABS_QUEUE_CATALOG_WAIT_SECS 60
+
+static void abs_queue_fail(const char **stage_out, char *error, size_t error_size,
+						   const char *stage, const char *message) {
+	*stage_out = stage;
+	snprintf(error, error_size, "%s", message);
+}
+
+// Cancellable wait for the shared large-catalog mutex (§8.3): the queue must
+// not lose a pause behind a detail page. `false` when the cancel flag rose or
+// the bounded window ran out (a wedged holder cannot stall a job forever).
+static bool abs_catalog_lock_wait(const volatile int *cancel) {
+	struct timespec pause = {0, 20 * 1000 * 1000}; // 20 ms
+	time_t deadline = time(NULL) + ABS_QUEUE_CATALOG_WAIT_SECS;
+	for (;;) {
+		if (pthread_mutex_trylock(&abs_catalog_lock) == 0) return true;
+		nanosleep(&pause, NULL);
+		if (cancel && *cancel) return false;
+		if (time(NULL) >= deadline) return false;
+	}
+}
+
+bool audiobookshelf_queue_auth_resolve(const char *profile_id, const char *server,
+									   abs_auth_snapshot_t *out, char *error, size_t error_size) {
+#define RESOLVE_FAIL(message)                                                                   \
+	do {                                                                                        \
+		if (error && error_size) snprintf(error, error_size, "%s", message);                    \
+		abs_profiles_snapshot_wipe(out);                                                        \
+		return false;                                                                           \
+	} while (0)
+
+	if (error && error_size) error[0] = '\0';
+	if (!out) return false;
+	memset(out, 0, sizeof(*out));
+	if (!server || !server[0]) {
+		RESOLVE_FAIL("The download job has no server address to authenticate against.");
+	}
+	char expected[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(server, expected, sizeof(expected));
+	if (!expected[0]) {
+		RESOLVE_FAIL("The download job has no usable server address.");
+	}
+	// §11.4: a row's own profile owns its token — the active one is only the
+	// fallback for rows that carry no profile id (the migration window), and
+	// even then only after the same-server check below. The snapshot is read
+	// under the store lock, so the latest token wins every attempt (§8.1).
+	bool resolved = false;
+	if (profile_id && profile_id[0]) {
+		resolved = abs_profiles_snapshot(profile_id, out);
+		if (!resolved) {
+			RESOLVE_FAIL("Could not resolve the download's login profile.");
+		}
+	} else {
+		resolved = abs_profiles_snapshot_active(out);
+		if (!resolved) {
+			RESOLVE_FAIL("Could not resolve the login profile for the download.");
+		}
+	}
+	if (!out->token[0]) {
+		RESOLVE_FAIL("Profile token for the audiobook server isn't set");
+	}
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(out->server, normalized, sizeof(normalized));
+	if (!normalized[0] || strcmp(normalized, expected) != 0) {
+		// A snapshot whose server drifted (or another profile's server
+		// entirely) is never adopted: another server's token must not leak
+		// into this job, whichever profile it came from.
+		RESOLVE_FAIL("This download's server does not match the profile's server.");
+	}
+	return true;
+#undef RESOLVE_FAIL
+}
+
+void audiobookshelf_queue_auth_forget(abs_auth_snapshot_t *snapshot) {
+	// §8.1: the snapshot never outlives one attempt; §8.2 step 8 releases the
+	// expanded book with it. The scratch plan dies here too: its strings were
+	// ingested (or are useless with the attempt gone).
+	queue_media.job_id = 0;
+	queue_media.server[0] = '\0';
+	queue_media.destination[0] = '\0';
+	memset(&queue_media.auth, 0, sizeof(queue_media.auth));
+	memset(&queue_media.book, 0, sizeof(queue_media.book));
+	memset(queue_plan_files, 0, sizeof(queue_plan_files));
+	memset(queue_plan_urls, 0, sizeof(queue_plan_urls));
+	memset(queue_plan_names, 0, sizeof(queue_plan_names));
+	queue_media.held = false;
+	abs_profiles_snapshot_wipe(snapshot); // volatile sink keeps the pass alive
+}
+
+static bool abs_queue_auth_acquire(void *user, const char *profile_id, const char *server,
+								   abs_auth_snapshot_t *out) {
+	(void)user;
+	if (out) {
+		memset(out, 0, sizeof(*out));
+	}
+	if (!server || !server[0]) {
+		return false;
+	}
+	char error[256];
+	if (!audiobookshelf_queue_auth_resolve(profile_id, server, out, error, sizeof(error))) {
+		// The queue records its own stage-auth message; the resolver's reason
+		// is for direct drivers and would only duplicate it in a row.
+		return false;
+	}
+	// The attempt's working copy: identity fetch and transfers use this, and
+	// auth_release wipes the whole state when the attempt ends. The server is
+	// re-normalized exactly like audiobookshelf_download() does (scratch first:
+	// the normalizer clears its output), so the destination hash and every
+	// origin comparison spell one string (§11.5).
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(server, normalized, sizeof(normalized));
+	if (!normalized[0]) {
+		return false;
+	}
+	memset(&queue_media, 0, sizeof(queue_media)); // a fresh attempt's state
+	snprintf(queue_media.server, sizeof(queue_media.server), "%s", normalized);
+	queue_media.auth = *out;
+	queue_media.held = true;
+	return true;
+}
+
+static void abs_queue_auth_release(void *user, abs_auth_snapshot_t *snapshot) {
+	(void)user;
+	audiobookshelf_queue_auth_forget(snapshot);
+}
+
+// The attempt the op belongs to: the state must be held, name the same server
+// the job does, and (from the fetch on) the same job id the context carries.
+// A miss is a caller bug -- the real queue cannot produce one -- and stage
+// "metadata" is the honest permanent refusal, never a guessed retry.
+static bool abs_queue_attempt_ok(const abs_download_op_ctx_t *ctx, const abs_download_job_t *job,
+								 char *error, size_t error_size) {
+	if (!queue_media.held || !queue_media.auth.token[0]) {
+		snprintf(error, error_size, "%s", "The download's login snapshot was not resolved.");
+		return false;
+	}
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(job ? job->server : "", normalized, sizeof(normalized));
+	if (!normalized[0] || strcmp(normalized, queue_media.server) != 0) {
+		snprintf(error, error_size, "%s", "The download's server does not match its login snapshot.");
+		return false;
+	}
+	if (ctx && queue_media.job_id && ctx->job_id != queue_media.job_id) {
+		snprintf(error, error_size, "%s", "The download's media state belongs to another job.");
+		return false;
+	}
+	return true;
+}
+
+// Reads the .audiobookshelf manifest that may occupy the computed destination
+// and tells whether it belongs to this very job (same normalized server AND
+// same item). A manifest for another item — even from our own server — is the
+// §8.2 path conflict: a destination is a job identity, not a scratch share.
+static bool abs_dest_manifest_mine(const char *dest_abs, const char *server, const char *item_id) {
+	char path[SONIX_LINKED_SIDECAR_PATH_MAX];
+	if ((size_t)snprintf(path, sizeof(path), "%.1280s/.audiobookshelf", dest_abs) >= sizeof(path)) {
+		return false;
+	}
+	struct stat st;
+	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+		return true; // no manifest: the destination is unowned, first binding wins
+	}
+	char bound[ABS_SERVER_MAX];
+	char bound_item[ABS_SERVER_MAX + 32];
+	bool server_ok_line = false;
+	bool item_ok_line = false;
+	FILE *f = fopen(path, "r");
+	if (!f) return false; // unreadable: refuse to share blindly
+	char line[ABS_SERVER_MAX + 32];
+	while (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (strncmp(line, "server=", 7) == 0) {
+			abs_profiles_normalize_server(line + 7, bound, sizeof(bound));
+			server_ok_line = bound[0] != '\0' && strcmp(bound, server) == 0;
+		} else if (strncmp(line, "item_id=", 8) == 0) {
+			// Lossless within the line's own bound: a prefix-truncated id
+			// could never prove an identity match.
+			snprintf(bound_item, sizeof(bound_item), "%s", line + 8);
+			item_ok_line = bound_item[0] != '\0' && strcmp(bound_item, item_id) == 0;
+		}
+	}
+	fclose(f);
+	// §11.5: a manifest without a resolvable server is a foreign claim, never
+	// ours (pre-0.6.0 books never live under the hashed roots).
+	return server_ok_line && item_ok_line;
+}
+
+// §8.2 step 1–3: fetch the expanded identity with the attempt's snapshot,
+// validate every track (explicitly refusing >256) and produce the plan with
+// the server-qualified destination and its path gates — all before the first
+// network byte of any track.
+static bool abs_queue_fetch_identity(void *user, const abs_download_op_ctx_t *ctx,
+									 const abs_download_job_t *job, abs_download_plan_t *plan,
+									 const char **stage_out, char *error, size_t error_size) {
+	(void)user;
+	*stage_out = "metadata";
+	if (!ctx || !job || !plan) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The queue handed the fetch an incomplete request.");
+		return false;
+	}
+	if (!abs_queue_attempt_ok(ctx, job, error, error_size)) {
+		*stage_out = "auth";
+		return false;
+	}
+
+	// Episodes arrive with the podcast wave (WS1 identity/`.abs-episode`
+	// rules): refuse them explicitly instead of downloading with book rules.
+	if (strcmp(job->kind, ABS_DL_KIND_BOOK) != 0) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "Podcast episode downloads are not wired yet.");
+		return false;
+	}
+
+	char id[ABS_ID_MAX * 3];
+	http_url_encode(job->item_id, id, sizeof(id));
+	char path[384];
+	snprintf(path, sizeof(path), "/api/items/%s?expanded=1&include=progress,authors", id);
+
+	// §8.3: wait for the shared catalog mutex — cancellable, so a pause never
+	// hangs behind a detail page in flight.
+	if (!abs_catalog_lock_wait(ctx->cancel)) {
+		abs_queue_fail(stage_out, error, error_size, "network",
+					   "The download was paused or cancelled while waiting for its turn.");
+		return false;
+	}
+
+	bool requested = false;
+	bool parse_failed = false;
+	{
+		char *body = NULL;
+		// The attempt snapshot's own token, not the mutable globals: the
+		// request identity is the job's server (§8.2 step 1).
+		requested = api_request_with(queue_media.server, queue_media.auth.token, path, NULL, &body,
+									 ABS_TIMEOUT_SECS, NULL);
+		// §8.2 step 2: validate all tracks before writing anything. A
+		// 257-track item is an explicit unsupported error, never silence.
+		if (requested) {
+			memset(&queue_media.book, 0, sizeof(queue_media.book));
+			if (!abs_parse_expanded(body ? body : "", true, &queue_media.book)) {
+				requested = false;
+				parse_failed = true;
+			}
+		}
+		free(body);
+	}
+	pthread_mutex_unlock(&abs_catalog_lock);
+	if (!requested) {
+		// The failure is described on this thread by the request layer (a
+		// refused token, a dead server) or by the parse (malformed JSON, >256
+		// tracks, no tracks). A dead server or a refused identity stalls into
+		// WAITING_NETWORK; metadata problems are the explicit terminal
+		// refusals of §8.4 — the fetch tells the two apart.
+		const char *why = audiobookshelf_last_error();
+		const char *message = why && why[0] ? why
+							  : parse_failed ? "The expanded identity of this item was invalid."
+											 : "The expanded identity could not be fetched.";
+		abs_queue_fail(stage_out, error, error_size, parse_failed ? "metadata" : "network", message);
+		return false;
+	}
+
+	audiobookshelf_book_t *book = &queue_media.book;
+
+	// §8.2 step 3 + §11.5: the server-qualified destination, computed and
+	// gated BEFORE any network media write. The hash root and the manifest's
+	// server= line come from the same normalized string, so a directory and a
+	// manifest can never disagree about which server owns them.
+	char author[160], title[220];
+	safe_component(book->item.author[0] ? book->item.author : "Unknown Author", author, sizeof(author));
+	safe_component(book->item.title, title, sizeof(title));
+	char hash[16];
+	abs_book_hash_prefix(queue_media.server, hash, sizeof(hash));
+	char hash_root_rel[64];
+	snprintf(hash_root_rel, sizeof(hash_root_rel), "Audiobooks/Audiobookshelf/abs-%s", hash);
+	char dest_rel[ABS_DL_DEST_MAX];
+	if ((size_t)snprintf(dest_rel, sizeof(dest_rel), "%s/%s/%s", hash_root_rel, author, title) >=
+		sizeof(dest_rel)) {
+		abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+		return false;
+	}
+	char hash_root_abs[SONIX_LINKED_PATH_MAX];
+	if (!abs_download_card_path(hash_root_rel, hash_root_abs, sizeof(hash_root_abs))) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The SD card for downloads is not available.");
+		return false;
+	}
+	struct stat st;
+	if (stat(hash_root_abs, &st) == 0 && S_ISDIR(st.st_mode)) {
+		// A hash root claimed by another server is never shared (§11.5): the
+		// manifest server, not the prefix, is the binding identity.
+		if (abs_dir_has_foreign_claim(hash_root_abs, queue_media.server, 2)) {
+			abs_queue_fail(stage_out, error, error_size, "metadata",
+						   "The download path is already used by another Audiobookshelf server.");
+			return false;
+		}
+	}
+	char dest_abs[SONIX_LINKED_PATH_MAX];
+	if (!abs_download_card_path(dest_rel, dest_abs, sizeof(dest_abs))) {
+		abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+		return false;
+	}
+	if (!abs_dest_manifest_mine(dest_abs, queue_media.server, book->item.id)) {
+		// §8.2 file rules: a destination bound to another identity is a path
+		// conflict — a permanent refusal, not a successful skip.
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The download path is already bound to another audiobook.");
+		return false;
+	}
+
+	// The destination is adopted now: the plan points at the adapter's state,
+	// which the queue validates and stores as the identical string.
+	snprintf(queue_media.destination, sizeof(queue_media.destination), "%s", dest_rel);
+	queue_media.job_id = ctx->job_id;
+
+	// The plan: file rows before any card write, each absolute path gated
+	// against the narrowest downstream consumer (§11.5 via pathlimits).
+	memset(queue_plan_files, 0, sizeof(queue_plan_files));
+	memset(queue_plan_names, 0, sizeof(queue_plan_names));
+	memset(queue_plan_urls, 0, sizeof(queue_plan_urls));
+	for (int i = 0; i < book->track_count; i++) {
+		const audiobookshelf_track_t *track = &book->tracks[i];
+		char numbered[280];
+		char track_abs[SONIX_LINKED_PATH_MAX];
+		if (!local_track_name(track, i, numbered, sizeof(numbered)) ||
+			strlen(numbered) >= ABS_DL_NAME_MAX ||
+			(size_t)snprintf(track_abs, sizeof(track_abs), "%.1279s/%.255s", dest_abs, numbered) >=
+				sizeof(track_abs) ||
+			!sonix_linked_path_representable(strlen(track_abs))) {
+			if (strlen(numbered) >= ABS_DL_NAME_MAX) {
+				// DOWNLOAD_FILE.final_name is a 256-byte column: a longer
+				// basename is refused whole, never stored truncated (§8.2).
+				abs_queue_fail(stage_out, error, error_size, "metadata",
+							   "A filename in this item is too long for the download record.");
+			} else {
+				abs_queue_fail(stage_out, error, error_size, "metadata",
+							   "The audiobook download path is too long.");
+			}
+			return false;
+		}
+		char encoded[ABS_URL_MAX * 2];
+		encode_content_path(track->content_url, encoded, sizeof(encoded));
+		char url[ABS_URL_MAX * 2 + 512];
+		if (strncmp(track->content_url, "http://", 7) == 0 || strncmp(track->content_url, "https://", 8) == 0) {
+			// §11.3 media rule: an absolute contentUrl keeps its Bearer only
+			// when scheme, host and effective port match the job identity.
+			// Cross-origin media is refused here, before anything is fetched;
+			// the redirect path in http.c still strips Authorization on its own.
+			if (!media_origin_equal(track->content_url, queue_media.server)) {
+				abs_queue_fail(stage_out, error, error_size, "metadata",
+							   "The audiobook file is hosted by another server.");
+				return false;
+			}
+			// Schemes need their colon intact. Audiobookshelf normally returns
+			// a relative /s/item path; tolerate an absolute one without
+			// treating its authority as a path segment.
+			const char *slide = strstr(track->content_url, "://");
+			slide = slide ? strchr(slide + 3, '/') : NULL;
+			if (slide) {
+				char origin[512];
+				size_t origin_len = (size_t)(slide - track->content_url);
+				if (origin_len >= sizeof(origin)) origin_len = sizeof(origin) - 1;
+				memcpy(origin, track->content_url, origin_len);
+				origin[origin_len] = '\0';
+				encode_content_path(slide, encoded, sizeof(encoded));
+				snprintf(url, sizeof(url), "%s%s", origin, encoded);
+			} else {
+				snprintf(url, sizeof(url), "%s", track->content_url);
+			}
+		} else if (encoded[0] == '/') {
+			snprintf(url, sizeof(url), "%s%s", queue_media.server, encoded);
+		} else {
+			snprintf(url, sizeof(url), "%s/%s", queue_media.server, encoded);
+		}
+		if (!url[0] || strlen(url) >= ABS_DL_URL_MAX) {
+			// DOWNLOAD_FILE rows carry the same-origin link; one that cannot
+			// be stored whole is not stored truncated (§8.2 schema contract).
+			abs_queue_fail(stage_out, error, error_size, "metadata",
+						   "The download link for one of this item's files is too long.");
+			return false;
+		}
+		snprintf(queue_plan_urls[i], sizeof(queue_plan_urls[i]), "%.1023s", url);
+		snprintf(queue_plan_names[i], sizeof(queue_plan_names[i]), "%.255s", numbered);
+		queue_plan_files[i].source_url = queue_plan_urls[i];
+		queue_plan_files[i].final_name = queue_plan_names[i];
+		queue_plan_files[i].start_offset = track->start_offset;
+		queue_plan_files[i].duration = track->duration;
+		// The server's stated file size; Content-Length remains the transfer's
+		// own exact check (§8.2 step 4).
+		queue_plan_files[i].expected_size = track->size;
+	}
+
+	// The strings the plan points at (destination, urls, names) are the
+	// adapter's statics: valid until the queue ingests them or the attempt
+	// ends, whichever comes first (§8.2 step 4).
+	plan->destination = queue_media.destination;
+	plan->files = queue_plan_files;
+	plan->file_count = book->track_count;
+	// Whole-book progress in the unit the resume mapping needs (§8.2 step 5):
+	// item.progress is the remote whole-book position in seconds; rows whose
+	// item returned no progress at all stay -1 (unknown). finished/updated
+	// travel with the same snapshot.
+	plan->remote_progress = book->progress_updated_ms > 0 ? book->item.progress : -1;
+	plan->remote_finished = book->item.finished ? 1 : 0;
+	plan->remote_updated_ms = book->progress_updated_ms;
+	return true;
+}
+
+
+// §8.2 step 4: one file. The queue has already marked the row `writing`; this
+// streams into <final>.part from byte zero (0.6.0 has no HTTP Range resume),
+// verifies the exact 64-bit length, closes checked and renames atomically —
+// the queue commits the file record only after that rename (§8.2 step 4).
+// Cancellation is polled between read units; progress is published coarsely,
+// at most once per coalesce window (§8.1/§8.4).
+static bool abs_queue_file_transfer(void *user, const abs_download_op_ctx_t *ctx,
+									const abs_download_file_t *file, long long *final_size_out,
+									const char **stage_out, char *error, size_t error_size) {
+	(void)user;
+	*final_size_out = -1;
+	*stage_out = "network";
+	if (error_size) {
+		error[0] = '\0';
+	}
+	if (!ctx || !file) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The queue handed the transfer an incomplete request.");
+		return false;
+	}
+	// The attempt's own state: a resolved token, the fetch's destination and
+	// the same job the context names. The adapter state is the transfer's
+	// only view of the job — the queue validated the identical destination
+	// when it ingested the plan.
+	if (!queue_media.held || !queue_media.auth.token[0]) {
+		abs_queue_fail(stage_out, error, error_size, "auth",
+					   "The download's login snapshot was not resolved.");
+		return false;
+	}
+	if (!queue_media.destination[0] || ctx->job_id != queue_media.job_id) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The download's media state is missing for this file.");
+		return false;
+	}
+	// §11.3 defense in depth: the queue ingested a same-origin URL, and the
+	// transfer re-checks it against the attempt's own server before a byte of
+	// its Authorization reaches a connection.
+	if (!media_origin_equal(file->source_url, queue_media.server)) {
+		abs_queue_fail(stage_out, error, error_size, "metadata",
+					   "The audiobook file is hosted by another server.");
+		return false;
+	}
+
+	char rel[ABS_DL_DEST_MAX + ABS_DL_NAME_MAX + 2];
+	if ((size_t)snprintf(rel, sizeof(rel), "%.511s/%.255s", queue_media.destination,
+						 file->final_name) >= sizeof(rel)) {
+		abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+		return false;
+	}
+	char final_path[SONIX_LINKED_SIDECAR_PATH_MAX];
+	if (!abs_download_card_path(rel, final_path, sizeof(final_path))) {
+		abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+		return false;
+	}
+	char part_path[SONIX_LINKED_SIDECAR_PATH_MAX];
+	if ((size_t)snprintf(part_path, sizeof(part_path), "%.1300s.part", final_path) >= sizeof(part_path)) {
+		abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+		return false;
+	}
+
+	struct stat existing;
+	if (stat(final_path, &existing) == 0 && S_ISREG(existing.st_mode) && existing.st_size > 0) {
+		if (file->expected_size >= 0 && (long long)existing.st_size != file->expected_size) {
+			// §8.2 file rules: an existing file of the wrong size is a path
+			// conflict for user retry, never "valid content" by accident.
+			abs_queue_fail(stage_out, error, error_size, "metadata",
+						   "A differently sized file already exists at the destination.");
+			return false;
+		}
+		// A complete final file (renamed before a crash, or a previous
+		// attempt) is retained; the queue's commit gate compares it against
+		// the row's own record.
+		*final_size_out = (long long)existing.st_size;
+		return true;
+	}
+
+	// The directory arrives with the first file: the destination gate ran at
+	// fetch time, so the first write creates no stray residue for a refused
+	// job (§8.2 step 3).
+	char dir[SONIX_LINKED_PATH_MAX];
+	if ((size_t)snprintf(dir, sizeof(dir), "%s", final_path) >= sizeof(dir)) {
+		abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+		return false;
+	}
+	char *slash = strrchr(dir, '/');
+	if (!slash || slash == dir) {
+		abs_queue_fail(stage_out, error, error_size, "metadata", "The audiobook download path is too long.");
+		return false;
+	}
+	*slash = '\0';
+	if (!make_dirs(dir)) {
+		int dir_errno = errno;
+		abs_queue_fail(stage_out, error, error_size, "write",
+					   dir_errno == ENOSPC ? "The SD card is full."
+										   : "The audiobook download folder could not be created.");
+		return false;
+	}
+
+	// The token copy lives in this buffer only for the request build and is
+	// wiped immediately after (§8.1).
+	char headers[ABS_TOKEN_MAX + 32];
+	snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", queue_media.auth.token);
+	http_stream_t stream;
+	bool opened = http_stream_open_ex(&stream, file->source_url, headers, ABS_TIMEOUT_SECS);
+	memset(headers, 0, sizeof(headers));
+	if (!opened) {
+		const char *why = http_last_error();
+		abs_queue_fail(stage_out, error, error_size, "network",
+					   why && why[0] ? why : "The audiobook file could not be downloaded.");
+		return false;
+	}
+	FILE *f = fopen(part_path, "wb");
+	if (!f) {
+		const char *message = errno == ENOSPC ? "The SD card is full."
+											  : "The audiobook file could not be written.";
+		http_stream_close(&stream);
+		abs_queue_fail(stage_out, error, error_size, "write", message);
+		return false;
+	}
+
+	// Counters and length checks are 64-bit end to end (§8.4): a >2 GB track
+	// must neither wrap a counter nor pass a truncated length comparison.
+	// An unknown Content-Length falls back to the row's expected size for the
+	// progress total; both unknown stays -1 (equal-weight progress).
+	long long total = stream.content_length > 0 ? stream.content_length
+						: (file->expected_size >= 0 ? file->expected_size : -1);
+	long long done = 0;
+	long long published = 0;
+	abs_download_op_progress(ctx, 0, total);
+	char buffer[ABS_DOWNLOAD_CHUNK];
+	bool io_failed = false;
+	bool disk_failed = false;
+	int disk_errno = 0;
+	bool stopped = false;
+	for (;;) {
+		if (*ctx->cancel) {
+			// The stop belongs to the queue: it records PAUSED/CANCELLED and
+			// retains (pause) or deletes (cancel) this .part in its own ack
+			// step, so the op only stops between units — never deletes.
+			stopped = true;
+			break;
+		}
+		int n = http_stream_read(&stream, buffer, sizeof(buffer));
+		if (n == 0) {
+			break;
+		}
+		if (n < 0) {
+			io_failed = true;
+			break;
+		}
+		if (fwrite(buffer, 1, (size_t)n, f) != (size_t)n) {
+			disk_errno = errno;
+			disk_failed = true;
+			break;
+		}
+		done += (long long)n;
+		if (done - published >= ABS_QUEUE_PROGRESS_COALESCE_BYTES) {
+			abs_download_op_progress(ctx, done, total);
+			published = done;
+		}
+	}
+	// Publish the tail exactly once more: the stop and every failure still
+	// leaves its (coalesced) byte count in the mirror for the ack step.
+	abs_download_op_progress(ctx, done, total);
+	bool closed = fclose(f) == 0;
+	http_stream_close(&stream);
+	if (!closed) {
+		disk_failed = true;
+	}
+
+	if (stopped) {
+		// The queue races this against its ack step; the state it records
+		// comes from the stop request, not this stage.
+		abs_queue_fail(stage_out, error, error_size, "network", "The download was paused or cancelled.");
+		return false;
+	}
+	if (disk_failed) {
+		remove(part_path);
+		abs_queue_fail(stage_out, error, error_size, "write",
+					   disk_errno == ENOSPC ? "The SD card is full."
+											: "The audiobook file could not be written.");
+		return false;
+	}
+	if (io_failed || done == 0 ||
+		(stream.content_length > 0 && done != stream.content_length) ||
+		(file->expected_size >= 0 && done != file->expected_size)) {
+		// §8.2: nonzero bytes and the exact promised length, when supplied;
+		// a mismatch is a broken transfer, retried as a network failure.
+		remove(part_path);
+		abs_queue_fail(stage_out, error, error_size, "network",
+					   "The audiobook download was interrupted or the server sent the wrong length.");
+		return false;
+	}
+	if (rename(part_path, final_path) != 0) {
+		const char *message = errno == ENOSPC ? "The SD card is full."
+											  : "The audiobook file could not be moved into place.";
+		remove(part_path);
+		abs_queue_fail(stage_out, error, error_size, "write", message);
+		return false;
+	}
+	*final_size_out = done;
+	return true;
+}
+
+// §8.2 steps 5–8 (sidecars, cover, manifest, resume mapping, acknowledgement
+// reset) are the next transfer wave. The slots report an explicit refusal so
+// a queue driven with this adapter fails FINALIZING honestly — and Retry can
+// redo finalize only — instead of pretending a manifest was committed.
+static bool abs_queue_finalize_not_wired(void *user, const abs_download_op_ctx_t *ctx,
+										 const abs_download_job_t *job,
+										 const abs_download_file_t *files, int file_count,
+										 abs_download_resume_t *resume_out, const char **stage_out,
+										 char *error, size_t error_size) {
+	(void)user;
+	(void)ctx;
+	(void)job;
+	(void)files;
+	(void)file_count;
+	(void)resume_out;
+	abs_queue_fail(stage_out, error, error_size, "manifest",
+				   "Finalization (sidecars, manifest) is wired in a later wave.");
+	return false;
+}
+
+static bool abs_queue_ack_not_wired(void *user, const abs_download_job_t *job, char *error,
+									size_t error_size) {
+	(void)user;
+	(void)job;
+	snprintf(error, error_size, "%s", "The progress acknowledgement reset is wired in a later wave.");
+	return false;
+}
+
+// Populated at call time, not as a file-scope initializer: a const table of
+// function pointers would root the whole adapter in every binary that links
+// this module (gc-sections cannot prune relocations out of kept data), and
+// builds that never wire the queue — the browse tests, the legacy GUI path —
+// must stay free of it.
+static abs_download_ops_t queue_media_ops;
+
+const abs_download_ops_t *audiobookshelf_queue_media_ops(void) {
+	queue_media_ops.user = NULL;
+	queue_media_ops.fetch_identity = abs_queue_fetch_identity;
+	queue_media_ops.file_download = abs_queue_file_transfer;
+	queue_media_ops.finalize = abs_queue_finalize_not_wired;
+	queue_media_ops.ack_reset = abs_queue_ack_not_wired;
+	queue_media_ops.auth_acquire = abs_queue_auth_acquire;
+	queue_media_ops.auth_release = abs_queue_auth_release;
+	return &queue_media_ops;
 }

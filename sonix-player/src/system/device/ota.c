@@ -432,7 +432,8 @@ static ota_result_t do_download(void) {
 
 	ota_result_t r = OTA_OK;
 	if (stream.content_length > 0 && stream.content_length != release.size) {
-		printf("ota: the server sends %ld bytes, the release says %ld\n", stream.content_length, release.size);
+		printf("ota: the server sends %lld bytes, the release says %ld bytes\n",
+			   stream.content_length, release.size);
 		r = OTA_CORRUPT;
 	}
 

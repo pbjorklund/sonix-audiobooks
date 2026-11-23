@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+// The download queue's media surface (§8.2/§8.5) is declared against the
+// queue's types: the ops receive jobs, file rows and plans, never tokens.
+#include "abs_download.h"
+
 #define ABS_ID_MAX 96
 #define ABS_NAME_MAX 256
 #define ABS_URL_MAX 1024
@@ -94,6 +98,10 @@ typedef struct {
 	char mime[64];
 	double start_offset;
 	double duration;
+	// The server's exact file size when it states one, else -1 (§8.2:
+	// DOWNLOAD_FILE.expected_size). Content-Length is the transfer's own
+	// check; this is what recovery compares a pre-existing file against.
+	long long size;
 } audiobookshelf_track_t;
 
 typedef struct {
@@ -209,6 +217,38 @@ bool audiobookshelf_book(const char *item_id, audiobookshelf_book_t *out);
 typedef void (*audiobookshelf_progress_cb)(int track, int tracks, long long done, long long total, void *user);
 bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_root,
 								 audiobookshelf_progress_cb cb, void *user, char *book_path, size_t path_size);
+
+// ---------------------------------------------------------------------------
+// The ABS download queue's real media surface (§8.2 steps 1–4, §8.5 split).
+//
+// One at a time: the queue worker owns exactly one active job (§8.1), so the
+// resolved auth snapshot, the expanded book and the computed destination are
+// module state valid for the active job's attempt — auth_resolve fills them,
+// auth_forget wipes them (§8.2 step 8: freed before the next job). Every
+// callback is safe to call only from the queue worker (or a single-threaded
+// host driver); cancellable work polls ctx->cancel between units.
+//
+// WS2 (this wave) wires auth_resolve, fetch_identity and the per-file
+// transfer. The finalize and acknowledgement-reset slots stay until the
+// sidecar/manifest wave lands: the adapter refuses them explicitly, so a
+// queue driven with it fails jobs at FINALIZING with the honest "wired in a
+// later wave" instead of running a fake commit.
+// ---------------------------------------------------------------------------
+const abs_download_ops_t *audiobookshelf_queue_media_ops(void);
+
+// §8.2 step 1 / §8.1: the job's own credentials. Copies `profile_id`'s latest
+// token under the profile lock (an inactive profile owns its own token) — or,
+// only when the row carries no profile id, the active profile's — and rejects
+// anything whose normalized server does not match `server`. A snapshot whose
+// server drifted is never adopted: wipe, refuse. Tokens never leave here
+// un-wiped; `error` receives a short sanitized English reason, never a URL
+// or token.
+bool audiobookshelf_queue_auth_resolve(const char *profile_id, const char *server,
+									   abs_auth_snapshot_t *out, char *error, size_t error_size);
+
+// Zeroes the snapshot bytes and the adapter's copy of the same state (the
+// active job's expanded book and destination die with it, §8.2 step 8).
+void audiobookshelf_queue_auth_forget(abs_auth_snapshot_t *snapshot);
 
 // Maps Audiobookshelf's whole-book progress to the downloaded local track and
 // its track-relative offset. Call after a successful download while `book` is

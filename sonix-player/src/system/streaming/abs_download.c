@@ -184,6 +184,10 @@ static int active_file_count;
 
 static void cv_signal(void) { pthread_cond_broadcast(&work_cv); }
 
+// Forward declaration: the card-generation guard is defined with the storage
+// helpers, while abs_download_card_path() sits with the path builders.
+static bool storage_stale_locked(void);
+
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
@@ -409,13 +413,37 @@ static bool file_size_ll(const char *path, long long *size_out) {
 	return true;
 }
 
-// "<card>/<card-relative path>", bounded. False on overflow, never truncated.
+// "<card>/<card-relative path>", bounded. False on overflow, never truncated:
+// a silently shortened path would name a different file on the card than the
+// one every record (and §8.2 recovery) spells.
 static bool card_path(const char *relative, char *out, size_t size) {
 	if (!relative || !relative[0]) {
 		return false;
 	}
-	int n = snprintf(out, size, "%.480s/%.500s", cfg_sd_root, relative);
+	size_t root_len = strlen(cfg_sd_root);
+	if (root_len + strlen(relative) + 2 > size) {
+		return false;
+	}
+	int n = snprintf(out, size, "%.480s/%s", cfg_sd_root, relative);
 	return n > 0 && (size_t)n < size;
+}
+
+bool abs_download_card_path(const char *relative, char *out, size_t size) {
+	if (!out || size == 0) {
+		return false;
+	}
+	if (size) {
+		out[0] = '\0';
+	}
+	bool ok = false;
+	pthread_mutex_lock(&lock);
+	// Same guard the commands use: a card the queue has declared swapped
+	// cannot host new media either.
+	if (armed && !storage_stale_locked() && cfg_sd_root[0]) {
+		ok = card_path(relative, out, size);
+	}
+	pthread_mutex_unlock(&lock);
+	return ok;
 }
 
 // "<card>/<destination>/<basename><suffix>" — the one path builder, so the

@@ -326,6 +326,13 @@ bool abs_download_clear_finished(char *error, size_t error_size);
 // The file rows of a job (bounded to ABS_DL_FILE_CAP).
 int abs_download_job_files(long long job_id, abs_download_file_t *out, int max);
 
+// "<card>/<card-relative>", bounded and never truncated. This is the one card
+// path join for the queue's media ops (they live outside this module per
+// §8.5, so they must not grow a second spelling of what recovery, cancel and
+// the file records already name one way). False while quiesced, after a
+// detected card swap, or when `relative` is empty or the join does not fit.
+bool abs_download_card_path(const char *relative, char *out, size_t size);
+
 // ---------------------------------------------------------------------------
 // Snapshot (coalesced, >=4 Hz GUI poll; §8.1/§8.5)
 // ---------------------------------------------------------------------------

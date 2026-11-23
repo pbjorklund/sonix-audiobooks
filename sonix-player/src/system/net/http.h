@@ -141,8 +141,10 @@ typedef struct {
 	int icy_metaint; // bytes of audio between metadata blocks, 0 when none
 
 	// Content-Length, or 0 when the server does not send it -- always the case
-	// for a radio station, and almost never for a downloaded file.
-	long content_length;
+	// for a radio station, and almost never for a downloaded file. 64-bit on
+	// purpose (§8.4): the target's `long` is 32 bits, and a >2 GB audiobook
+	// file must not wrap into a wrong progress bar or a wrong length check.
+	long long content_length;
 
 	// Body bytes already read while parsing the headers. The first read has
 	// to hand these back before touching the socket again.

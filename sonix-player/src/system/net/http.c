@@ -8,6 +8,7 @@
 #include <stdarg.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <resolv.h>
@@ -59,6 +60,33 @@ static void set_last_error(const char *fmt, ...) {
 
 const char *http_last_error(void) {
 	return last_error[0] ? last_error : NULL;
+}
+
+// One checked conversion for every Content-Length the client consumes (§8.4):
+// spaces are tolerated, digits are required, and a value that would not fit a
+// signed 64-bit counter is a malformed response, not a size. The stream path
+// refuses to open on it; the buffered path refuses the body -- accepting a
+// wrapped 32-bit reading would deliver a wrong "complete" file.
+static bool checked_content_length(const char *text, long long *out) {
+	while (*text == ' ' || *text == '\t') {
+		text++;
+	}
+	if (!*text) {
+		return false;
+	}
+	long long value = 0;
+	for (const char *p = text; *p; p++) {
+		if (*p < '0' || *p > '9') {
+			return false;
+		}
+		int digit = *p - '0';
+		if (value > (LLONG_MAX - digit) / 10) {
+			return false;
+		}
+		value = value * 10 + digit;
+	}
+	*out = value;
+	return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -750,7 +778,21 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 
 		char length_text[32];
 		if (header_value(headers, "Content-Length", length_text, sizeof(length_text))) {
-			if (!read_length(&conn, &body, (size_t)strtoul(length_text, NULL, 10))) {
+			long long claimed = 0;
+			if (!checked_content_length(length_text, &claimed)) {
+				// A non-numeric or overflowing length frames nothing: no body
+				// is delivered from it (§8.4, reject before reading).
+				fprintf(stderr, "http: %s%s -> malformed Content-Length\n", u->host, u->path);
+				conn_close(&conn);
+				free(body.data);
+				return false;
+			}
+			// Beyond the caller's limit every reading is the deliberate
+			// truncation case below, so clamping the claim there is
+			// behavior-identical and keeps the loop counters in size_t.
+			size_t content_length =
+				claimed >= (long long)body.limit ? (size_t)body.limit : (size_t)claimed;
+			if (!read_length(&conn, &body, content_length)) {
 				// Less than promised: the response is broken, not short.
 				// Delivering it anyway means half a JPEG or, worse, an audio
 				// segment with a hole in it, accepted as good and cached.
@@ -949,11 +991,17 @@ static bool stream_open_once(http_stream_t *st, const char *url, const char *ext
 
 	// The length, when the server states one. A radio station never does (it
 	// does not end), a downloaded file does: this is what turns an endless
-	// spinner into a progress bar.
+	// spinner into a progress bar. Overflow or non-numeric bytes are a broken
+	// response: refusing the open is what keeps a wrapped counter from ever
+	// driving a length check below (§8.4).
 	char length_text[32];
-	st->content_length = header_value(headers, "Content-Length", length_text, sizeof(length_text))
-							 ? strtol(length_text, NULL, 10)
-							 : 0;
+	st->content_length = 0;
+	if (header_value(headers, "Content-Length", length_text, sizeof(length_text)) &&
+		!checked_content_length(length_text, &st->content_length)) {
+		conn_close(&conn);
+		set_last_error("malformed Content-Length response header");
+		return false;
+	}
 
 	header_value(headers, "icy-name", st->icy_name, sizeof(st->icy_name));
 	header_value(headers, "icy-genre", st->icy_genre, sizeof(st->icy_genre));
