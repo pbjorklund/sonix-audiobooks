@@ -1,7 +1,7 @@
 {
     "device-name": "HiBy R1",
     "dac-info": "Cirrus Logic CS43131",
-    "OS_version": "0.6.0",
+    "OS_version": "0.6.1",
     "build_version": "030920262043",
     "ota-repo": "yetisoldier/sonix-audiobooks"
 }
