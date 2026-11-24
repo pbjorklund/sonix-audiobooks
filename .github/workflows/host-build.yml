@@ -42,6 +42,16 @@ jobs:
         env:
           SONIX_SMOKE_SKIP_BUILD: 1
         run: tools/audiobookshelf-host-smoke.sh
+      - name: Exercise Audiobookshelf podcast playback and offline restart
+        working-directory: ${{ github.workspace }}
+        run: |
+          SONIX_PODCAST_SMOKE_RSS=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_FORMAT=m4a tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_INTERRUPT=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_SYNC=1 tools/audiobookshelf-podcast-smoke.sh
+      - name: Run episode progress, history and show parsing tests
+        working-directory: ${{ github.workspace }}
+        run: tools/audiobookshelf-episode-test.sh
       - name: Run the outbox and decision unit tests
         working-directory: ${{ github.workspace }}
         run: bash tools/audiobookshelf-outbox-test.sh

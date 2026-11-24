@@ -8,6 +8,10 @@
 #include "src/system/core/config.h"
 #include "src/system/core/sha1.h"
 
+#if !defined(HOST_BUILD) && !defined(STREAMKEYS_USERDATA_PATH)
+#define STREAMKEYS_USERDATA_PATH "/usr/data/streaming-keys.ini"
+#endif
+
 #define STREAMKEYS_MAX_FILE 16384 // mirrored as MAX_FILE in the tool
 
 #define SEAL_MAGIC "SXK1"
@@ -253,6 +257,10 @@ void streamkeys_init(void) {
 	const char *path = NULL;
 	if (configured && configured[0]) {
 		path = load(configured) ? configured : NULL;
+#ifdef STREAMKEYS_USERDATA_PATH
+	} else if (load(STREAMKEYS_USERDATA_PATH)) {
+		path = STREAMKEYS_USERDATA_PATH;
+#endif
 	} else if (load(STREAMKEYS_PATH)) {
 		path = STREAMKEYS_PATH;
 	} else if (load(STREAMKEYS_PLAIN_PATH)) {

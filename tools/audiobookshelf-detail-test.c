@@ -15,7 +15,7 @@
 // models, free-of-NULL, exact chapter heap, no inline download tracks in
 // the wrapper). A second stub, for the streaming entry points
 // abs_cover_fetch() reads, does the same for the cover: pinning the §9.1
-// endpoint (GET /api/items/{id}/cover?format=jpeg&width=900&height=1280 with
+// endpoint (GET /api/items/{id}/cover?format=jpeg&width=900 with
 // the pinned Bearer), serving programmable bodies for the cap/LRU/cancel
 // cases, and serving a real JPEG for the decode ones.
 //
@@ -821,19 +821,19 @@ static void cover_basic_tests(void) {
 	expect_true("cover fetch succeeds", abs_cover_fetch(&snap, "it-cover", NULL, path, sizeof(path), err, sizeof(err)));
 	expect_bool("cover error empty on success", err[0] == '\0', true);
 	expect_str("§9.1 cover request path", stream_spy.url,
-			  STUB_SERVER "/api/items/it-cover/cover?format=jpeg&width=900&height=1280");
+			  STUB_SERVER "/api/items/it-cover/cover?format=jpeg&width=900");
 	expect_str("§9.1 cover Bearer pinned", stream_spy.headers, "Authorization: Bearer stub-token\r\n");
 
 	const char *name = strrchr(path, '/');
 	assert(name);
 	name++;
-	expect_bool("hashed cache name length", strlen(name) == 12 + 1 + 12 + 4, true);
+	expect_bool("hashed cache name length", strlen(name) == 12 + 1 + 12 + sizeof("-detail.jpg") - 1, true);
 	expect_bool("hashed cache name separator", name[12] == '-', true);
 	for (int i = 0; i < 25; i++) {
 		if (i == 12) continue;
 		expect_bool("hashed cache name is hex", is_hex(name[i]), true);
 	}
-	expect_bool("hashed cache name extension", strcmp(name + 25, ".jpg") == 0, true);
+	expect_bool("hashed cache name extension", strcmp(name + 25, "-detail.jpg") == 0, true);
 	expect_bool("cache layout root", strstr(path, "/.local/abs-cover-cache/") != NULL, true);
 	// The name carries two hashes and nothing else: neither the token, nor
 	// any fragment of the request, ever reaches the card.
@@ -864,6 +864,27 @@ static void cover_basic_tests(void) {
 	expect_true("cover cache hit succeeds", abs_cover_fetch(&snap, "it-cover", NULL, hit, sizeof(hit), err, sizeof(err)));
 	expect_str("cache hit returns the same file", hit, path);
 	expect_bool("cache hit made no request", stream_spy.opens == opens_after_fetch, true);
+}
+
+static void shelf_cover_tests(void) {
+	abs_auth_snapshot_t snap;
+	cover_credentials(&snap, NULL);
+	abs_cover_set_root(work);
+	char detail[512], shelf[512], hit[512];
+	stream_program(256, 0x41);
+	assert(abs_cover_fetch(&snap, "it-shelf", NULL, detail, sizeof(detail), NULL, 0));
+	stream_program_raw((const char *)cover_jpeg, cover_jpeg_len);
+	assert(abs_cover_fetch_shelf(&snap, "it-shelf", shelf, sizeof(shelf)));
+	expect_str("shelf requests width without height", stream_spy.url,
+			   STUB_SERVER "/api/items/it-shelf/cover?format=jpeg&width=208");
+	assert(strcmp(shelf, detail) && file_size(detail) == 256);
+	long long opens = stream_spy.opens;
+	assert(abs_cover_fetch_shelf(&snap, "it-shelf", hit, sizeof(hit)));
+	assert(!strcmp(shelf, hit) && stream_spy.opens == opens);
+	cover_image_t image;
+	assert(cover_load_image_file(shelf, 126, 126, COVER_FIT_CONTAIN, &image));
+	assert(image.dsc.header.w == 32 && image.dsc.header.h == 48);
+	cover_free(&image);
 }
 
 // §9.1's 2 MiB encoded cap: a stated-oversize response is refused before one
@@ -1033,7 +1054,8 @@ static void cover_decode_tests(void) {
 	cover_image_t image;
 	expect_true("the decoded cover the detail shows", cover_load_image_file(path, 90, 128, COVER_FIT_CONTAIN, &image));
 	expect_bool("decoded cover carries pixels", image.pixels != NULL, true);
-	expect_bool("decoded cover fits the box", image.dsc.header.w <= 90 && image.dsc.header.h <= 128, true);
+	expect_int("detail preserves portrait width", image.dsc.header.w, 32);
+	expect_int("detail preserves portrait height", image.dsc.header.h, 48);
 	cover_free(&image);
 
 	// Undecodable bytes: the cache stores what the server sent (opaque),
@@ -1114,6 +1136,7 @@ int main(int argc, char **argv) {
 	ownership_tests();
 	decode_base64(COVER_JPEG_B64, cover_jpeg, sizeof(cover_jpeg), &cover_jpeg_len);
 	cover_basic_tests();
+	shelf_cover_tests();
 	cover_cap_tests();
 	cover_cancel_tests();
 	cover_lru_tests();

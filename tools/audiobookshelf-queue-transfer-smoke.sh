@@ -38,6 +38,8 @@ fail() { printf 'queue-transfer smoke: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"; }
 need gcc
 need python3
+need ffmpeg
+need pkg-config
 for cmd in objcopy strip; do need "$cmd"; done
 
 case "$WORK" in "$ROOT"/build/*) rm -rf -- "$WORK" ;; *) fail "unsafe output directory: $WORK" ;; esac
@@ -49,10 +51,15 @@ mkdir -p "$WORK/offline"
 cd "$PLAYER"
 FLAGS=(-O1 -g -DHOST_BUILD=1 -D_FILE_OFFSET_BITS=64 -I. -Ilvgl -DLV_CONF_INCLUDE_SIMPLE=1
 	-ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer)
-LINK=(-Wl,--gc-sections -lm -lpthread -ldl)
+read -r -a CODEC_CFLAGS <<< "$(pkg-config --cflags opusfile wavpack)"
+read -r -a CODEC_LIBS <<< "$(pkg-config --libs opusfile wavpack)"
+FLAGS+=("${CODEC_CFLAGS[@]}")
+LINK=(-Wl,--gc-sections -lm -lpthread -ldl "${CODEC_LIBS[@]}")
 SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
 	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c
-	src/system/streaming/abs_download.c src/system/streaming/streamturn.c
+	src/system/streaming/abs_download.c src/system/streaming/abs_episode_card.c src/system/streaming/streamturn.c
+	src/system/streaming/abs_history.c src/system/streaming/abs_episode_progress.c
+	src/system/streaming/abs_episode_playback.c
 	src/system/library/audiobookdb.c src/system/library/library.c
 	# The test drives the REAL audiobookscan (the §8.3 scan-completion import
 	# runs through the §8.5 line-592 notification), so the scanner's own stack
@@ -65,6 +72,9 @@ SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
 	src/system/library/folderorder.c src/system/playback/playlist.c
 	src/system/playback/audiobook.c src/system/audio/audio.c
 	src/system/decode/decode.c src/system/decode/mp4.c src/system/decode/apedec.c
+	src/system/decode/ape/apecore.c src/system/decode/aacdec.c src/system/decode/alacdec.c
+	src/system/decode/alac/alac.c src/system/decode/dsd.c src/system/decode/growfile.c
+	src/system/decode/opusdec.c src/system/decode/wavpackdec.c src/system/decode/stb_vorbis.c
 	src/system/decode/sndfile.c src/system/image/png_scaled.c
 	src/system/core/config.c src/system/core/json.c src/system/core/pathlimits.c
 	src/system/core/sha256.c src/system/core/utils.c src/system/db/sqlite3_impl.c
@@ -117,6 +127,8 @@ with open(os.path.join(media, "part2.mp3"), "wb") as f:
 with open(os.path.join(media, "cover.jpg"), "wb") as f:
 	f.write(os.urandom(1024))
 PY
+	ffmpeg -nostdin -loglevel error -f lavfi -i 'sine=frequency=440:duration=4' \
+		-c:a libmp3lame "$ADIR/media/episode.mp3" || fail "episode media generation failed"
 	TOKEN="trq-$(python3 -c 'import secrets;print(secrets.token_hex(20))')"
 	printf '%s' "$TOKEN" >"$ADIR/token.txt"
 	python3 "$ROOT/tools/audiobookshelf_mock.py" --fixture "$ALIAS" \

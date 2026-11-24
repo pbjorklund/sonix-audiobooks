@@ -7,6 +7,7 @@
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/decode/growfile.h"
+#include "src/system/streaming/abs_episode_stream.h"
 #include "src/system/device/system.h"
 #include "src/system/library/library.h"
 #include "src/system/library/metadata.h"
@@ -178,6 +179,8 @@ void device_state_remember_note(void) {
 static void flush_book_position(const device_state_t *state) {
 	// And the podcast episode's, which is kept the same way.
 	podcaststate_flush();
+	if (!state->live && state->status != AUDIO_STATUS_STOPPED)
+		abs_episode_playback_note(state->current_file, state->progress_current_secs, state->progress_total_secs, true, false);
 	if (state->live || !audiobook_is_playing() || state->progress_current_secs <= 1.0) {
 		return;
 	}
@@ -502,6 +505,18 @@ static void history_leave_for(const char *next, double position) {
 	bool same = next && strcmp(next, current_metadata_file) == 0 && (position > 0 || history_same_listen);
 	history_same_listen = false;
 	if (!same) {
+		if (current_metadata_file[0] && (!next || strcmp(next, current_metadata_file))) {
+			abs_episode_manifest_t episode;
+			if (abs_episode_playback_identity(current_metadata_file, &episode)) {
+				device_state_t state;
+				device_state_get(&state);
+				if (state.status != AUDIO_STATUS_STOPPED)
+					abs_episode_playback_note(current_metadata_file, state.progress_current_secs,
+						state.progress_total_secs, true, false);
+				if (abs_episode_stream_owns(current_metadata_file) && !abs_episode_stream_owns(next))
+					abs_episode_stream_cancel();
+			}
+		}
 		playhistory_left();
 	}
 }
@@ -519,6 +534,8 @@ static void note_started(bool restored) {
 // past what has arrived is refused rather than waited for; the podcast page
 // waits for it itself before starting one (podcastpage.c).
 static double podcast_resume(const char *filepath) {
+	abs_episode_manifest_t ep;
+	if (abs_episode_playback_identity(filepath, &ep)) return abs_episode_playback_resume(filepath);
 	if (!podcastcache_is_episode(filepath) || strcmp(started_file, filepath) == 0 || growfile_is_growing(filepath)) {
 		return -1.0;
 	}
@@ -555,6 +572,9 @@ static void load_and_play_at(const char *filepath, double position) {
 	}
 
 	metadata_read(current_metadata_file, &current_metadata);
+	abs_episode_manifest_t episode;
+	if (abs_episode_playback_identity(current_metadata_file, &episode) && episode.title[0])
+		snprintf(current_metadata.title, sizeof(current_metadata.title), "%s", episode.title);
 	// Whether the loaded file is an audiobook is decided here, once per track
 	// change, and everything that dresses the player for one reads the answer
 	// from it. Every route by which the track can change passes through one of
@@ -1650,7 +1670,14 @@ void device_state_seek(double seconds) {
 	audio_seek(seconds);
 }
 
-void device_state_stop(void) { audio_stop(); }
+void device_state_stop(void) {
+	if (abs_episode_stream_owns(current_metadata_file)) abs_episode_stream_cancel();
+	device_state_t state;
+	device_state_get(&state);
+	if (state.status != AUDIO_STATUS_STOPPED)
+		abs_episode_playback_note(state.current_file, state.progress_current_secs, state.progress_total_secs, true, false);
+	audio_stop();
+}
 
 void device_state_set_volume(long volume) { set_volume(volume); }
 

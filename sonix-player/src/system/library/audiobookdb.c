@@ -22,6 +22,7 @@
 
 #include "src/system/core/utils.h"
 #include "src/system/db/sqlite3.h"
+#include "src/system/streaming/abs_history.h"
 #include "src/system/library/library.h" // library_collate_listorder: the shared ordering
 
 #define SCAN_MAX_DEPTH 12
@@ -788,6 +789,77 @@ bool audiobookdb_abs_get(const char *book, audiobookdb_abs_checkpoint_t *out) {
 	}
 	pthread_mutex_unlock(&db_lock);
 	return found;
+}
+
+unsigned audiobookdb_history_generation(void) {
+	return __atomic_load_n(&card_epoch, __ATOMIC_ACQUIRE);
+}
+
+bool audiobookdb_episode_get(const abs_episode_manifest_t *id, abs_episode_checkpoint_t *out, unsigned *generation) {
+	pthread_mutex_lock(&db_lock);
+	if (generation) *generation = audiobookdb_history_generation();
+	bool ok = abs_episode_progress_schema(db) && abs_episode_progress_get(db, id, out);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_episode_save(unsigned generation, const abs_episode_checkpoint_t *value) {
+	pthread_mutex_lock(&db_lock);
+	bool ok = generation == audiobookdb_history_generation() && abs_episode_progress_schema(db) &&
+		abs_episode_progress_save(db, value);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_episode_apply(unsigned generation, const abs_episode_checkpoint_t *base, const abs_episode_checkpoint_t *value) {
+	pthread_mutex_lock(&db_lock);
+	bool ok = generation == audiobookdb_history_generation() && abs_episode_progress_schema(db) &&
+		abs_episode_progress_apply(db, base, value);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_episode_next(const char *server, const char *owner, long long before, abs_episode_checkpoint_t *out) {
+	pthread_mutex_lock(&db_lock);
+	bool ok = abs_episode_progress_schema(db) && abs_episode_progress_next(db, server, owner, before, out);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_episode_attempt(unsigned generation, const abs_episode_checkpoint_t *base, long long now) {
+	pthread_mutex_lock(&db_lock);
+	bool ok = generation == audiobookdb_history_generation() && abs_episode_progress_attempt(db, base, now);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_history_enqueue(unsigned generation, const abs_history_session_t *s) {
+	pthread_mutex_lock(&db_lock);
+	bool ok = generation == audiobookdb_history_generation() && abs_history_schema(db) && abs_history_enqueue(db, s);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_history_next(const char *scope, abs_history_session_t *s, unsigned *generation) {
+	pthread_mutex_lock(&db_lock);
+	*generation = audiobookdb_history_generation();
+	bool ok = abs_history_schema(db) && abs_history_next(db, scope, s);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_history_set_wire(unsigned generation, const char *scope, const char *id, long long wire) {
+	pthread_mutex_lock(&db_lock);
+	bool ok = generation == audiobookdb_history_generation() && abs_history_set_wire(db, scope, id, wire);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
+}
+
+bool audiobookdb_history_ack(unsigned generation, const char *scope, const char *id) {
+	pthread_mutex_lock(&db_lock);
+	bool ok = generation == audiobookdb_history_generation() && abs_history_ack(db, scope, id);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
 }
 
 bool audiobookdb_abs_next(const char *server, audiobookdb_abs_checkpoint_t *out) {

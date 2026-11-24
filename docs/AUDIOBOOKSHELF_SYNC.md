@@ -6,10 +6,10 @@ The R1 remains a standalone player. Download or link a book once, turn Wi-Fi off
 
 ## Find a book on the server
 
-Starting with **0.3.0**, open **Streaming > Audiobookshelf**, choose your server library, then use the toolbar:
+Open **Streaming > Audiobookshelf** and choose your server library. **Continue listening** and **Next up in series** show up to four books each from Audiobookshelf's home shelves. Tap a cover to open book details, or tap **All books** for the full catalog and its toolbar. Use the local Audiobooks view for downloads when Wi-Fi is off.
 
 - **Search** opens the keyboard. Enter a query and tap the magnifying-glass key to submit. This searches the whole server library, not just the visible page. Matching follows the server's search behavior, so results can match metadata beyond the title. Up to 100 books are shown; a notice appears if more results exist.
-- **Filter** allows you to narrow results by Authors, Series, Genres, or Tags.
+- **Filter** allows you to narrow results by Authors, Series, Genres, or Tags. **Continue listening** shows books in the selected library with unfinished audio progress on the server, including books started on another device and not yet downloaded to the R1.
 - **Sort** lets you order the list by title, author, date, duration, or series.
 - Group lists and ordinary/filtered book lists use virtual scrolling for fast navigation.
 - **Back** returns from an author's or series' books to that group list. **All books** clears a search or filter; submitting an empty search also returns to all books.
@@ -67,6 +67,16 @@ The indicator is hidden for music. Its label reads a small in-memory snapshot; i
 - With Wi-Fi enabled, background checks run roughly every 15 seconds. Pending attempts for a book are spaced about a minute apart; pause/stop can request an earlier attempt. Already-synced linked books are checked about every five minutes, and sooner on reconnect, so phone progress can arrive even without further R1 listening. Requests run serially, up to eight books per pass. Network association and server response time can add delay. The Wi-Fi toggle is not proof of server reachability: a verified server response is required before showing Synced.
 - These checks are independent of having the audiobook page open. No directory rescan, audio decoding or list allocation is needed to find pending saved checkpoints.
 
+## Audiobookshelf podcasts
+
+Open **Streaming → Audiobookshelf → Podcasts**, then choose a podcast library. **Shows** lists the library's shows and lets you search by show name. **Latest episodes** lists recent unfinished episodes. Open an episode to play it, queue a download, or mark it heard or unheard.
+
+Play uses the SD copy when one is available. Otherwise it reads the episode from Audiobookshelf over Wi-Fi. MP3 can start while the file arrives; a container that needs metadata at the end may take longer to prepare. This uses the Audiobookshelf profile, not a Podcast Index key. Server transcoding and subscription management are not supported.
+
+Open **Downloaded episodes** at the Audiobookshelf root to play without Wi-Fi, including after a reboot. The **Downloads** row opens the queue; clearing queue history does not delete completed audio. Use **Remove download** on the episode to remove its device copy. That action does not delete the episode from Audiobookshelf or reset your place.
+
+Progress and listening time are tied to the Audiobookshelf account and episode. Sonix retains offline updates and sends them after reconnect. If you replace the profile key, verify the account by opening the library online before using its downloads offline again.
+
 ## Scope and conflicts
 
 Progress is reconciled in both directions for linked books:
@@ -83,7 +93,7 @@ When the fallback selects an upload whose timestamp cannot be trusted, it omits 
 
 New manifests record the server address. Older manifests without a server field are adopted against the configured server for compatibility. Re-link after changing server/account; server-address isolation is not account-identity discovery.
 
-Only the progress position/completion state is synced. Local manual bookmarks and settings do not become Audiobookshelf bookmarks/settings.
+In this build, linked books also report listening time. On pause, Sonix saves the time reported by the audio output in a separate local queue. The queue survives reboot and retries each session with the same ID. Sonix sends history after the server has a newer resume checkpoint, so the older session does not move your place. Replacing a profile's API key leaves sessions recorded with the old key pending; Sonix does not send them under the new key. Local bookmarks and settings are not synced.
 
 ## Implementation and validation
 

@@ -755,6 +755,7 @@ static abs_download_enqueue_t episode_req(const char *item, const char *episode,
 	abs_download_enqueue_t r = book_req(item, title, "");
 	r.kind = ABS_DL_KIND_EPISODE;
 	r.episode_id = episode;
+	r.owner_id = "owner-a";
 	return r;
 }
 
@@ -1122,7 +1123,7 @@ static void test_schema(void) {
 	CHECK(sqlite3_step(stmt) == SQLITE_ROW, "no user_version row\n");
 	int version = sqlite3_column_int(stmt, 0);
 	sqlite3_finalize(stmt);
-	CHECK(version == 1, "schema version is %d, wanted 1\n", version);
+	CHECK(version == 2, "schema version is %d, wanted 2\n", version);
 
 	bool found_job = false, found_file = false, found_index = false;
 	CHECK(sqlite3_prepare_v2(raw, "SELECT name, type FROM sqlite_master", -1, &stmt, NULL) == SQLITE_OK,
@@ -1139,7 +1140,7 @@ static void test_schema(void) {
 		if (strcmp(name, "DOWNLOAD_FILE") == 0 && strcmp(type, "table") == 0) {
 			found_file = true;
 		}
-		if (strcmp(name, "download_job_unfinished") == 0 && strcmp(type, "index") == 0) {
+		if (strcmp(name, "download_job_owner_unfinished") == 0 && strcmp(type, "index") == 0) {
 			found_index = true;
 		}
 	}
@@ -1252,6 +1253,15 @@ static void test_capacity_dedup(void) {
 	CHECK(abs_download_enqueue_book(&b, &book_id, NULL, err, sizeof(err)), "book enqueue: %s\n", err);
 	CHECK(abs_download_enqueue_episode(&e, &ep_id, NULL, err, sizeof(err)), "episode enqueue: %s\n", err);
 	CHECK(book_id != ep_id, "episode collided with the book identity\n");
+	long long same_owner = 0, other_owner = 0;
+	CHECK(abs_download_enqueue_episode(&e, &same_owner, &deduped, err, sizeof(err)) &&
+		deduped && same_owner == ep_id, "same owner did not dedupe\n");
+	CHECK(abs_download_remove(book_id, err, sizeof(err)), "make room for other owner: %s\n", err);
+	e.owner_id = "owner-b";
+	CHECK(abs_download_enqueue_episode(&e, &other_owner, &deduped, err, sizeof(err)) &&
+		!deduped && other_owner != ep_id, "different owner deduped\n");
+	e.owner_id = NULL;
+	CHECK(!abs_download_enqueue_episode(&e, NULL, NULL, err, sizeof(err)), "episode without an owner passed\n");
 
 	abs_download_quiesce_storage();
 	printf("ok\n");

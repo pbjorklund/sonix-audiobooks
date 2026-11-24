@@ -35,7 +35,7 @@
 //          never cover more than one 32 KiB read unit of the 16 MiB track —
 //          the PAUSING ack retains the partial .part, and Resume re-downloads
 //          it from byte zero to a byte-exact file.
-//       4. Negatives: the episode refusal, an unresolvable profile (the auth
+//       4. Episode download, owner isolation, an unresolvable profile (the auth
 //          stage fails before any request), and token-leak scans over the
 //          queue database, every card file and the mock's request log.
 //
@@ -314,7 +314,8 @@ static long long enqueue_episode(const char *profile, const char *server, const 
 	req.server = server;
 	req.library_id = "";
 	req.item_id = item;
-	req.episode_id = "ep-1";
+	req.episode_id = "pod41-ep-001";
+	req.owner_id = "fixture-credential-a";
 	req.title = title;
 	req.destination = destination;
 	req.remote_progress = -1;
@@ -757,6 +758,7 @@ const char *http_last_error(void) {
 // §9.5 plumbing: the offline stub never truncates anything, so its signal is
 // a permanent false; the real http.c provides it in the live build.
 bool http_last_truncated(void) { return false; }
+long long http_last_server_time_ms(void) { return 0; }
 
 static abs_auth_snapshot_t held;
 static volatile int offline_cancel;
@@ -2392,18 +2394,40 @@ static void live_run(void) {
 		  count_log_lines_with("/api/items/mock-book/cover"));
 
 	// ------------------------------------------------------------------
-	// Phase 4 — negatives
+	// Phase 4 — the episode path and its authorization gates
 	// ------------------------------------------------------------------
-	// An episode job is refused by the adapter until the podcast wave.
+	char deny_path[1024];
+	snprintf(deny_path, sizeof(deny_path), "%s/deny-podcast-download", media_dir);
+	FILE *deny = fopen(deny_path, "w");
+	CHECK(deny && fclose(deny) == 0, "cannot configure download permission fixture\n");
+	long long denied = enqueue_episode(live_profile, live_server, "pod-41", "Download denied", "");
+	CHECK(pump_until_terminal(denied) == ABS_DL_FAILED, "episode download permission must fail\n");
+	abs_download_job_t seen_denied = snapshot_job(denied);
+	CHECK(!strcmp(seen_denied.error_stage, "auth") && strstr(seen_denied.error, "cannot download"),
+		  "episode download permission failure: %s\n", seen_denied.error);
+	CHECK(count_log_lines_with("/api/items/pod-41/file/258638762231958/download") == 1,
+		  "the permission check must reach the download endpoint, not fall back to streaming\n");
+	CHECK(unlink(deny_path) == 0, "cannot restore download permission fixture\n");
+
 	long long ep_job = enqueue_episode(live_profile, live_server, "pod-41",
 									   "Fixture Forty-One Podcast", "");
-	CHECK(pump_until_terminal(ep_job) == ABS_DL_FAILED, "episode state\n");
+	CHECK(pump_until_terminal(ep_job) == ABS_DL_DONE, "episode state: %s\n", snapshot_job(ep_job).error);
 	abs_download_job_t seen_ep = snapshot_job(ep_job);
-	CHECK(strcmp(seen_ep.error_stage, "metadata") == 0, "stage %s\n", seen_ep.error_stage);
-	CHECK(strstr(seen_ep.error, "not wired yet") != NULL, "episode refusal: %s\n", seen_ep.error);
+	CHECK(!strncmp(seen_ep.destination, "Podcast/ABS/", 12), "episode destination %s\n", seen_ep.destination);
+	CHECK(count_log_lines_with("/api/items/pod-41/file/258638762231958/download") == 2,
+		  "episode did not use the permission-checked download route\n");
 	CHECK(count_log_lines_with("expanded=1&include=progress,authors") == items_probe + 3,
-		  "the episode refusal must not fetch anything, got %lld\n",
-		  count_log_lines_with("expanded=1&include=progress,authors"));
+		  "episode download issued a book metadata request\n");
+
+	// Same server and episode, but a valid token for a different ABS user.
+	CHECK(abs_profiles_edit(live_profile, NULL, "test-token-b"), "cannot switch mock account\n");
+	long long wrong_owner = enqueue_episode(live_profile, live_server, "pod-41", "Other account", "");
+	CHECK(wrong_owner != ep_job, "episode fixture unexpectedly reused the completed job\n");
+	CHECK(pump_until_terminal(wrong_owner) == ABS_DL_FAILED, "wrong ABS owner must fail\n");
+	CHECK(!strcmp(snapshot_job(wrong_owner).error_stage, "auth"), "wrong owner must fail before metadata\n");
+	CHECK(count_log_lines_with("/api/items/pod-41/file/258638762231958/download") == 2,
+		  "the second user must not download the first user's episode\n");
+	CHECK(abs_profiles_edit(live_profile, NULL, mock_token), "cannot restore mock account\n");
 
 	// An unresolvable profile fails at the auth stage before any request.
 	long long auth_job = enqueue_book("p9", live_server, "pod-41", "Fixture Forty-One Podcast");
@@ -2491,7 +2515,9 @@ static void live_run(void) {
 	printf("transfer test: live scan-completion import... ");
 	audiobookshelf_queue_import_install();
 	char import_error[256] = {0};
-	CHECK(abs_download_import_pending(import_error, sizeof(import_error)) == 0, "no index yet\n");
+	CHECK(abs_download_import_pending(import_error, sizeof(import_error)) == 1,
+		"episode imports without the audiobook index\n");
+	CHECK(snapshot_job(ep_job).index_pending == 0, "episode still waiting for an audiobook index\n");
 	CHECK(strstr(import_error, "not indexed") != NULL, "refusal text: %s\n", import_error);
 	CHECK(job_state(job2) == ABS_DL_DONE && job_state(job3) == ABS_DL_DONE,
 		  "a refused import must keep DONE\n");

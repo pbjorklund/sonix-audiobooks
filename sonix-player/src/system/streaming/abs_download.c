@@ -96,8 +96,8 @@ const char *abs_download_state_name(abs_download_state_t state) {
 #define UNFINISHED_SQL \
 	"('QUEUED','FETCHING','DOWNLOADING','PAUSING','PAUSED','WAITING_NETWORK','FINALIZING')"
 
-// Schema version 1, verbatim from §8.2. The database belongs to the card and
-// its destination files; tokens are never stored in it.
+// The database belongs to the card and its destination files. Tokens are
+// never stored here. Version 2 adds the verified owner for episode jobs.
 static const char *const SCHEMA_SQL =
 	"CREATE TABLE IF NOT EXISTS DOWNLOAD_JOB("
 	"  id INTEGER PRIMARY KEY,"
@@ -125,7 +125,8 @@ static const char *const SCHEMA_SQL =
 	"  resume_seconds REAL NOT NULL DEFAULT -1,"
 	"  ack_reset_done INTEGER NOT NULL DEFAULT 0,"
 	"  created_ms INTEGER NOT NULL DEFAULT 0,"
-	"  updated_ms INTEGER NOT NULL DEFAULT 0);"
+	"  updated_ms INTEGER NOT NULL DEFAULT 0,"
+	"  owner_id TEXT NOT NULL DEFAULT '');"
 	"CREATE TABLE IF NOT EXISTS DOWNLOAD_FILE("
 	"  job_id INTEGER NOT NULL,"
 	"  ordinal INTEGER NOT NULL,"
@@ -139,8 +140,8 @@ static const char *const SCHEMA_SQL =
 	"  PRIMARY KEY(job_id, ordinal));"
 	// §8.2: a partial unique index prevents duplicate unfinished identities
 	// while allowing an explicit later enqueue after terminal removal.
-	"CREATE UNIQUE INDEX IF NOT EXISTS download_job_unfinished"
-	" ON DOWNLOAD_JOB(kind, server, item_id, episode_id)"
+	"CREATE UNIQUE INDEX IF NOT EXISTS download_job_owner_unfinished"
+	" ON DOWNLOAD_JOB(kind, server, item_id, episode_id, owner_id)"
 	" WHERE state IN " UNFINISHED_SQL ";";
 
 // Stages recorded on terminal errors (§8.4). Anything else is coerced to
@@ -585,19 +586,18 @@ static int schema_version_locked(void) {
 
 static bool ensure_schema_locked(void) {
 	int version = schema_version_locked();
-	// 0 = the database is being created now (or a foreign empty file). Anything
-	// newer than 1 was written by a future player: refuse rather than guess.
-	if (version < 0 || version > 1) {
+	if (version < 0 || version > 2) {
 		fprintf(stderr, "abs-download: refusing download database schema version %d\n", version);
 		return false;
 	}
-	if (!db_exec(SCHEMA_SQL)) {
-		return false;
-	}
-	if (version == 0 && !db_exec("PRAGMA user_version=1")) {
-		return false;
-	}
-	return true;
+	if (version == 2) return db_exec(SCHEMA_SQL);
+	if (!db_exec("BEGIN IMMEDIATE")) return false;
+	bool ok = version != 1 ||
+		(db_exec("ALTER TABLE DOWNLOAD_JOB ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''") &&
+		 db_exec("DROP INDEX IF EXISTS download_job_unfinished"));
+	if (ok && db_exec(SCHEMA_SQL) && db_exec("PRAGMA user_version=2") && db_exec("COMMIT")) return true;
+	db_exec("ROLLBACK");
+	return false;
 }
 
 static sqlite3_stmt *prepare_locked(const char *sql) {
@@ -678,6 +678,7 @@ static void job_from_row(sqlite3_stmt *stmt, abs_download_job_t *j) {
 	j->ack_reset_done = sqlite3_column_int(stmt, 23);
 	j->created_ms = sqlite3_column_int64(stmt, 24);
 	j->updated_ms = sqlite3_column_int64(stmt, 25);
+	snprintf(j->owner_id, sizeof(j->owner_id), "%s", col_text(stmt, 26));
 	j->generation = snapshot_generation;
 }
 
@@ -1082,6 +1083,7 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 	char library_id[ABS_DL_ID_MAX] = {0};
 	char item_id[ABS_DL_ID_MAX] = {0};
 	char episode_id[ABS_DL_ID_MAX] = {0};
+	char owner_id[ABS_DL_ID_MAX] = {0};
 	char title[ABS_DL_TITLE_MAX] = {0};
 	char destination[ABS_DL_DEST_MAX] = {0};
 
@@ -1101,7 +1103,8 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 			return false;
 		}
 	} else if (!copy_request_string(episode_id, sizeof(episode_id), req->episode_id, true, "Episode", error,
-									error_size)) {
+									error_size) ||
+		!copy_request_string(owner_id, sizeof(owner_id), req->owner_id, true, "Owner", error, error_size)) {
 		return false;
 	}
 	if (!server_ok(server)) {
@@ -1131,7 +1134,7 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 	// §8.1 dedup: an unfinished identity opens its existing row. The partial
 	// unique index is the transactional backstop for any racing writer.
 	sqlite3_stmt *stmt = prepare_locked(
-		"SELECT id FROM DOWNLOAD_JOB WHERE kind=? AND server=? AND item_id=? AND episode_id=?"
+		"SELECT id FROM DOWNLOAD_JOB WHERE kind=? AND server=? AND item_id=? AND episode_id=? AND owner_id=?"
 		" AND state IN " UNFINISHED_SQL);
 	bool have_existing = false;
 	bool inserted_now = false;
@@ -1141,6 +1144,7 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 		bind_text_or_empty(stmt, 2, server);
 		bind_text_or_empty(stmt, 3, item_id);
 		bind_text_or_empty(stmt, 4, episode_id);
+		bind_text_or_empty(stmt, 5, owner_id);
 		if (sqlite3_step(stmt) == SQLITE_ROW) {
 			existing = sqlite3_column_int64(stmt, 0);
 			have_existing = true;
@@ -1177,8 +1181,8 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 		stmt = prepare_locked(
 			"INSERT INTO DOWNLOAD_JOB(kind, profile_id, server, library_id, item_id, episode_id, title,"
 			" destination, state, seq, created_ms, updated_ms, remote_progress, remote_finished,"
-			" remote_updated_ms, index_pending, ack_reset_done)"
-			" VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+			" remote_updated_ms, index_pending, ack_reset_done, owner_id)"
+			" VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
 		if (stmt) {
 			bind_text_or_empty(stmt, 1, kind);
 			bind_text_or_empty(stmt, 2, profile_id);
@@ -1200,6 +1204,7 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 			sqlite3_bind_int64(stmt, 15, (sqlite3_int64)req->remote_updated_ms);
 			sqlite3_bind_int(stmt, 16, 0); // index_pending
 			sqlite3_bind_int(stmt, 17, 0); // ack_reset_done
+			bind_text_or_empty(stmt, 18, owner_id);
 			bool inserted = sqlite3_step(stmt) == SQLITE_DONE;
 			long long new_id = inserted ? (long long)sqlite3_last_insert_rowid(db) : 0;
 			sqlite3_finalize(stmt);
@@ -1215,13 +1220,14 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 		// identity so a duplicate becomes the friendly "opens existing row".
 		db_exec("ROLLBACK");
 		stmt = prepare_locked(
-			"SELECT id FROM DOWNLOAD_JOB WHERE kind=? AND server=? AND item_id=? AND episode_id=?"
+			"SELECT id FROM DOWNLOAD_JOB WHERE kind=? AND server=? AND item_id=? AND episode_id=? AND owner_id=?"
 			" AND state IN " UNFINISHED_SQL);
 		if (stmt) {
 			bind_text_or_empty(stmt, 1, kind);
 			bind_text_or_empty(stmt, 2, server);
 			bind_text_or_empty(stmt, 3, item_id);
 			bind_text_or_empty(stmt, 4, episode_id);
+			bind_text_or_empty(stmt, 5, owner_id);
 			if (sqlite3_step(stmt) == SQLITE_ROW) {
 				existing = sqlite3_column_int64(stmt, 0);
 				have_existing = true;
@@ -1777,7 +1783,7 @@ void abs_download_network_changed(void) {
 // imports it.
 // ---------------------------------------------------------------------------
 
-int abs_download_import_pending(char *error, size_t error_size) {
+static int import_pending(bool episodes_only, char *error, size_t error_size) {
 	if (error_size) {
 		error[0] = '\0';
 	}
@@ -1802,7 +1808,8 @@ int abs_download_import_pending(char *error, size_t error_size) {
 	abs_download_job_t pending[ABS_DL_JOB_CAP];
 	int count = 0;
 	for (int i = 0; i < jobs_count && count < ABS_DL_JOB_CAP; i++) {
-		if (jobs[i].state == ABS_DL_DONE && jobs[i].index_pending) {
+		if (jobs[i].state == ABS_DL_DONE && jobs[i].index_pending &&
+			(!episodes_only || !strcmp(jobs[i].kind, ABS_DL_KIND_EPISODE))) {
 			pending[count++] = jobs[i];
 		}
 	}
@@ -1818,8 +1825,9 @@ int abs_download_import_pending(char *error, size_t error_size) {
 		import_running = true;
 		pthread_mutex_unlock(&lock);
 
-		bool ok = cfg.ops->import_resume(cfg.ops->user, &pending[i], first_error,
-										 sizeof(first_error));
+		char import_error[ABS_DL_ERROR_MAX] = {0};
+		bool ok = cfg.ops->import_resume(cfg.ops->user, &pending[i], import_error,
+										 sizeof(import_error));
 
 		// A worker op window may be open while this runs: the import touches
 		// only DONE rows the worker never owns, and audiobookdb serializes
@@ -1848,15 +1856,17 @@ int abs_download_import_pending(char *error, size_t error_size) {
 		// leaves the committed flag of the closed card untouched — recovery
 		// preserves the row and the next completed scan after re-init imports.
 		pthread_mutex_unlock(&lock);
-		if (!ok && !first_error[0]) {
-			// Defensive: a misbehaving op is treated like any other failure.
-			snprintf(first_error, sizeof(first_error), "The resume import failed");
-		}
+		if (!ok && !first_error[0])
+			snprintf(first_error, sizeof(first_error), "%s", import_error[0] ? import_error : "The resume import failed");
 	}
 	if (first_error[0] && error_size > strlen(first_error)) {
 		snprintf(error, error_size, "%s", first_error);
 	}
 	return imported;
+}
+
+int abs_download_import_pending(char *error, size_t error_size) {
+	return import_pending(false, error, error_size);
 }
 
 // ---------------------------------------------------------------------------
@@ -2723,6 +2733,7 @@ static void *worker_main(void *unused) {
 			break;
 		}
 		abs_download_pump();
+		import_pending(true, NULL, 0);
 	}
 	return NULL;
 }

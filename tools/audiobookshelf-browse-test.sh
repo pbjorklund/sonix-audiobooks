@@ -97,11 +97,24 @@ for ALIAS in $ALIASES; do
 	done
 	[[ -s "$port_file" ]] || fail "mock for $ALIAS never opened a port"
 	PORT=$(cat "$port_file")
+	# Supply a finished book with a nonzero position alongside the fixture's
+	# in-progress book and unstarted books. Only the in-progress book belongs.
+	python3 - "$PORT" "sonix-browse-$ALIAS" <<'PY'
+import sys
+from urllib.request import Request, urlopen
+
+request = Request(f"http://127.0.0.1:{sys.argv[1]}/api/me/progress/pg-bk-002",
+                  data=b'{"currentTime": 600, "duration": 600, "isFinished": true}',
+                  headers={"Authorization": f"Bearer {sys.argv[2]}", "Content-Type": "application/json"},
+                  method="PATCH")
+with urlopen(request, timeout=5) as response:
+    assert response.status in (200, 204)
+PY
 
 	# The live binary uses the real http stack (no stub; -DABS_BROWSE_TEST_LIVE).
 	gcc "${COMPILE_FLAGS[@]}" -DABS_BROWSE_TEST_LIVE "$ROOT/tools/audiobookshelf-browse-test.c" \
 		src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c \
-		src/system/library/description.c \
+		src/system/library/description.c src/system/streaming/abs_show_reader.c \
 		src/system/core/config.c src/system/core/json.c src/system/net/http.c \
 		src/system/net/tls.c "${LINK_FLAGS[@]}" -o "$WORK/browse-live"
 	SONIX_AUDIOBOOKSHELF_SERVER="http://127.0.0.1:$PORT" SONIX_AUDIOBOOKSHELF_TOKEN="sonix-browse-$ALIAS" \

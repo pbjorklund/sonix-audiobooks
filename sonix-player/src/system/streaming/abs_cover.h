@@ -13,7 +13,7 @@
 // The detail screen needs the tapped book's artwork, and ABS serves that only
 // behind its Bearer token:
 //
-//     GET /api/items/{itemId}/cover?format=jpeg&width=900&height=1280
+//     GET /api/items/{itemId}/cover?format=jpeg&width=900
 //
 // The reviewed route supports width/height/format at both fixture revisions.
 // The server scales its source to this size; the player then decodes the file
@@ -96,5 +96,9 @@ void abs_cover_quiesce(void);
 bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 					 const volatile int *cancel, char *path_out, size_t path_size,
 					 char *error, size_t error_size);
+
+// Small width-only variant, cached separately from the larger detail image.
+bool abs_cover_fetch_shelf(const abs_auth_snapshot_t *auth, const char *item_id,
+					 char *path_out, size_t path_size);
 
 #endif /* ABS_COVER_H */
