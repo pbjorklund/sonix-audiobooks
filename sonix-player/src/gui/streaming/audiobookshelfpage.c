@@ -878,7 +878,7 @@ static void draw_home(void) {
 		if (!home->counts[row]) continue;
 		settingsrow_heading(content, names[row]);
 		lv_obj_t *strip = lv_obj_create(content);
-		lv_obj_set_size(strip, lv_pct(100), 180);
+		lv_obj_set_size(strip, lv_pct(100), 126);
 		lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
 		lv_obj_set_style_border_width(strip, 0, 0);
 		lv_obj_set_style_pad_all(strip, 0, 0);
@@ -887,30 +887,26 @@ static void draw_home(void) {
 		lv_obj_set_scroll_dir(strip, LV_DIR_HOR);
 		for (int i = 0; i < home->counts[row]; i++) {
 			lv_obj_t *card = lv_btn_create(strip);
-			lv_obj_set_size(card, 126, 174);
+			lv_obj_set_size(card, 126, 126);
 			lv_obj_add_style(card, &theme_style_card, 0);
+			lv_obj_set_style_shadow_width(card, 0, 0);
+			lv_obj_set_style_border_width(card, 0, 0);
+			lv_obj_set_style_pad_all(card, 0, 0);
 			lv_obj_add_event_cb(card, home_book_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)(row * ABS_HOME_PER_SHELF + i));
 			cover_image_t *image = home->covers[row][i][0] ? calloc(1, sizeof(*image)) : NULL;
-			if (image && cover_load_image_file(home->covers[row][i], 104, 116, COVER_FIT_CONTAIN, image)) {
+			if (image && cover_load_image_file(home->covers[row][i], 126, 126, COVER_FIT_CONTAIN, image)) {
 				lv_obj_t *pic = lv_image_create(card);
 				lv_image_set_src(pic, &image->dsc);
-				lv_obj_align(pic, LV_ALIGN_TOP_MID, 0, 5);
+				lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+				lv_obj_center(pic);
 				lv_obj_add_event_cb(pic, home_cover_delete, LV_EVENT_DELETE, image);
 			} else {
 				free(image);
 				lv_obj_t *fallback = lv_image_create(card);
 				lv_image_set_src(fallback, &icon_menu_audiobook_continue);
 				lv_obj_add_style(fallback, &theme_style_icon, 0);
-				lv_obj_align(fallback, LV_ALIGN_CENTER, 0, -25);
+				lv_obj_center(fallback);
 			}
-			lv_obj_t *title = lv_label_create(card);
-			lv_obj_set_width(title, 106);
-			lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-			lv_obj_set_height(title, 44);
-			lv_obj_set_style_text_font(title, &font_ui_18, 0);
-			lv_obj_add_style(title, &theme_style_text, 0);
-			lv_label_set_text(title, home->items[row][i].title);
-			lv_obj_align(title, LV_ALIGN_BOTTOM_MID, 0, -3);
 		}
 	}
 }
