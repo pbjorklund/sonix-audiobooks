@@ -961,6 +961,7 @@ static void read_track(const json_doc_t *doc, int obj, const tidal_album_t *albu
 	json_obj_str(doc, obj, "title", t->title, sizeof(t->title));
 	t->duration = (int)json_obj_long(doc, obj, "duration", 0);
 	t->track_number = (int)json_obj_long(doc, obj, "trackNumber", 0);
+	t->disc_number = (int)json_obj_long(doc, obj, "volumeNumber", 0);
 	t->hires = read_hires(doc, obj);
 
 	// Both fields are needed: allowStreaming says the track may be played at
@@ -982,6 +983,11 @@ static void read_track(const json_doc_t *doc, int obj, const tidal_album_t *albu
 	int album = json_get(doc, obj, "album");
 	if (album >= 0) {
 		json_obj_str(doc, album, "title", t->album, sizeof(t->album));
+		json_obj_str(doc, json_get(doc, album, "artist"), "name", t->album_artist, sizeof(t->album_artist));
+		char released[32] = "";
+		if (json_obj_str(doc, album, "releaseDate", released, sizeof(released))) {
+			t->release_year = atoi(released);
+		}
 		long album_id = json_obj_long(doc, album, "id", 0);
 		if (album_id > 0) {
 			snprintf(t->album_id, sizeof(t->album_id), "%ld", album_id);
@@ -996,6 +1002,12 @@ static void read_track(const json_doc_t *doc, int obj, const tidal_album_t *albu
 	// artist: fill them from the album already fetched, or the rows come out
 	// bare.
 	if (album_hint) {
+		if (!t->release_year) {
+			t->release_year = atoi(album_hint->released);
+		}
+		if (!t->album_artist[0]) {
+			snprintf(t->album_artist, sizeof(t->album_artist), "%s", album_hint->artist);
+		}
 		if (!t->album[0]) {
 			snprintf(t->album, sizeof(t->album), "%s", album_hint->title);
 		}
@@ -1537,7 +1549,7 @@ static bool parse_bts(const char *text, tidal_stream_t *out) {
 	return true;
 }
 
-bool tidal_track_stream(long track_id, tidal_stream_t *out) {
+bool tidal_track_stream_quality(long track_id, int requested_quality, tidal_stream_t *out) {
 	clear_error();
 	if (!out) {
 		return false;
@@ -1548,7 +1560,7 @@ bool tidal_track_stream(long track_id, tidal_stream_t *out) {
 	snprintf(url, sizeof(url),
 			 "%s/tracks/%ld/playbackinfopostpaywall?countryCode=%s&audioquality=%s"
 			 "&playbackmode=STREAM&assetpresentation=FULL",
-			 api_url, track_id, country(), tidal_quality_name(quality));
+			 api_url, track_id, country(), tidal_quality_name(requested_quality));
 
 	char *body = NULL;
 	json_doc_t doc;
@@ -1602,6 +1614,10 @@ bool tidal_track_stream(long track_id, tidal_stream_t *out) {
 
 	free(decoded);
 	return ok;
+}
+
+bool tidal_track_stream(long track_id, tidal_stream_t *out) {
+	return tidal_track_stream_quality(track_id, quality, out);
 }
 
 bool tidal_dash_segment_url(const tidal_stream_t *stream, int number, char *out, size_t size) {

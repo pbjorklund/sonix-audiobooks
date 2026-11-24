@@ -99,12 +99,15 @@ typedef struct {
 	char title[TIDAL_TITLE_MAX];
 	char artist[TIDAL_NAME_MAX];
 	char album[TIDAL_TITLE_MAX];
+	char album_artist[TIDAL_NAME_MAX];
 	// Text rather than a number, for the same reason as Qobuz: both pages then
 	// pass the album identifier to the same functions.
 	char album_id[TIDAL_ID_MAX];
 	char cover[TIDAL_URL_MAX]; // already built, see tidal_cover_url()
 	int duration;			   // seconds
 	int track_number;
+	int disc_number;
+	int release_year;
 	bool hires;
 	bool streamable; // false = present but not playable on this subscription
 	int bit_depth;
@@ -251,6 +254,7 @@ typedef struct {
 // five hundred characters each). The caller allocates it, and it must not go on
 // the stack of a small thread.
 bool tidal_track_stream(long track_id, tidal_stream_t *out);
+bool tidal_track_stream_quality(long track_id, int requested_quality, tidal_stream_t *out);
 
 // The URL of a DASH segment: `media_template` with $Number$ substituted. False
 // when it does not fit.

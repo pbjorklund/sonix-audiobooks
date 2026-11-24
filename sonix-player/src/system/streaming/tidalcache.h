@@ -76,6 +76,10 @@ bool tidalcache_find(long track_id, char *out, size_t size);
 // `stream` is copied: the caller can free its own as soon as this returns.
 bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_secs, char *out, size_t size);
 
+// Fetches a fresh file into an isolated staging path and waits for completion.
+// complete_transfer means the byte count or segment count was known and matched.
+bool tidalcache_download(long track_id, const tidal_stream_t *stream, char *out, size_t size, bool *complete_transfer);
+
 // The extension this stream's file will have, without the dot. Gives the name
 // before the download begins.
 const char *tidalcache_extension(const tidal_stream_t *stream);
@@ -101,6 +105,9 @@ void tidalcache_abandon_all(void);
 // The id of the track downloading right now, 0 if none.
 long tidalcache_downloading_id(void);
 
+// Active track progress (0–99), or -1 if the size is unknown or it is not transferring.
+int tidalcache_download_percent(long track_id);
+
 // "Tidal needs the network", even when nothing is downloading at this instant.
 // Needed by the Wi-Fi parking logic (power.c): see the long comment on
 // qobuzcache_set_network_wanted().
@@ -120,8 +127,7 @@ const char *tidalcache_dir(void);
 // segments has no tags at all, because the tags live in the metadata blocks the
 // MP4 does not carry. Without this sidecar the player would show
 // "12345678.flac" for every hi-res track.
-void tidalcache_write_sidecars(long track_id, const char *mime, const char *title, const char *artist,
-							   const char *album, const char *album_id, int track_number, const char *cover_url);
+void tidalcache_write_sidecars(const tidal_track_t *track, const char *mime, const char *cover_url);
 
 // The Tidal album id the track belongs to, read back from the sidecar. False if
 // the path is not from this cache or the sidecar does not say. Used by "Show
@@ -153,8 +159,49 @@ void tidalcache_set_protected(const char *const *paths, int count);
 // Call on the way out (shutdown, reboot).
 void tidalcache_clear_on_exit(void);
 
-// Current size, and how to empty it.
+// Current size, and how to empty it (kept tracks survive this too).
 long tidalcache_bytes(void);
 void tidalcache_clear(void);
+
+// ---------------------------------------------------------------------------
+// kept downloads
+//
+// The cache is transient by design: it empties on exit and every so many
+// tracks while running. A kept track is exempt from all of that -- it stays
+// on the card until it is explicitly removed, and it is what the Downloads
+// list plays from. The marker is "<id>.keep": keyed to the track id, so the
+// tags and cover sidecars (which share the id) are covered by the same
+// exemption, and a container change (flac named m4a by a manifest) does not
+// orphan it.
+// ---------------------------------------------------------------------------
+
+// Publishes completed audio and metadata under Music/Tidal. Idempotent.
+bool tidalcache_keep(const tidal_track_t *track, const char *path, bool complete_transfer);
+bool tidalcache_reuse(const tidal_track_t *track);
+void tidalcache_download_extras(const tidal_track_t *track);
+
+// Moves previously kept cache files into Music/Tidal without redownloading.
+void tidalcache_publish_legacy(void);
+
+// True if this track is marked kept and its audio file is complete.
+bool tidalcache_is_kept(long track_id);
+
+// The kept tracks on the card, `max` at a time from `offset`, sorted by
+// album and track number so an album's tracks stay in order in the Downloads
+// list. Returns the number filled (0 at the end of the list).
+int tidalcache_kept_list(tidal_track_t *out, int max, int offset);
+int tidalcache_kept_filtered(tidal_track_t *out, int max, int offset, const char *album, const char *artist);
+int tidalcache_kept_groups(tidal_album_t *out, int max, int offset, bool artists, const char *artist);
+bool tidalcache_kept_track(long id, tidal_track_t *out);
+
+// Count complete, kept tracks by album ID in one scan of the card.
+void tidalcache_kept_album_counts(const char *const *album_ids, int *counts, int count);
+
+// Deletes a track's files and sidecars and lifts its keep marker.
+bool tidalcache_remove_track(long track_id);
+
+// Drops least-recently played NON-KEPT tracks until `bytes` fit under the
+// cache ceiling. Kept tracks are never dropped here.
+void tidalcache_make_room(long bytes);
 
 #endif /* TIDALCACHE_H */

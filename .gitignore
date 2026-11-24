@@ -40,6 +40,11 @@ sonix-packer/r3proii_original.upt
 sonix-packer/r1_original.upt
 sonix-packer/sonix_launch
 build/
+/.tools/
+/.af/
+/.env
+/.env.*
+!/.env.example
 .host-test/
 /tmp/
 sonix-player/tmp/
