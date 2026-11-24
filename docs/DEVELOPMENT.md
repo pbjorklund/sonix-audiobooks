@@ -2,6 +2,12 @@
 
 This guide is for contributors building Sonix Audiobooks, not for people installing a release.
 
+## Checkout and scope
+
+Clone [the working fork](https://github.com/pbjorklund/sonix-audiobooks) as `origin`. Use `yetisoldier/sonix-audiobooks` as `upstream`. Start with `git status --short --branch`; preserve local changes when updating. Run commands below from the repository root unless shown otherwise. Use the bound `hiby-r1-abs` AmpliFlow project for tracked work.
+
+A source push, a firmware build, copying an image to SD, installing it, and publishing a release are separate actions. Do only the actions requested. Do not commit firmware, device logs, userdata backups, or credentials.
+
 ## Repository layout
 
 - `sonix-player/`: player source and host/target builds.
@@ -56,22 +62,59 @@ make target -j$(nproc)
 
 The target build includes an ABI check that rejects glibc symbols newer than the R1 firmware provides. Do not bypass it: a binary that cannot start can look like a boot loop on the device.
 
-## Package an original R1 firmware image
+## Feature checks
 
-Place the official R1 firmware input beside `sonix-packer/sonix_firmware_packer.sh` as `r1_original.upt`, copy `sonix_player` and `sonix_launch` from the target build into `sonix-packer/`, then run:
+| Change | Checks |
+| --- | --- |
+| TIDAL | `tools/tidalkeep-test.sh` (includes saved albums and all R1 language files) |
+| Audiobookshelf podcasts | `tools/audiobookshelf-episode-test.sh`, `tools/audiobookshelf-browse-test.sh`, `SONIX_PODCAST_SMOKE_SYNC=1 tools/audiobookshelf-podcast-smoke.sh`; repeat the smoke with `SONIX_PODCAST_SMOKE_FORMAT=m4a` for AAC |
+| Covers and details | `tools/audiobookshelf-detail-test.sh` and the Audiobookshelf host smoke above |
+| OTA tooling | `python3 tools/pack-r1-test.py` and a package/readback run on the known base |
+
+See the [host CI workflow](../.github/workflows/host-build.yml) for dependencies and the broader regression matrix. The simulator uses disposable media and servers; passing it does not prove R1 playback or reboot resume.
+
+## Package an original R1 test image
+
+Use the **official Sonix Audiobooks runtime for the original R1**, not stock HiBy firmware, an R1 MIDI image, or the R3 Pro II. Keeping the Sonix runtime preserves the Bluetooth stack. The overlay helper replaces the player and the 12 R1 language files and stamps the build ID. If a change needs other resources or runtime files, extend and verify the overlay before building rather than assuming the helper includes them.
+
+Install Python 3, `7z`, `squashfs-tools`, and `xorriso` (which supplies `xorrisofs`). Use the [official Sonix v0.6.2 R1 image](https://github.com/yetisoldier/sonix-audiobooks/releases/tag/v0.6.2) as the base for this branch. Obtain it from the trusted release and check it against a known digest, not a digest calculated only after receiving an untrusted file. GitHub lists the `r1.upt` asset with SHA-256 `40da4e001e03596b747f0b132de1d998718fc55f991900fbef462d9e6a3819fb`.
 
 ```bash
-cd sonix-packer
-./sonix_firmware_packer.sh
+# Replace this path with the downloaded official Sonix R1 image.
+BASE=/path/to/official/sonix-v0.6.2/r1.upt
+make -C sonix-player target -j"$(nproc)"
+sha=$(git rev-parse --short HEAD)
+out="build/firmware/r1-$sha"
+python3 tools/pack-r1.py --base "$BASE" \
+  --base-sha256 40da4e001e03596b747f0b132de1d998718fc55f991900fbef462d9e6a3819fb \
+  --build-id "r1-$sha" --output "$out"
+(cd "$out" && sha256sum -c SHA256SUMS)
 ```
 
-The output is `r1.upt`. It is for the original R1 only. Before sharing an image, compare the packaged target binary with the installed `/usr/bin/sonix_player` by SHA-256 and perform the R1 checks listed in [DEVICE_TESTING.md](../DEVICE_TESTING.md).
+Pass `--seven-zip /path/to/7z` if it is not on `PATH`. Use a new output directory for each build. Record the full source SHA and whether the tree was dirty; release builds require a clean tree. The helper checks the ABI, both OTA chains, unchanged kernel bytes, and the packaged player and language files against their inputs. It produces a local `r1.upt`, `sonix_player`, and `SHA256SUMS`; it does not stage or install anything. The README's stock-input packer serves a different upstream workflow.
 
-## Device automation
+## Deploy and verify on the original R1
 
-An ADB-enabled development build exposes a root-only FIFO at `/tmp/sonix-control`. It drives a second LVGL pointer and does not replace the real touchscreen. Use the Windows helper or the command examples in [DEVICE_TESTING.md](../DEVICE_TESTING.md).
+1. Enable ADB in **Settings → System → About**: tap **Build number** five times, then open **Settings → Developer options** and enable **ADB**. Connect over USB and run `adb devices -l`. Use the explicit serial every time; it can change after reboot. See [device testing](../DEVICE_TESTING.md) for the local dev-control interface.
+2. Confirm the model and installed build before writing. Replace `SERIAL` below with the listed USB serial. Inspect the card mount and free space, preserve any pending update, and keep a private userdata backup and known-good recovery image before installation.
 
-The automation interface is for controlled validation only. It is not a remote control service, and ADB remains disabled by default in normal user builds.
+   ```bash
+   adb -s SERIAL shell 'grep -E "device-name|build_version" /usr/resource/sonix/components/system-info.json'
+   adb -s SERIAL shell 'grep " /mnt/sd_0 " /proc/mounts; df -h /mnt/sd_0'
+   ```
+
+3. For authorized staging, verify `SHA256SUMS` on the host. Copy `r1.upt` to the root of the confirmed microSD card, using a temporary filename first if copying over ADB. Verify its SHA-256 on the card before moving it to `r1.upt`. Do not overwrite an unrelated update. Staging does not install it.
+4. Charge above 30%. On the R1 use **Settings → System → Update firmware → From SD card**. Never write raw flash. After reboot, reselect the USB serial, confirm the build ID, and compare `adb -s SERIAL shell 'sha256sum /usr/bin/sonix_player'` with the packaged player hash.
+5. Record the actual device checks: Bluetooth playback; audiobook and podcast playback with Wi-Fi off and resume after a normal reboot; podcast sync after reconnecting; TIDAL Downloads, Now Playing and normal Music scanning. Follow each task's acceptance criteria. Disable ADB when finished. Remove the applied update from the SD root once verified. If rollback is needed, install the known-good original-R1 image through the same SD update flow.
+
+Keep provisioning separate from firmware. Preserve `/usr/data/audiobookshelf_profiles.ini` and use `/usr/data/streaming-keys.ini` for private TIDAL app keys. Both are root-owned, mode `0600`. Restart Sonix after provisioning. Do not disable TLS, print credentials, put them in command arguments, or bundle them in firmware.
+
+## Cut a release
+
+- Confirm the authorized repository, branch, version, and intended audience. The working fork is not the upstream release channel. Sonix's internet updater follows the configured OTA repository; publishing on the fork does not redirect devices to it.
+- Review changes since the last release and update the [changelog](../CHANGELOG.md). Build and verify from the exact clean source commit. Run the matching host and device checks. Record the tested commit, build ID, model and hashes in the release notes. Do not promote experimental features as verified or supported where service authorization or hardware checks are still open.
+- Verify the intended source commit on the remote. Check CI on that SHA where configured: `host-build.yml` runs on PRs and pushes to `main` or `rebase/**`, not arbitrary topic-branch pushes.
+- With publication authorization, tag the verified commit and create a **draft** on the intended GitHub repository with `r1.upt`, a release-side `SHA256SUMS` for the files actually attached, and the notes. For a release attaching only `r1.upt`, run `sha256sum r1.upt` in the artifact directory to generate that manifest; the build-time manifest also lists the player binary. Verify the tag commit, model, filenames and uploaded asset hashes before publishing. Download the published asset again and confirm its hash and release visibility. Do not attach private fixtures, credentials, userdata, recovery firmware or internal logs.
 
 ## Upstream and licensing
 

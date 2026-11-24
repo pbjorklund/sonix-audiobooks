@@ -12,9 +12,13 @@ The main event loop already waits in `poll()`, so the FIFO adds no periodic
 timer or worker thread while idle. Its status is written to
 `/tmp/sonix-control.status`.
 
+## Connect to the original R1
+
+Follow the [ADB setup and device identification steps](docs/DEVELOPMENT.md#deploy-and-verify-on-the-original-r1) first. Explicitly select the USB serial, even when only one player is connected.
+
 ## Windows helper
 
-With ADB enabled and the R1 connected:
+With ADB enabled and only the intended R1 connected (the helper uses the default ADB target):
 
 ```powershell
 ./tools/sonix-device-control.ps1 status
@@ -30,10 +34,10 @@ translates them when its 180-degree display option is active.
 ## Direct ADB use
 
 ```bash
-adb shell "printf 'tap 360 420\n' > /tmp/sonix-control"
-adb shell "printf 'swipe 420 650 420 200 500\n' > /tmp/sonix-control"
-adb shell "printf 'wake\n' > /tmp/sonix-control"
-adb shell "cat /tmp/sonix-control.status"
+adb -s SERIAL shell "printf 'tap 360 420\n' > /tmp/sonix-control"
+adb -s SERIAL shell "printf 'swipe 420 650 420 200 500\n' > /tmp/sonix-control"
+adb -s SERIAL shell "printf 'wake\n' > /tmp/sonix-control"
+adb -s SERIAL shell "cat /tmp/sonix-control.status"
 ```
 
 `tap` accepts an optional hold time in milliseconds. `swipe` accepts an

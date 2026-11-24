@@ -2,6 +2,8 @@
 
 Use this checkout for Audiobookshelf audiobooks and podcasts, TIDAL, and device verification on the original HiBy R1. Stock HiBy Books integration and ebook reading are out of scope. Track work in the bound `hiby-r1-abs` AmpliFlow project. The sibling `../hiby-r1-abs/` holds historical notes, firmware artifacts, and a separate private archive of the earlier prototypes; do not resume development there.
 
+Read [the development guide](docs/DEVELOPMENT.md) before building firmware, using ADB, staging an update, or cutting a release.
+
 ## Source and builds
 
 - `origin` is `pbjorklund/sonix-audiobooks`; `upstream` is `yetisoldier/sonix-audiobooks`. Push only when authorized. Preserve uncommitted work when updating the checkout.

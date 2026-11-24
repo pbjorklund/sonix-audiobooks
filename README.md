@@ -12,6 +12,10 @@ progress that syncs by itself once Wi-Fi is back.
 > do is upstream's own and is in **[FEATURES.md](FEATURES.md)**. What the fork
 > adds is described in **[AUDIOBOOK_EDITION.md](AUDIOBOOK_EDITION.md)**.
 
+## Working on this repository
+
+Start with the [development guide](docs/DEVELOPMENT.md) for setup, host and target checks, original-R1 firmware packaging, ADB setup, SD installation and recovery, and cutting a release. For the standalone fork's R1 builds, use that guide's Sonix-runtime overlay rather than the stock-input packer described below.
+
 ## Release 0.6.1
 Introduces the **Hat Blue** visual redesign: an iOS-inspired dark theme featuring a royal-blue `#135EDB` accent (matching the boot-screen gnome's knitted hat) on near-black `#08090C` screens with `#191B21` cards. Menu tiles are now flat with 22px rounded corners, and 37 menu icons have been restyled as layered blue-gradient artwork.
 
@@ -288,6 +292,8 @@ either is wrong. An image carrying the other player's name would offer that
 player's update to a device that cannot survive it.
 
 ### Streaming keys
+
+For this fork's original-R1 test and release images, keep keys in device userdata as described in the [development guide](docs/DEVELOPMENT.md#deploy-and-verify-on-the-original-r1). Do not use the upstream sealing workflow below for shared images.
 
 Tidal, Qobuz, Podcast Index and Last.fm need application keys, and they are
 not in this repository: provide your own (for Last.fm, an API account from
