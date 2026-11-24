@@ -164,7 +164,7 @@ def decode_filter(filter_param):
     if not filter_param:
         return None
     group, sep, value = filter_param.partition(".")
-    if not sep or group not in ("authors", "series", "tags", "genres"):
+    if not sep or group not in ("authors", "series", "tags", "genres", "progress"):
         return ("invalid", None)
     padded = value + "=" * (-len(value) % 4)
     try:
@@ -424,6 +424,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/libraries":
             self.send_json(self.fixture.libraries)
             return
+        if path == "/api/libraries/mock-library/personalized":
+            rows = self.fixture.rows("mock-library")
+            item = self.wire_row(rows[0], progress)
+            sequel = self.wire_row(self.fixture.rows("lib-list-1")[1], progress)
+            self.send_json([{"id": "continue-listening", "type": "book", "entities": [item]},
+                            {"id": "continue-series", "type": "book", "entities": [sequel]}])
+            return
         if path.startswith("/api/libraries/") and path.endswith("/items"):
             self.serve_items(progress)
             return
@@ -475,7 +482,14 @@ class Handler(BaseHTTPRequestHandler):
         decoded = decode_filter(params.get("filter", [""])[0])
         if decoded is not None:
             group, value = decoded
-            rows = filter_rows(rows, group, value) if group != "invalid" else []
+            if group == "progress" and value == "audio-in-progress":
+                def started_unfinished(row):
+                    status, entry = progress.get(row["id"])
+                    return (row["kind"] == "book" and status == "value"
+                            and entry.get("currentTime", 0) > 0 and not entry.get("isFinished", False))
+                rows = filter(started_unfinished, rows)
+            else:
+                rows = filter_rows(rows, group, value)
 
         ordered = order_rows(rows, sort, desc)
         total = len(ordered)
@@ -793,6 +807,29 @@ class Handler(BaseHTTPRequestHandler):
         if episode_id:
             response["episodeId"] = episode_id
         self.send_json(response)
+
+    def do_POST(self):
+        credential_id, progress = self.credential()
+        self.log_request_line(credential_id)
+        if progress is None:
+            self.send_error_json("unauthorized", 401)
+            return
+        if self.path != "/api/session/local-all":
+            self.send_error_json("not found", 404)
+            return
+        if progress.offline_file.exists():
+            self.send_error_json("offline test", 503)
+            return
+        value = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        sessions = value["sessions"]
+        with progress._lock:
+            path = progress.progress_file.with_suffix(".sessions.json")
+            saved = json.loads(path.read_text()) if path.exists() else {}
+            for session in sessions:
+                saved[session["id"]] = session
+            path.write_text(json.dumps(saved))
+        self.send_json({"results": [{"id": session["id"], "success": True, "progressSynced": False}
+                                    for session in sessions]})
 
     # -- PATCH --------------------------------------------------------------
 

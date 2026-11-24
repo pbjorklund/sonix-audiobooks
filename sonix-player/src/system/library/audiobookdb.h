@@ -192,6 +192,12 @@ typedef struct {
 } audiobookdb_abs_checkpoint_t;
 bool audiobookdb_abs_get(const char *book, audiobookdb_abs_checkpoint_t *out);
 bool audiobookdb_abs_next(const char *server, audiobookdb_abs_checkpoint_t *out);
+
+#include "src/system/streaming/abs_history.h"
+unsigned audiobookdb_history_generation(void);
+bool audiobookdb_history_enqueue(unsigned generation, const abs_history_session_t *session);
+bool audiobookdb_history_next(const char *scope, abs_history_session_t *session, unsigned *generation);
+bool audiobookdb_history_ack(unsigned generation, const char *scope, const char *id);
 void audiobookdb_abs_result(const audiobookdb_abs_checkpoint_t *sent, const char *server,
 						   bool linked, bool success, bool failed);
 void audiobookdb_abs_retry(const char *book);

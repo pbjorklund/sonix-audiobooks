@@ -258,11 +258,32 @@ fi
 
 click 356 160 1       # Home -> Streaming (upstream 1.3.0 home layout)
 click 124 704 2       # Streaming -> Audiobookshelf (fifth tile, bottom left)
-click 280 419 2       # library (one row below the new Downloads row)
+click 280 419 2       # library opens its home shelves
+if [[ "$LARGE_TEXT" == 0 ]]; then
+	grep -q 'GET /api/libraries/mock-library/personalized?limit=4' "$WORK/progress.requests" || fail "home did not request shelves"
+	grep -q 'GET /api/items/mock-book/cover?format=jpeg&width=208 ' "$WORK/progress.requests" || fail "shelf cover did not request natural aspect ratio"
+	scrot "$WORK/audiobookshelf-home.png"
+	click 75 370 2      # first cover opens existing book detail
+	grep -q 'GET /api/items/mock-book?expanded=1' "$WORK/progress.requests" || fail "shelf cover did not open book detail"
+	click 43 88 2      # detail Back returns to home
+fi
+click 240 200 2       # home -> All books
 # §10.2 toolbar: Search / Sort / Filter. Authors and Series live inside the
 # Filter page now; the group values keep their rows (first row centre y=200).
 click 390 180 2       # Filter toolbar -> filter kinds
 scrot "$WORK/filter-kinds.png"
+if [[ "$LARGE_TEXT" == 0 ]]; then
+	click 240 632 1   # Continue listening (fifth filter)
+	grep -q 'GET /api/libraries/mock-library/items?.*filter=progress.YXVkaW8taW4tcHJvZ3Jlc3M%3D ' \
+		"$WORK/progress.requests" || fail "Continue listening did not request server progress"
+	scrot "$WORK/continue-listening.png"
+	click 43 88 1     # Back from Continue listening returns to the unfiltered library
+	test "$(grep 'GET /api/libraries/mock-library/items?' "$WORK/progress.requests" | tail -1 | cut -d' ' -f2 | sed 's/.*&filter=//')" = '' || \
+		fail "Back did not clear the progress filter"
+	click 43 88 1     # Back again returns to the library home
+	click 240 200 1   # Home -> All books
+	click 390 180 1   # Reopen the filter menu for the group tests
+fi
 click 240 200 2       # Authors kind
 scrot "$WORK/authors.png"
 click 240 200 2       # Test Author
@@ -275,7 +296,11 @@ click 240 200 2       # Fixture Series
 scrot "$WORK/series-books.png"
 click 43 88 1
 click 43 88 2         # series books -> ... filter kinds
-click 43 88 2         # filter kinds -> books
+click 43 88 2         # filter kinds -> all books, not the previous series
+[[ $(grep 'GET /api/libraries/mock-library/items?' "$WORK/progress.requests" | tail -1 | cut -d' ' -f2) == *'&filter=' ]] || \
+	fail "Back from Series did not restore All books"
+click 43 88 1         # all books -> library home
+click 240 200 1       # reopen All books for search smoke
 click 80 180 1        # search keyboard
 scrot "$WORK/search-keyboard.png"
 click 390 680 0.2     # m on keyboard
@@ -286,8 +311,8 @@ scrot "$WORK/search-results.png"
 grep -q '/search?q=m&limit=101' "$WORK/progress.requests" || fail "search did not reach server"
 grep -q 'filter=authors.YXV0aG9yLTE' "$WORK/progress.requests" || fail "author filter missing"
 grep -q 'sort=sequence.*filter=series.c2VyaWVzLTE' "$WORK/progress.requests" || fail "series order/filter missing"
-click 43 88 1         # search results -> libraries
-click 280 419 2       # reopen full library (one row below the new Downloads row)
+click 43 88 1         # search results -> library home
+click 240 200 2       # reopen All books
 scrot "$WORK/action-confirm.png"
 # The books list view, for the row-geometry evidence: the two-line 112 px
 # cards with their font-derived label heights (checked-in archive for both
@@ -377,8 +402,9 @@ fi
 sleep 2                # let the success toast release the back button
 click 43 88 2          # the queue screen -> the detail
 click 43 88 2          # the detail -> the ABS page (the back-return redraw, no request)
-click 43 88 2          # the books view -> the page's libraries view (the guard)
-click 43 88 2          # the libraries view -> Streaming
+click 43 88 2          # the books view -> the library home
+click 43 88 2          # the library home -> library picker
+click 43 88 2          # the library picker -> Streaming
 click 43 88 2          # Streaming -> Home
 click 356 406 1        # Home -> Audiobooks (upstream 1.3.0 home layout)
 click 125 232 1        # Audiobooks -> Library
@@ -389,9 +415,22 @@ sleep 2
 rm -f "$PROGRESS_FILE"       # ignore the immediate start checkpoint
 if [[ "$OFFLINE_RESTART" == 1 ]]; then touch "$WORK/progress.offline"; fi
 xdotool key --window "$WINDOW" n # pause, forcing a local + server checkpoint
+history_uploaded() {
+	[[ -s "$WORK/progress.sessions.json" ]] || return 1
+	python3 - "$WORK/progress.sessions.json" <<'PY'
+import json, sys
+sessions = list(json.load(open(sys.argv[1])).values())
+assert len(sessions) == 1
+s, = sessions
+assert s['libraryItemId'] == 'mock-book' and 1 <= s['timeListening'] <= 6
+assert s['startedAt'] <= s['updatedAt']
+PY
+}
 if [[ "$OFFLINE_RESTART" == 1 ]]; then
 	wait_for "failed upload retained" 200 grep -q 'saved checkpoint retained' "$WORK/player.log"
 	[[ ! -s "$PROGRESS_FILE" ]] || fail "server accepted progress during outage"
+	test "$(sqlite3 "$DB" 'SELECT count(*) FROM ABS_HISTORY WHERE played > 0')" = 1 || fail "no durable paused session"
+	[[ ! -s "$WORK/progress.sessions.json" ]] || fail "server accepted history during outage"
 	sleep 2                # allow the idle UI poll to draw the retry status
 	scrot "$WORK/offline-pending.png"
 	kill -TERM "$PLAYER_PID"
@@ -407,10 +446,12 @@ if [[ "$OFFLINE_RESTART" == 1 ]]; then
 	) &
 	PLAYER_PID=$!
 	wait_for "offline checkpoint uploaded after restart" 900 progress_uploaded
+	wait_for "offline history uploaded after restart" 900 history_uploaded
 	printf 'Audiobookshelf offline smoke passed: failed upload survived restart and uploaded without resuming playback.\n'
 	exit 0
 fi
 wait_for "uploaded server progress" 400 progress_uploaded
+wait_for "uploaded listening history" 400 history_uploaded
 
 if [[ "$CONFLICTS" == 1 ]]; then
 	# The paused decoder is deliberately still on part two. A newer phone rewind

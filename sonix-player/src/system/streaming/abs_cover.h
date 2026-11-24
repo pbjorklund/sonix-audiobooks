@@ -97,4 +97,8 @@ bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 					 const volatile int *cancel, char *path_out, size_t path_size,
 					 char *error, size_t error_size);
 
+// Small width-only variant. Its cache key excludes the forced-size detail image.
+bool abs_cover_fetch_shelf(const abs_auth_snapshot_t *auth, const char *item_id,
+					 char *path_out, size_t path_size);
+
 #endif /* ABS_COVER_H */

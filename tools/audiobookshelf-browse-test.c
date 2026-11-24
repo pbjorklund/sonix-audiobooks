@@ -355,6 +355,15 @@ static void browse_construction_tests(void) {
 			 "&minified=0&collapseseries=0&filter=series.c2VyaWVzLWZhLTE%%3D");
 	expect_str("series query", captured_path(), expected);
 
+	assert(abs_browse_query_init(&q, "lib-1", ABS_SORT_AUTHOR, ABS_FILTER_PROGRESS,
+								 "audio-in-progress", 1, true));
+	spy_items(57, 41, 2);
+	expect_int("progress count", audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total), 2);
+	expect_int("progress total", total, 57);
+	expect_str("server progress query", captured_path(),
+			   "/api/libraries/lib-1/items?limit=40&page=1&sort=media.metadata.authorNameLF&desc=1"
+			   "&minified=0&collapseseries=0&filter=progress.YXVkaW8taW4tcHJvZ3Jlc3M%3D");
+
 	// Genre/tag construction through the request, with the reserved set intact.
 	assert(abs_browse_query_init(&q, "lib-1", ABS_SORT_TITLE, ABS_FILTER_GENRE, "Rock/Metal+", 5, false));
 	spy_items(1, 1, 1);
@@ -908,6 +917,13 @@ static void live_browse(void) {
 	expect_int("title page 1 count", audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total), 35);
 	expect_str("title page 1 first", results[0].id, "pg-bk-041");
 	expect_str("title page 1 last", results[34].id, "pg-bk-075");
+
+	// The progress fixture has one started book for credential A, none for B.
+	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_PROGRESS,
+								 "audio-in-progress", 0, false));
+	expect_int("in-progress count", audiobookshelf_browse(&q, results, ABS_BROWSE_PAGE_LIMIT, &total), 1);
+	expect_int("in-progress total", total, 1);
+	expect_str("in-progress book", results[0].id, "pg-bk-001");
 
 	// Direction toggle: descending title order.
 	assert(abs_browse_query_init(&q, list_lib, ABS_SORT_TITLE, ABS_FILTER_NONE, NULL, 0, true));

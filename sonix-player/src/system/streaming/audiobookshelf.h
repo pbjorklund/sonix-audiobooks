@@ -8,8 +8,10 @@
 // The download queue's media surface (§8.2/§8.5) is declared against the
 // queue's types: the ops receive jobs, file rows and plans, never tokens.
 #include "abs_download.h"
+#include "abs_profiles.h"
 
 #define ABS_ID_MAX 96
+#define ABS_HOME_PER_SHELF 4
 #define ABS_NAME_MAX 256
 #define ABS_URL_MAX 1024
 #define ABS_PAGE_LIMIT 40
@@ -53,6 +55,7 @@ typedef enum {
 	ABS_FILTER_SERIES, // value: series object id
 	ABS_FILTER_GENRE,  // value: the genre string itself (never an id, §10.1)
 	ABS_FILTER_TAG,    // value: the tag string itself (never an id, §10.1)
+	ABS_FILTER_PROGRESS, // value: audio-in-progress
 } abs_browse_filter_t;
 
 // Bounded browse query (§10.3): fixed-size fields, no allocation; pass by
@@ -209,6 +212,9 @@ void audiobookshelf_clear_credentials(void);
 
 // All network calls block and belong on a worker thread.
 int audiobookshelf_libraries(audiobookshelf_library_t *out, int max);
+// Two bounded shelves from the same authenticated library request.
+bool audiobookshelf_home(const abs_auth_snapshot_t *auth, const char *library,
+		audiobookshelf_item_t items[2][ABS_HOME_PER_SHELF], int counts[2]);
 int audiobookshelf_items(const char *library_id, int page, audiobookshelf_item_t *out, int max, int *total_out);
 
 // ---------------------------------------------------------------------------

@@ -611,6 +611,118 @@ static bool local_progress(const progress_job_t *job, char *item_id, size_t id_s
 	return true;
 }
 
+// Bind to the exact server credential that owned playback. Rotating a key
+// leaves its pending entries intact rather than delivering them to another user.
+static void history_scope(const char *server, const char *token, char out[65]) {
+	sha256_ctx ctx;
+	sha256_init(&ctx);
+	sha256_update(&ctx, server, strlen(server) + 1);
+	sha256_update(&ctx, token, strlen(token));
+	sha256_final_hex(&ctx, out);
+}
+
+static bool history_id_chars(const char *id) {
+	return id[0] && id[strspn(id, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_")] == '\0';
+}
+
+static long long history_now_ms(void) {
+	struct timespec ts;
+	if (clock_gettime(CLOCK_REALTIME, &ts) != 0 || ts.tv_sec < 1577836800) return 0;
+	return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+void audiobookshelf_history_begin(abs_history_capture_t *c, const char *file) {
+	memset(c, 0, sizeof(*c));
+	if (!file || strlen(file) >= sizeof(((progress_job_t *)0)->file) || !sync_credentials_available()) return;
+	c->generation = audiobookdb_history_generation();
+	progress_job_t job = {0};
+	if (!audiobookdb_book_for_file(file, job.book, sizeof(job.book))) return;
+	snprintf(job.file, sizeof(job.file), "%s", file);
+	char bound[ABS_SERVER_MAX], server[ABS_SERVER_MAX], token[ABS_TOKEN_MAX] = "";
+	legacy_manifest_binding(bound, sizeof(bound));
+	if (!local_progress(&job, c->session.item, sizeof(c->session.item), &c->track_offset,
+						&c->session.duration, bound, sizeof(bound), NULL, NULL) ||
+		!history_id_chars(c->session.item) || !bound[0]) return;
+	if (!request_credentials_copy(bound, server, sizeof(server), token, sizeof(token)) || strcmp(server, bound)) {
+		memset(token, 0, sizeof(token));
+		return;
+	}
+	history_scope(server, token, c->session.scope);
+	memset(token, 0, sizeof(token));
+	c->session.started_ms = history_now_ms();
+	unsigned char b[16];
+	FILE *random = fopen("/dev/urandom", "rb");
+	if (!random) return;
+	bool ok = fread(b, 1, sizeof(b), random) == sizeof(b);
+	fclose(random);
+	if (!ok || !c->session.started_ms) return;
+	b[6] = (b[6] & 15) | 64;
+	b[8] = (b[8] & 63) | 128;
+	snprintf(c->session.id, sizeof(c->session.id),
+		"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+}
+
+void audiobookshelf_history_finish(abs_history_capture_t *c, double position) {
+	if (!c->session.id[0] || c->rendered < 0.001) return;
+	if (!c->session.ended_ms) {
+		c->session.ended_ms = history_now_ms();
+		c->session.played_ms = (long long)(c->rendered * 1000);
+		c->session.position = fmax(0, fmin(c->session.duration, c->track_offset + position));
+	}
+	if (!audiobookdb_history_enqueue(c->generation, &c->session)) return;
+	memset(c, 0, sizeof(*c));
+	pthread_mutex_lock(&progress_lock);
+	progress_wake = true;
+	pthread_cond_signal(&progress_cond);
+	pthread_mutex_unlock(&progress_lock);
+}
+
+static bool history_upload(const abs_auth_snapshot_t *profile) {
+	char scope[65];
+	history_scope(profile->server, profile->token, scope);
+	abs_history_session_t s;
+	unsigned generation;
+	if (!audiobookdb_history_next(scope, &s, &generation) || !history_id_chars(s.item) || !history_id_chars(s.id)) return false;
+	// Do not let the session API move the cursor. The existing resume worker
+	// must first have put an equal-or-newer position on the server. Its
+	// authenticated GET and this POST use one immutable credential snapshot.
+	char path[ABS_ID_MAX * 3 + 32], *body = NULL;
+	snprintf(path, sizeof(path), "/api/me/progress/%s", s.item);
+	bool ok = api_request_with(profile->server, profile->token, path, NULL, &body, 10, NULL, NULL);
+	json_doc_t doc;
+	long long last = 0;
+	if (ok && body && json_parse(body, &doc)) {
+		last = json_obj_llong(&doc, json_root(&doc), "lastUpdate", 0);
+		json_free(&doc);
+	}
+	free(body);
+	if (last <= s.started_ms || generation != audiobookdb_history_generation()) return false;
+	long long stamp = s.ended_ms < last ? s.ended_ms : last - 1;
+	char payload[512];
+	int n = snprintf(payload, sizeof(payload),
+		"{\"sessions\":[{\"id\":\"%s\",\"libraryItemId\":\"%s\",\"mediaType\":\"book\",\"playMethod\":3,"
+		"\"mediaPlayer\":\"Sonix\",\"startedAt\":%lld,\"updatedAt\":%lld,\"timeListening\":%.3f,\"currentTime\":%.3f,\"duration\":%.3f}]}",
+		s.id, s.item, s.started_ms, stamp, s.played_ms / 1000.0, s.position, s.duration);
+	if (n < 0 || (size_t)n >= sizeof(payload)) return false;
+	http_req_t req = {.method = "POST", .body = payload, .content_type = "application/json"};
+	body = NULL;
+	ok = api_request_with(profile->server, profile->token, "/api/session/local-all", &req, &body, 10, NULL, NULL);
+	bool accepted = false;
+	if (ok && body && json_parse(body, &doc)) {
+		int results = json_get(&doc, json_root(&doc), "results");
+		if (json_len(&doc, results) == 1) {
+			int result = json_at(&doc, results, 0);
+			char id[sizeof(s.id)];
+			json_obj_str(&doc, result, "id", id, sizeof(id));
+			accepted = !strcmp(id, s.id) && json_obj_bool(&doc, result, "success", false);
+		}
+		json_free(&doc);
+	}
+	free(body);
+	return accepted && audiobookdb_history_ack(generation, scope, s.id);
+}
+
 static bool progress_online(void) {
 #ifdef HOST_BUILD
 	return true;
@@ -890,6 +1002,9 @@ static void *progress_worker(void *unused) {
 				if (failed) break; // one unavailable server must not block the next profile (§11.4 step 2)
 			}
 		}
+		for (int i = 0; i < pass_count && progress_online(); i++) {
+			for (int n = 0; n < 2 && history_upload(&passes[i]); n++) {}
+		}
 		// Token bytes live here between requests; nothing retains them.
 		for (int i = 0; i < pass_count; i++) abs_profiles_snapshot_wipe(&passes[i]);
 		rotation++;
@@ -1067,6 +1182,41 @@ static int abs_read_items_page(const char *body, audiobookshelf_item_t *out, int
 	return count;
 }
 
+bool audiobookshelf_home(const abs_auth_snapshot_t *auth, const char *library,
+		audiobookshelf_item_t items[2][ABS_HOME_PER_SHELF], int counts[2]) {
+	counts[0] = counts[1] = 0;
+	if (!auth || !library || !library[0] || strlen(library) >= ABS_ID_MAX) return false;
+	char encoded[ABS_ID_MAX * 3], path[ABS_ID_MAX * 3 + 48];
+	http_url_encode(library, encoded, sizeof(encoded));
+	snprintf(path, sizeof(path), "/api/libraries/%s/personalized?limit=%d", encoded, ABS_HOME_PER_SHELF);
+	char *body = NULL;
+	bool ok = api_request_with(auth->server, auth->token, path, NULL, &body, ABS_TIMEOUT_SECS, NULL, NULL);
+	json_doc_t doc;
+	if (!ok || !body || !json_parse(body, &doc)) {
+		free(body);
+		return false;
+	}
+	int root = json_root(&doc);
+	for (int i = 0; i < json_len(&doc, root); i++) {
+		int shelf = json_at(&doc, root, i);
+		char id[32], type[16];
+		json_obj_str(&doc, shelf, "id", id, sizeof(id));
+		json_obj_str(&doc, shelf, "type", type, sizeof(type));
+		if (strcmp(type, "book")) continue;
+		int row = !strcmp(id, "continue-listening") ? 0 : !strcmp(id, "continue-series") ? 1 : -1;
+		if (row < 0) continue;
+		int group = json_get(&doc, shelf, "entities");
+		for (int j = 0; j < json_len(&doc, group) && counts[row] < ABS_HOME_PER_SHELF; j++) {
+			audiobookshelf_item_t *item = &items[row][counts[row]];
+			read_item(&doc, json_at(&doc, group, j), item);
+			if (item->id[0]) counts[row]++;
+		}
+	}
+	json_free(&doc);
+	free(body);
+	return true;
+}
+
 int audiobookshelf_libraries(audiobookshelf_library_t *out, int max) {
 	if (!out || max <= 0) return 0;
 	// §12.4 line 1201: this is the libraries half of the per-profile
@@ -1163,6 +1313,7 @@ static bool abs_b64_encode(const char *in, size_t len, char *out, size_t size) {
 // out-of-range input.
 static const char *abs_filter_prefix(abs_browse_filter_t group) {
 	switch (group) {
+	case ABS_FILTER_PROGRESS: return "progress";
 	case ABS_FILTER_AUTHOR: return "authors";
 	case ABS_FILTER_SERIES: return "series";
 	case ABS_FILTER_GENRE: return "genres";
@@ -1195,6 +1346,7 @@ bool abs_browse_query_build_filter(abs_browse_filter_t group, const char *value,
 	out[0] = '\0';
 	const char *prefix = value ? abs_filter_prefix(group) : NULL;
 	if (!prefix || !value[0]) return false;
+	if (group == ABS_FILTER_PROGRESS && strcmp(value, "audio-in-progress") != 0) return false;
 	char encoded[(ABS_NAME_MAX + 2) / 3 * 4 + 1];
 	if (!abs_b64_encode(value, strlen(value), encoded, sizeof(encoded))) return false;
 	// The whole "<prefix>.<base64>" value is URL-encoded (§10.1). Compute the
@@ -1239,6 +1391,7 @@ bool abs_browse_query_init(abs_browse_query_t *query, const char *library_id,
 		char empty = '\0';
 		const char *value = group_value ? group_value : &empty;
 		if (!value[0] || strlen(value) >= sizeof(query->filter_value)) return false;
+		if (group == ABS_FILTER_PROGRESS && strcmp(value, "audio-in-progress") != 0) return false;
 		snprintf(query->filter_value, sizeof(query->filter_value), "%s", value);
 	}
 	query->page = page < 0 ? 0 : page; // §10.1 pages are zero-based
@@ -1305,6 +1458,7 @@ static int group_compare(const void *a, const void *b) {
 // never an object id, so it goes into `name` alone and `id` stays empty.
 static const char *abs_group_key(abs_browse_filter_t group) {
 	switch (group) {
+	case ABS_FILTER_PROGRESS: return NULL; // fixed choice, not filterdata
 	case ABS_FILTER_AUTHOR: return "authors";
 	case ABS_FILTER_SERIES: return "series";
 	case ABS_FILTER_GENRE: return "genres";

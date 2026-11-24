@@ -14,6 +14,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/library/audiobooks.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/gui/nowplaying/cover.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/shell/popover.h"
@@ -52,7 +53,7 @@ static bool returning_from_search;
 // one group's values. Back walks the same chain in reverse: a filtered book
 // list returns to its group list, a group list to the filter kinds, the
 // filter kinds to the books they came from, and books to the libraries.
-typedef enum { VIEW_LIBRARIES = 0, VIEW_ITEMS, VIEW_FILTERS, VIEW_GROUPS } view_t;
+typedef enum { VIEW_LIBRARIES = 0, VIEW_ITEMS, VIEW_FILTERS, VIEW_GROUPS, VIEW_HOME } view_t;
 static view_t view;
 static char library_id[ABS_ID_MAX];
 static char library_name[ABS_NAME_MAX];
@@ -87,6 +88,13 @@ static char filter_title[ABS_NAME_MAX]; // display name of the active filter val
 // page living only for the page it was loaded for.
 // ---------------------------------------------------------------------------
 static abs_browse_query_t browse_query;
+typedef struct {
+	audiobookshelf_item_t items[2][ABS_HOME_PER_SHELF];
+	char covers[2][ABS_HOME_PER_SHELF][ABS_COVER_PATH_MAX];
+	int counts[2];
+} home_t;
+static home_t *home;
+static bool detail_from_home;
 static audiobookshelf_item_t *page_items;
 static int page_count, page_total;
 static bool search_overflow; // a usable 101st match exists (§10.1)
@@ -103,6 +111,7 @@ static abs_list_t *books_list; // the pooled rows currently on screen (null once
 
 static void draw_libraries(void);
 static void draw_books(void);
+static void draw_home(void);
 static void draw_filters(void);
 static void draw_groups(void);
 static void book_row_bind(void *user, int index, char *title, size_t title_size,
@@ -121,7 +130,7 @@ static void open_filter_kind_cb(lv_event_t *e);
 static void request_group_kind(abs_browse_filter_t kind);
 static void library_clicked_cb(lv_event_t *e);
 
-typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_BROWSE, JOB_SEARCH, JOB_GROUPS, JOB_LINK, JOB_DETAIL } job_kind_t;
+typedef enum { JOB_NONE = 0, JOB_TEST, JOB_LIBRARIES, JOB_BROWSE, JOB_SEARCH, JOB_GROUPS, JOB_LINK, JOB_DETAIL, JOB_HOME } job_kind_t;
 typedef struct {
 	job_kind_t kind;
 	uint32_t generation; // browse generation at submit time (§11.4)
@@ -168,6 +177,7 @@ typedef struct {
 	// worker → GUI-thread consume, and dies on both discard paths (stale
 	// here, screen-left in the detail module). Other jobs never set it.
 	audiobookshelf_detail_t *payload;
+	home_t *home;
 	abs_detail_local_t local;
 	char local_path[1280];
 	// §9.1 wave 2: the cached authenticated cover file for the accepted
@@ -238,6 +248,9 @@ static void clear_browse_state(void) {
 	pthread_mutex_lock(&job_lock);
 	browse_generation++; // invalidate every in-flight or queued old-profile result
 	view = VIEW_LIBRARIES;
+	free(home);
+	home = NULL;
+	detail_from_home = false;
 	library_count = 0;
 	// §10.2 result ownership: the visible page is released with the session.
 	free(page_items);
@@ -498,13 +511,6 @@ static bool browse_query_reset(void) {
 								 abs_browse_query_default_desc(ABS_SORT_TITLE));
 }
 
-// The browse job for the current query: the query is copied into the job by
-// value, so the worker sees an immutable snapshot (§10.2).
-static job_t browse_job(void) {
-	job_t job = {.kind = JOB_BROWSE, .query = browse_query};
-	return job;
-}
-
 static void library_clicked_cb(lv_event_t *e) {
 	int index = (int)(intptr_t)lv_event_get_user_data(e);
 	if (busy || index < 0 || index >= library_count) return;
@@ -513,7 +519,12 @@ static void library_clicked_cb(lv_event_t *e) {
 	// A library change resets the whole query (§10.2), search mode included.
 	if (!browse_query_reset()) return;
 	filter_title[0] = '\0';
-	job_t job = browse_job();
+	free(home);
+	home = NULL;
+	job_t job = {.kind = JOB_HOME};
+	snprintf(job.id, sizeof(job.id), "%s", library_id);
+	abs_profiles_active(job.profile_id, sizeof(job.profile_id));
+	draw_home();
 	run_loading(&job);
 	// search_query follows the query's completion: the browse publish clears
 	// it under job_lock, so the GUI never races the worker on that string.
@@ -788,8 +799,12 @@ static void detail_action_play(void *user) {
 	// (the same shape item_click_cb used to run on the LVGL thread).
 	char resume_file[512];
 	double resume_seconds = 0;
-	if (audiobook_resume_point(selected_local_book, resume_file, sizeof(resume_file), &resume_seconds))
-		audiobooks_play_at(selected_local_book, resume_file, resume_seconds);
+	if (!audiobook_resume_point(selected_local_book, resume_file, sizeof(resume_file), &resume_seconds))
+		return;
+	audiobooks_play_at(selected_local_book, resume_file, resume_seconds);
+	// Close the detail first so dismissing Now Playing returns to the book list.
+	back_btn_cb(NULL);
+	switch_screen(player_screen);
 }
 
 static void detail_action_link(void *user) {
@@ -810,18 +825,17 @@ static void detail_action_queue(void *user) {
 // owned page, then open the detail. The §11.5 decision tree this used to
 // run synchronously on the LVGL thread (a walk of the whole catalog with
 // per-row tag reads) now runs in the worker after the metadata fetch (§9.2).
-static void item_click_cb(void *user, int index, lv_obj_t *row) {
-	(void)user;
-	(void)row;
-	if (busy || !page_items || index < 0 || index >= page_count) return;
-	snprintf(selected_id, sizeof(selected_id), "%s", page_items[index].id);
-	snprintf(selected_title, sizeof(selected_title), "%s", page_items[index].title);
+static void open_book_item(const audiobookshelf_item_t *item) {
+	if (busy || !item || !item->id[0]) return;
+	detail_from_home = view == VIEW_HOME;
+	snprintf(selected_id, sizeof(selected_id), "%s", item->id);
+	snprintf(selected_title, sizeof(selected_title), "%s", item->title);
 	selected_local_book[0] = '\0';
 	// The identity seed for the detail's actions (§8.1 line 693): values
 	// copied out of the owned page, never an index into it.
-	selected_progress = page_items[index].progress;
-	selected_finished = page_items[index].finished;
-	selected_duration = page_items[index].duration;
+	selected_progress = item->progress;
+	selected_finished = item->finished;
+	selected_duration = item->duration;
 	// §9.2: back from the detail restores this exact books view, scroll
 	// included -- captured before the screen switch takes it away.
 	detail_return = true;
@@ -831,6 +845,74 @@ static void item_click_cb(void *user, int index, lv_obj_t *row) {
 	abs_profiles_active(active_profile, sizeof(active_profile));
 	snprintf(active_library, sizeof(active_library), "%s", library_id);
 	audiobookshelfdetail_open(active_profile, active_library, selected_id, selected_title);
+}
+
+static void item_click_cb(void *user, int index, lv_obj_t *row) {
+	(void)user;
+	(void)row;
+	if (page_items && index >= 0 && index < page_count) open_book_item(&page_items[index]);
+}
+
+static void home_book_clicked(lv_event_t *e) {
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (!home || view != VIEW_HOME) return;
+	int row = index / ABS_HOME_PER_SHELF, col = index % ABS_HOME_PER_SHELF;
+	if (row < 2 && col < home->counts[row]) open_book_item(&home->items[row][col]);
+}
+
+static void home_cover_delete(lv_event_t *e) {
+	cover_image_t *image = lv_event_get_user_data(e);
+	cover_free(image);
+	free(image);
+}
+
+static void draw_home(void) {
+	view = VIEW_HOME;
+	books_list = NULL;
+	lv_obj_clean(content);
+	lv_label_set_text(page_title, library_name);
+	settingsrow_action(content, "audiobookshelf_all_books", all_books_cb, NULL);
+	if (!home) return;
+	const char *names[] = {"podcast_continue_listening", "Next up in series"};
+	for (int row = 0; row < 2; row++) {
+		if (!home->counts[row]) continue;
+		settingsrow_heading(content, names[row]);
+		lv_obj_t *strip = lv_obj_create(content);
+		lv_obj_set_size(strip, lv_pct(100), 180);
+		lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(strip, 0, 0);
+		lv_obj_set_style_pad_all(strip, 0, 0);
+		lv_obj_set_style_pad_column(strip, 10, 0);
+		lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
+		lv_obj_set_scroll_dir(strip, LV_DIR_HOR);
+		for (int i = 0; i < home->counts[row]; i++) {
+			lv_obj_t *card = lv_btn_create(strip);
+			lv_obj_set_size(card, 126, 174);
+			lv_obj_add_style(card, &theme_style_card, 0);
+			lv_obj_add_event_cb(card, home_book_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)(row * ABS_HOME_PER_SHELF + i));
+			cover_image_t *image = home->covers[row][i][0] ? calloc(1, sizeof(*image)) : NULL;
+			if (image && cover_load_image_file(home->covers[row][i], 104, 116, COVER_FIT_CONTAIN, image)) {
+				lv_obj_t *pic = lv_image_create(card);
+				lv_image_set_src(pic, &image->dsc);
+				lv_obj_align(pic, LV_ALIGN_TOP_MID, 0, 5);
+				lv_obj_add_event_cb(pic, home_cover_delete, LV_EVENT_DELETE, image);
+			} else {
+				free(image);
+				lv_obj_t *fallback = lv_image_create(card);
+				lv_image_set_src(fallback, &icon_menu_audiobook_continue);
+				lv_obj_add_style(fallback, &theme_style_icon, 0);
+				lv_obj_align(fallback, LV_ALIGN_CENTER, 0, -25);
+			}
+			lv_obj_t *title = lv_label_create(card);
+			lv_obj_set_width(title, 106);
+			lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+			lv_obj_set_height(title, 44);
+			lv_obj_set_style_text_font(title, &font_ui_18, 0);
+			lv_obj_add_style(title, &theme_style_text, 0);
+			lv_label_set_text(title, home->items[row][i].title);
+			lv_obj_align(title, LV_ALIGN_BOTTOM_MID, 0, -3);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +1015,11 @@ static void apply_filter(abs_browse_filter_t kind, const char *value, const char
 	snprintf(filter_title, sizeof(filter_title), "%s", title);
 	job_t job = {.kind = JOB_BROWSE, .query = query};
 	run_loading(&job);
+}
+
+static void in_progress_cb(lv_event_t *e) {
+	(void)e;
+	apply_filter(ABS_FILTER_PROGRESS, "audio-in-progress", tr("podcast_continue_listening"));
 }
 
 // The groups list (authors, series, genres, tags) for one kind: the whole
@@ -1083,6 +1170,7 @@ static void draw_filters(void) {
 	};
 	for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
 		settingsrow_add(content, labels[i], NULL, open_filter_kind_cb, (void *)(intptr_t)kinds[i]);
+	settingsrow_action(content, "podcast_continue_listening", in_progress_cb, NULL);
 }
 
 // Row refill for the books list: title over the author (with a progress
@@ -1226,12 +1314,19 @@ static bool back_guard(void) {
 	// back guard. The §8.1 busy-bit guards taps (an in-flight browse must not
 	// build a second session on top of a half-drawn page), never navigation.
 	if (view == VIEW_GROUPS) { draw_filters(); return true; }
-	if (view == VIEW_FILTERS) { draw_books(); return true; }
+	if (view == VIEW_FILTERS) {
+		if (browse_query.filter != ABS_FILTER_NONE) all_books_cb(NULL);
+		else draw_books();
+		return true;
+	}
 	if (view == VIEW_ITEMS && search_query[0]) {
-		// Search results are a transient view: back leaves them for the
-		// libraries, as ever. The browse query keeps its sort and filter, so
-		// re-entering the library restarts from the top of the chain.
-		draw_libraries();
+		draw_home();
+		return true;
+	}
+	if (view == VIEW_ITEMS && browse_query.filter == ABS_FILTER_PROGRESS) {
+		// This filter has no group list of its own. Return to All books so
+		// the next Back can leave the library instead of reopening filters.
+		all_books_cb(NULL);
 		return true;
 	}
 	if (view == VIEW_ITEMS && browse_query.filter != ABS_FILTER_NONE) {
@@ -1246,7 +1341,13 @@ static bool back_guard(void) {
 		}
 		return true;
 	}
-	if (view != VIEW_ITEMS) return false;
+	if (view == VIEW_ITEMS) { draw_home(); return true; }
+	if (view == VIEW_HOME && busy) {
+		pthread_mutex_lock(&job_lock);
+		browse_generation++;
+		pthread_mutex_unlock(&job_lock);
+	}
+	if (view != VIEW_HOME) return false;
 	draw_libraries();
 	return true;
 }
@@ -1274,6 +1375,7 @@ static void job_done_async(void *user) {
 	// §9.3: a stale detail's model dies right here either way.
 	if (stale && done.kind != JOB_LINK) {
 		audiobookshelf_detail_free(done.payload);
+		free(done.home);
 		return;
 	}
 
@@ -1303,6 +1405,11 @@ static void job_done_async(void *user) {
 		break;
 	case JOB_LIBRARIES:
 		draw_libraries();
+		break;
+	case JOB_HOME:
+		free(home);
+		home = done.home;
+		if (view == VIEW_HOME) draw_home();
 		break;
 	case JOB_BROWSE:
 	case JOB_SEARCH:
@@ -1389,6 +1496,24 @@ static void *worker_main(void *user) {
 				pthread_mutex_unlock(&job_lock);
 				done.ok = true;
 			}
+		} else if (job.kind == JOB_HOME) {
+			done.home = calloc(1, sizeof(*done.home));
+			abs_auth_snapshot_t auth;
+			if (done.home && audiobookshelf_browse_credentials(&auth)) {
+				if ((!job.profile_id[0] || !strcmp(auth.profile_id, job.profile_id)) &&
+					audiobookshelf_home(&auth, job.id, done.home->items, done.home->counts)) {
+					for (int row = 0; row < 2; row++) for (int i = 0; i < done.home->counts[row]; i++) {
+						pthread_mutex_lock(&job_lock);
+						bool current = browse_generation == job.generation;
+						pthread_mutex_unlock(&job_lock);
+						if (current && done.home->items[row][i].cover[0])
+							abs_cover_fetch_shelf(&auth, done.home->items[row][i].id, done.home->covers[row][i],
+								sizeof(done.home->covers[row][i]));
+					}
+				}
+				abs_profiles_snapshot_wipe(&auth);
+			}
+			done.ok = true;
 		} else if (job.kind == JOB_BROWSE) {
 			// §10.2: a 40-item server page in one heap allocation owned by
 			// this job. On a stale generation it never reaches the screen.
@@ -1570,6 +1695,12 @@ static void start_worker(void) {
 static void page_loaded_cb(lv_event_t *e) {
 	(void)e;
 	if (returning_from_search) { returning_from_search = false; return; }
+	if (detail_return && detail_from_home) {
+		detail_return = detail_from_home = false;
+		draw_home();
+		lv_obj_scroll_to_y(content, detail_scroll_y, LV_ANIM_OFF);
+		return;
+	}
 	if (detail_return && page_items && page_count > 0) {
 		// §9.2: back from the detail restores the same library, query,
 		// sort/filter and page -- the retained page is that request's

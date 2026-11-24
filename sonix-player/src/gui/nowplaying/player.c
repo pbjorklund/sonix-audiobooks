@@ -204,7 +204,7 @@ static lv_obj_t *more_btn_obj;
 static lv_obj_t *more_btn_icon; // ellipsis on a track, chapters on a book
 static lv_obj_t *repeat_btn_obj;
 static lv_obj_t *speed_btn_obj;	 // stands in the repeat button's place on a book
-static lv_obj_t *speed_btn_icon;
+static lv_obj_t *speed_btn_label;
 static lv_obj_t *below_slider_obj; // the two clocks under the bar
 // How far the four source marks keep from the corner of the artwork they
 // share. One number, because they replace each other in that corner and a
@@ -3998,16 +3998,22 @@ static int speed_current_permille(void) {
 	return speed_is_podcast() ? podcast_speed_permille() : audiobook_speed_permille();
 }
 
-// The gauge wears the accent colour whenever the book or episode is not at
-// normal speed, the way the repeat glyph it stands in for marks a mode that is
-// on.
+// Show the selected rate without requiring the speed menu to be open.
 static void update_speed_button(void) {
-	if (!speed_btn_icon) {
+	if (!speed_btn_label) {
 		return;
 	}
-	bool normal = speed_current_permille() == AUDIOBOOK_SPEED_NORMAL;
-	lv_obj_set_style_image_recolor(speed_btn_icon, normal ? lv_color_make(100, 100, 100) : chrome_accent(), 0);
-	lv_obj_set_style_image_recolor_opa(speed_btn_icon, LV_OPA_COVER, 0);
+	int speed = speed_current_permille();
+	char text[24];
+	int fraction = speed % 1000;
+	if (fraction % 100)
+		snprintf(text, sizeof(text), "%d.%02dx", speed / 1000, fraction / 10);
+	else
+		snprintf(text, sizeof(text), "%d.%dx", speed / 1000, fraction / 100);
+	if (strcmp(lv_label_get_text(speed_btn_label), text) != 0)
+		lv_label_set_text(speed_btn_label, text);
+	lv_obj_set_style_text_color(speed_btn_label, speed == AUDIOBOOK_SPEED_NORMAL ?
+		lv_color_make(180, 180, 180) : chrome_accent(), 0);
 }
 
 static void speed_pick(void *user) {
@@ -4146,6 +4152,13 @@ static void update_abs_sync(const device_state_t *state) {
 		return;
 	}
 	audiobookshelf_sync_status_t status = audiobookshelf_sync_status(state->current_file);
+	// Playing creates new checkpoints before earlier ones are acknowledged.
+	// Routine status is useful after pause, not as a permanent banner.
+	if (state->status == AUDIO_STATUS_PLAYING && status != ABS_SYNC_RETRY &&
+		status != ABS_SYNC_SETUP && status != ABS_SYNC_OTHER_SERVER) {
+		lv_obj_set_hidden(abs_sync_label, true);
+		return;
+	}
 	static const char *keys[] = {
 		"abs_sync_checking", "abs_sync_local", "abs_sync_setup", "abs_sync_linked",
 		"abs_sync_pending", "abs_sync_offline", "abs_sync_sending", "abs_sync_synced",
@@ -5386,7 +5399,7 @@ void player_init(gui_config_t *cfg) {
 	lv_obj_center(repeat_btn_icon);
 	update_repeat_button(); // the icon for the mode already in force
 
-	// The playback-speed gauge, in exactly the same corner: on a book the
+	// The playback-speed label, in exactly the same corner: on a book the
 	// repeat mode is meaningless and the speed is the thing worth reaching,
 	// so one hides and the other appears in its place.
 	lv_obj_t *speed_btn = lv_btn_create(player_controls_buttons);
@@ -5400,10 +5413,9 @@ void player_init(gui_config_t *cfg) {
 	lv_obj_set_ext_click_area(speed_btn, CORNER_BTN_EXT_CLICK);
 	lv_obj_set_hidden(speed_btn, true);
 
-	speed_btn_icon = lv_image_create(speed_btn);
-	lv_image_set_src(speed_btn_icon, &icon_play_speed);
-	lv_obj_add_style(speed_btn_icon, &theme_style_icon, 0);
-	lv_obj_center(speed_btn_icon);
+	speed_btn_label = lv_label_create(speed_btn);
+	lv_obj_set_style_text_font(speed_btn_label, &font_ui_18, 0);
+	lv_obj_center(speed_btn_label);
 	update_speed_button();
 
 	// The overflow menu, mirroring the repeat button on the right: queue and

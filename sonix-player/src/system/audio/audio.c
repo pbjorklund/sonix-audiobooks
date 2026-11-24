@@ -12,6 +12,7 @@
 #include "src/system/core/config.h"
 #include "src/system/device/power.h"
 #include "src/system/core/utils.h"
+#include "src/system/streaming/abs_history.h"
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -56,6 +57,28 @@ static void host_pace(snd_pcm_sframes_t frames, int rate) {
 #else
 #define host_pace(frames, rate) ((void)0)
 #endif
+
+static void history_sample(abs_history_capture_t *history, snd_pcm_t *pcm, int rate) {
+	snd_pcm_sframes_t queued;
+	if (history->session.id[0] && pcm && rate > 0 &&
+		snd_pcm_delay(pcm, &queued) == 0 && queued >= 0) {
+		double rendered = history->submitted - (double)queued / rate;
+		if (rendered > history->rendered) history->rendered = rendered;
+	}
+}
+
+// Credit output time, not source position (which includes seeks and speed).
+static void history_output(abs_history_capture_t *history, bool *checked, const char *file,
+						   snd_pcm_t *pcm, snd_pcm_sframes_t written, int rate) {
+	if (written <= 0 || rate <= 0) return;
+	if (!*checked) {
+		audiobookshelf_history_begin(history, file);
+		*checked = true;
+	}
+	if (!history->session.id[0] || history->session.ended_ms) return;
+	history->submitted += (double)written / rate;
+	history_sample(history, pcm, rate);
+}
 
 // Stops a stream for a pause, and says how many bytes of already-decoded audio
 // were thrown away with it.
@@ -2355,7 +2378,7 @@ static int pcm_wait_or_wake(snd_pcm_t *pcm, int timeout_ms) {
 }
 
 static snd_pcm_sframes_t pcm_write_recover(snd_pcm_t **pcm, const void *buf, snd_pcm_uframes_t frames, int channels,
-										   int rate, int bits, snd_pcm_uframes_t *period) {
+										   int rate, int bits, snd_pcm_uframes_t *period, abs_history_capture_t *history) {
 	for (int attempt = 0; attempt < 8; attempt++) {
 		if (!*pcm) {
 			return -EIO; // a previous recovery closed it and could not get it back
@@ -2409,6 +2432,7 @@ static snd_pcm_sframes_t pcm_write_recover(snd_pcm_t **pcm, const void *buf, snd
 			return written;
 		}
 
+		history->submitted = history->rendered;
 		write_recoveries++;
 		fprintf(stderr, "audio[%ld]: write error: %s (recovery %d)\n", log_ms(), snd_strerror((int)written),
 				attempt + 1);
@@ -2746,6 +2770,8 @@ static void play_wav_file(const char *filepath) {
 	// progress_current_secs negative and also decides whether a track finished
 	// or was cut short (cut_short, below), so the queue would advance on its
 	// own mid-book.
+	abs_history_capture_t history = {0};
+	bool history_checked = false;
 	int64_t bytes_played = 0;
 	int64_t read_pos = 0; // bytes of the data chunk already read, ahead of bytes_played by what is queued
 	bool is_paused = false;
@@ -2791,6 +2817,7 @@ static void play_wav_file(const char *filepath) {
 				bt_seek_probe_arm(pcm_handle);
 			}
 
+			history.submitted = history.rendered;
 			bytes_played = target_byte_pos;
 			pthread_mutex_lock(&audio_mutex);
 			progress_current_secs = (double)bytes_played / bytes_per_sec;
@@ -2806,7 +2833,9 @@ static void play_wav_file(const char *filepath) {
 			pthread_mutex_unlock(&audio_mutex);
 
 			if (entering) {
+				history_sample(&history, pcm_handle, info.sample_rate);
 				int64_t rewind_bytes = pause_stop_stream(pcm_handle, src_frame_bytes);
+				history.submitted = history.rendered;
 				if (rewind_bytes > 0) {
 					// What was still in the buffer was never heard: wind the
 					// file back over it so resuming picks up where the sound
@@ -2822,6 +2851,11 @@ static void play_wav_file(const char *filepath) {
 					progress_current_secs = (double)bytes_played / bytes_per_sec;
 					pthread_mutex_unlock(&audio_mutex);
 				}
+			}
+
+			if (history.session.id[0]) {
+				audiobookshelf_history_finish(&history, (double)bytes_played / bytes_per_sec);
+				if (!history.session.id[0]) history_checked = false;
 			}
 
 			// Straight out of a system suspend the device is left SUSPENDED
@@ -2951,6 +2985,8 @@ static void play_wav_file(const char *filepath) {
 			int now_route = alsa_output_key();
 			if (now_route != track_route) {
 				track_route = now_route;
+				history_sample(&history, pcm_handle, info.sample_rate);
+				history.submitted = history.rendered;
 				if (!pcm_reroute(&pcm_handle, info.channels, info.sample_rate, info.out_bits,
 								 &period_size)) {
 					fprintf(stderr, "Audio: reroute failed\n");
@@ -3062,7 +3098,7 @@ static void play_wav_file(const char *filepath) {
 
 		health_lap(&health, STAGE_EFFECTS);
 		snd_pcm_sframes_t written = pcm_write_recover(&pcm_handle, buffer, frames_to_write, info.channels,
-													  info.sample_rate, info.out_bits, &period_size);
+													  info.sample_rate, info.out_bits, &period_size, &history);
 		health_lap(&health, STAGE_WRITE);
 
 		if (written == -EINTR) {
@@ -3086,6 +3122,7 @@ static void play_wav_file(const char *filepath) {
 		bytes_played += (int64_t)written * src_frame_bytes;
 		health_tick(&health, info.sample_rate, info.sample_rate, info.bits_per_sample);
 		host_pace(written, info.sample_rate);
+		history_output(&history, &history_checked, filepath, pcm_handle, written, info.sample_rate);
 		pthread_mutex_lock(&audio_mutex);
 		report_position((double)bytes_played / bytes_per_sec);
 		pthread_mutex_unlock(&audio_mutex);
@@ -3094,6 +3131,8 @@ static void play_wav_file(const char *filepath) {
 	pthread_mutex_lock(&audio_mutex);
 	mark_stopped_unless_replaced();
 	pthread_mutex_unlock(&audio_mutex);
+
+	audiobookshelf_history_finish(&history, (double)bytes_played / bytes_per_sec);
 
 	// Gapless, on the same conditions as the decoded path.
 	bool keep_open = pcm_handle && gapless_enabled && played_to_the_end && !is_paused &&
@@ -3366,6 +3405,8 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 	// progress_current_secs negative and also decides whether a track finished
 	// or was cut short (cut_short, below), so the queue would advance on its
 	// own mid-book.
+	abs_history_capture_t history = {0};
+	bool history_checked = false;
 	int64_t bytes_played = 0;
 	bool is_paused = false;
 	bool played_to_the_end = false;
@@ -3483,6 +3524,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 				bt_seek_probe_arm(pcm_handle);
 			}
 
+			history.submitted = history.rendered;
 			bytes_played = (int64_t)(target_frame * frame_bytes);
 			pthread_mutex_lock(&audio_mutex);
 			progress_current_secs = (double)bytes_played / bytes_per_sec;
@@ -3498,7 +3540,9 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 			pthread_mutex_unlock(&audio_mutex);
 
 			if (entering) {
+				history_sample(&history, pcm_handle, out_rate);
 				int64_t rewind_bytes = pause_stop_stream(pcm_handle, frame_bytes) * decim_factor;
+				history.submitted = history.rendered;
 				if (rewind_bytes > 0) {
 					// The frames still queued were never heard: put the decoder
 					// back over them so resuming carries on from where the
@@ -3517,6 +3561,10 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 						pthread_mutex_unlock(&audio_mutex);
 					}
 				}
+			}
+			if (history.session.id[0]) {
+				audiobookshelf_history_finish(&history, (double)bytes_played / bytes_per_sec);
+				if (!history.session.id[0]) history_checked = false;
 			}
 
 			pthread_mutex_lock(&audio_mutex);
@@ -3623,6 +3671,8 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 			int now_route = alsa_output_key();
 			if (now_route != track_route) {
 				track_route = now_route;
+				history_sample(&history, pcm_handle, out_rate);
+				history.submitted = history.rendered;
 				if (!pcm_reroute(&pcm_handle, channels, out_rate, out_bits, &period_size)) {
 					fprintf(stderr, "Audio: reroute failed\n");
 					pthread_mutex_lock(&audio_mutex);
@@ -3834,7 +3884,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 
 		health_lap(&health, STAGE_EFFECTS);
 		snd_pcm_sframes_t written =
-			pcm_write_recover(&pcm_handle, buffer, frames_read, channels, out_rate, out_bits, &period_size);
+			pcm_write_recover(&pcm_handle, buffer, frames_read, channels, out_rate, out_bits, &period_size, &history);
 		health_lap(&health, STAGE_WRITE);
 
 		if (written == -EINTR) {
@@ -3867,6 +3917,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 		}
 		health_tick(&health, sample_rate, out_rate, source_bits);
 		host_pace(written, out_rate);
+		history_output(&history, &history_checked, filepath, pcm_handle, written, out_rate);
 		pthread_mutex_lock(&audio_mutex);
 		report_position((double)bytes_played / bytes_per_sec);
 		pthread_mutex_unlock(&audio_mutex);
@@ -3875,6 +3926,8 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 	pthread_mutex_lock(&audio_mutex);
 	mark_stopped_unless_replaced();
 	pthread_mutex_unlock(&audio_mutex);
+
+	audiobookshelf_history_finish(&history, (double)bytes_played / bytes_per_sec);
 
 	// The track ended on its own, gapless is on and nothing special happened:
 	// the PCM stays open with its queue inside and the next track appends to

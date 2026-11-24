@@ -193,7 +193,7 @@ void abs_cover_quiesce(void) {
 	pthread_mutex_unlock(&cover_lock);
 }
 
-bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
+static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bool shelf,
 					 const volatile int *cancel, char *path_out, size_t path_size,
 					 char *error, size_t error_size) {
 	if (path_out && path_size) path_out[0] = '\0';
@@ -228,7 +228,7 @@ bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 	cover_hash_prefix(normalized, server_hash, sizeof(server_hash));
 	cover_hash_prefix(item_id, item_hash, sizeof(item_hash));
 	char name[ABS_COVER_NAME_MAX];
-	snprintf(name, sizeof(name), "%s-%s.jpg", server_hash, item_hash);
+	snprintf(name, sizeof(name), "%s-%s%s.jpg", server_hash, item_hash, shelf ? "-shelf" : "");
 
 	char dir[ABS_COVER_FILE_PATH_MAX];
 	char final_path[ABS_COVER_FILE_PATH_MAX];
@@ -266,8 +266,10 @@ bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 		COVER_FAIL("The cover's item reference is too long.");
 	http_url_encode(item_id, id_encoded, sizeof(id_encoded));
 	char url[ABS_COVER_URL_MAX];
-	if ((size_t)snprintf(url, sizeof(url), "%s/api/items/%s/cover?format=jpeg&width=900&height=1280",
-						 normalized, id_encoded) >= sizeof(url))
+	// With no height, ABS derives it from the artwork instead of forcing a ratio.
+	const char *query = shelf ? "format=jpeg&width=208" : "format=jpeg&width=900&height=1280";
+	if ((size_t)snprintf(url, sizeof(url), "%s/api/items/%s/cover?%s",
+						 normalized, id_encoded, query) >= sizeof(url))
 		COVER_FAIL("The cover request address is too long.");
 
 	char headers[ABS_TOKEN_MAX + 32];
@@ -340,4 +342,15 @@ bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 	snprintf(path_out, path_size, "%s", final_path);
 	return true;
 #undef COVER_FAIL
+}
+
+bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
+					 const volatile int *cancel, char *path_out, size_t path_size,
+					 char *error, size_t error_size) {
+	return cover_fetch(auth, item_id, false, cancel, path_out, path_size, error, error_size);
+}
+
+bool abs_cover_fetch_shelf(const abs_auth_snapshot_t *auth, const char *item_id,
+					 char *path_out, size_t path_size) {
+	return cover_fetch(auth, item_id, true, NULL, path_out, path_size, NULL, 0);
 }
