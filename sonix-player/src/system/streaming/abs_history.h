@@ -9,6 +9,8 @@ typedef struct {
 	char id[37];
 	char scope[65];
 	char item[128];
+	char episode[128]; // empty for audiobook rows
+	long long wire_ms;
 	long long started_ms;
 	long long ended_ms;
 	long long played_ms;
@@ -31,5 +33,6 @@ bool abs_history_schema(sqlite3 *db);
 bool abs_history_enqueue(sqlite3 *db, const abs_history_session_t *session);
 bool abs_history_next(sqlite3 *db, const char *scope, abs_history_session_t *session);
 bool abs_history_ack(sqlite3 *db, const char *scope, const char *id);
+bool abs_history_set_wire(sqlite3 *db, const char *scope, const char *id, long long wire_ms);
 
 #endif

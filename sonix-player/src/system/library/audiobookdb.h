@@ -194,10 +194,17 @@ bool audiobookdb_abs_get(const char *book, audiobookdb_abs_checkpoint_t *out);
 bool audiobookdb_abs_next(const char *server, audiobookdb_abs_checkpoint_t *out);
 
 #include "src/system/streaming/abs_history.h"
+#include "src/system/streaming/abs_episode_progress.h"
+bool audiobookdb_episode_get(const abs_episode_manifest_t *id, abs_episode_checkpoint_t *out, unsigned *generation);
+bool audiobookdb_episode_save(unsigned generation, const abs_episode_checkpoint_t *value);
+bool audiobookdb_episode_apply(unsigned generation, const abs_episode_checkpoint_t *base, const abs_episode_checkpoint_t *value);
+bool audiobookdb_episode_next(const char *server, const char *owner, long long before, abs_episode_checkpoint_t *out);
+bool audiobookdb_episode_attempt(unsigned generation, const abs_episode_checkpoint_t *base, long long now);
 unsigned audiobookdb_history_generation(void);
 bool audiobookdb_history_enqueue(unsigned generation, const abs_history_session_t *session);
 bool audiobookdb_history_next(const char *scope, abs_history_session_t *session, unsigned *generation);
 bool audiobookdb_history_ack(unsigned generation, const char *scope, const char *id);
+bool audiobookdb_history_set_wire(unsigned generation, const char *scope, const char *id, long long wire);
 void audiobookdb_abs_result(const audiobookdb_abs_checkpoint_t *sent, const char *server,
 						   bool linked, bool success, bool failed);
 void audiobookdb_abs_retry(const char *book);

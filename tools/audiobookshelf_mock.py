@@ -421,8 +421,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_json("unauthorized", 401)
             return
         path = urlparse(self.path).path
+        if path == "/api/me":
+            self.send_json({"id": f"fixture-{credential_id}"})
+            return
         if path == "/api/libraries":
-            self.send_json(self.fixture.libraries)
+            if self.podcast_smoke:
+                self.send_json({"libraries": [entry for entry in self.fixture.libraries["libraries"]
+                                              if entry["id"] in ("mock-library", "lib-pod-2")]})
+            else:
+                self.send_json(self.fixture.libraries)
             return
         if path == "/api/libraries/mock-library/personalized":
             rows = self.fixture.rows("mock-library")
@@ -433,6 +440,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/libraries/") and path.endswith("/items"):
             self.serve_items(progress)
+            return
+        if path.startswith("/api/libraries/") and path.endswith("/recent-episodes"):
+            self.serve_recent_episodes(progress)
             return
         if path.startswith("/api/libraries/") and path.endswith("/filterdata"):
             self.serve_filterdata()
@@ -447,6 +457,10 @@ class Handler(BaseHTTPRequestHandler):
             self.serve_cover()
             return
         if "/file/" in path and path.startswith("/api/items/"):
+            item_id = path.split("/")[3]
+            if path.endswith("/download") and item_id.startswith("pod-") and (self.media_dir / "deny-podcast-download").is_file():
+                self.send_error_json("download not permitted", 403)
+                return
             self.serve_item_file()
             return
         if path.startswith("/api/items/"):
@@ -463,6 +477,28 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_error_json("invalid query parameter", 400)
             return None
+
+    def serve_recent_episodes(self, progress):
+        library = self.fixture.library(self.library_id())
+        if not library or library["mediaType"] != "podcast":
+            self.send_error_json("not found", 404)
+            return
+        params = self.query_params()
+        limit = self.int_param(params, "limit", 40)
+        page = self.int_param(params, "page", 0)
+        if limit is None or page is None:
+            return
+        episodes = []
+        for show in self.fixture.rows(self.library_id()):
+            for episode in self.item_detail(show["id"]).get("media", {}).get("episodes", []):
+                status, saved = progress.get(f'{show["id"]}/{episode["id"]}')
+                if status == "value" and saved.get("isFinished"):
+                    continue
+                episodes.append(episode)
+        if self.podcast_smoke:
+            episodes = [episode for episode in episodes if episode["id"] == "pod41-ep-001"]
+        episodes.sort(key=lambda episode: episode.get("publishedAt") or 0, reverse=True)
+        self.send_json({"episodes": episodes[page * limit:(page + 1) * limit]})
 
     def serve_items(self, progress):
         library_id = self.library_id()
@@ -627,6 +663,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_json("not found", 404)
             return
         payload = json.loads(json.dumps(detail))
+        payload["mediaType"] = "podcast" if "episodes" in payload.get("media", {}) else "book"
         seed = progress.seed(item_id)
         if "__status__" not in seed:
             payload["userMediaProgress"] = json.loads(json.dumps(seed))
@@ -698,7 +735,11 @@ class Handler(BaseHTTPRequestHandler):
     def serve_item_file(self):
         path = urlparse(self.path).path
         item_id = path.split("/")[3]
-        file_token = path.rsplit("/file/", 1)[1]
+        file_token = path.rsplit("/file/", 1)[1].removesuffix("/download")
+        episode_file = self.smoke_media()
+        if item_id == "pod-41" and file_token == "258638762231958" and episode_file is not None:
+            self.send_media_file(episode_file, file_token)
+            return
         if file_token == "gi2g":
             # §8.8 >2 GiB staging (forge-m6 fixes wave): a Content-Length no
             # 32-bit long can hold, then a short prefix and a close -- exactly
@@ -729,21 +770,32 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_media_file(None, file_token, synthetic_bytes=synthetic_audio_bytes(item_id, file_token))
 
+    def smoke_media(self):
+        for name in ("episode.mp3", "episode.m4a"):
+            path = self.media_dir / name
+            if path.is_file():
+                return path
+        return None
+
     def send_media_file(self, media_file, file_token, synthetic_bytes=None):
         """serve_item_file's body: plain, or chunked+slept when the launch
         throttled this file's URL token (§8.5 line 595 slow responses)."""
         body = (synthetic_bytes if media_file is None
                 else media_file.read_bytes())
+        media_type = "audio/mp4" if media_file and media_file.suffix == ".m4a" else "audio/mpeg"
         delay_ms = Handler.throttle.get(file_token, 0)
         if delay_ms <= 0:
-            self.send_bytes(200, body, "audio/mpeg")
+            self.send_bytes(200, body, media_type)
             return
         self.send_response(200)
-        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Content-Type", media_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         chunk_size = 16 * 1024
         for start in range(0, len(body), chunk_size):
+            if media_file and media_file.name == 'episode.mp3' and start >= 16 * chunk_size and (self.media_dir / 'interrupt-podcast').is_file():
+                self.close_connection = True
+                return
             self.wfile.write(body[start:start + chunk_size])
             self.wfile.flush()
             if start + chunk_size < len(body):
@@ -781,6 +833,15 @@ class Handler(BaseHTTPRequestHandler):
             if episode["id"] != episode_id:
                 continue
             old_json = json.loads(json.dumps(episode))
+            episode_file = self.smoke_media()
+            if episode_id == "pod41-ep-001" and episode_file is not None:
+                metadata = old_json["audioFile"]["metadata"]
+                metadata["size"] = episode_file.stat().st_size
+                if episode_file.suffix == ".m4a":
+                    metadata.update(filename="Episode 001.m4a", ext=".m4a")
+                    old_json["audioFile"]["mimeType"] = "audio/mp4"
+                if self.podcast_smoke:
+                    old_json["audioFile"]["duration"] = 36
             for key in ("audioTrack", "size", "duration"):
                 old_json.pop(key, None)
             self.send_json(old_json)
@@ -826,8 +887,13 @@ class Handler(BaseHTTPRequestHandler):
             path = progress.progress_file.with_suffix(".sessions.json")
             saved = json.loads(path.read_text()) if path.exists() else {}
             for session in sessions:
-                saved[session["id"]] = session
+                saved.setdefault(session["id"], session)
             path.write_text(json.dumps(saved))
+            lost = progress.progress_file.with_suffix(".lose-session-reply")
+            if lost.is_file() and not lost.with_suffix('.session-reply-lost').exists():
+                lost.with_suffix('.session-reply-lost').write_text(sessions[0]['id'])
+                self.close_connection = True
+                return
         self.send_json({"results": [{"id": session["id"], "success": True, "progressSynced": False}
                                     for session in sessions]})
 
@@ -907,6 +973,7 @@ def main():
     parser.add_argument("--fixture", default=None,
                         help="fixture alias (SONIX_ABS_FIXTURE wins when set)")
     parser.add_argument("--fixture-dir", type=Path, default=DEFAULT_FIXTURE_ROOT)
+    parser.add_argument("--podcast-smoke", action="store_true", help="serve one book and one podcast library")
     parser.add_argument("--verify-only", action="store_true",
                         help="validate provenance and hashes, then exit")
     parser.add_argument("--throttle", action="append", default=[],
@@ -938,6 +1005,7 @@ def main():
         return 0
 
     Handler.fixture = fixture
+    Handler.podcast_smoke = args.podcast_smoke
     Handler.media_dir = args.media_dir
     Handler.credentials = {"credential-a": progress_a, "credential-b": progress_b}
     Handler.log_path = args.progress_file.with_suffix(".requests")

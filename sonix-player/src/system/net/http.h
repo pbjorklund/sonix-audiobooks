@@ -79,6 +79,7 @@ typedef struct {
 	volatile unsigned generation;     // bumped at each operation begin
 	volatile unsigned wake_generation; // the generation a cancel landed on
 	volatile int active_fd;           // published in-flight fd; -1 = none
+	bool same_origin_only;            // set by the owner before an open or request
 } http_op_t;
 
 // Lifecycle. Everything is inline and mutex-guarded on purpose: the slot must
@@ -96,6 +97,7 @@ static inline void http_op_init(http_op_t *op) {
 	op->generation = 0;
 	op->wake_generation = 0;
 	op->active_fd = -1;
+	op->same_origin_only = false;
 }
 
 static inline void http_op_destroy(http_op_t *op) {
@@ -318,6 +320,7 @@ typedef struct {
 	// With this set *out is still allocated and terminated: an empty string,
 	// never NULL, so the caller always frees the same way.
 	bool allow_empty_body;
+	bool same_origin_only;
 
 	// The caller's active-operation slot (above), when this request must be
 	// cancellable mid-flight. NULL (the default for every zero-initialised

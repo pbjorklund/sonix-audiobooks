@@ -40,6 +40,10 @@ static char root[512];
 
 const char *podcastdl_root(void) {
 	const char *sd = storage_sd_root();
+#ifdef HOST_BUILD
+	const char *fixture = getenv("SONIX_SD_ROOT");
+	if (fixture && fixture[0]) sd = fixture;
+#endif
 	if (!sd || !sd[0]) {
 		root[0] = '\0';
 	} else {
@@ -124,6 +128,8 @@ static bool folder_of(const char *feed_title, char *out, size_t size) {
 	}
 	char name[DL_NAME_MAX + 1];
 	podcastdl_safe_name(feed_title, "Podcast", name, sizeof(name));
+	// Podcast/ABS is managed by the Audiobookshelf queue, not RSS.
+	if (!strcasecmp(name, "ABS")) snprintf(name, sizeof(name), "ABS (RSS)");
 	int n = snprintf(out, size, "%s/%s", base, name);
 	return n > 0 && (size_t)n < size;
 }

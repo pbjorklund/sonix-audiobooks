@@ -49,6 +49,7 @@
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/podcastsubs.h"
 #include "src/system/streaming/podcaststate.h"
+#include "src/system/streaming/abs_episode_stream.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/qobuzsync.h"
 #include "src/system/streaming/tidalcache.h"
@@ -4115,6 +4116,20 @@ static void handle_track_finished(void) {
 	// for, which is what makes this the cheaper half of the audiobook's version.
 	char path[512];
 	audio_get_current_file(path, sizeof(path));
+	abs_episode_manifest_t episode;
+	if (abs_episode_playback_identity(path, &episode)) {
+		device_state_t state;
+		device_state_get(&state);
+		double duration = episode.duration > 0 ? episode.duration : state.progress_total_secs;
+		bool full = !abs_episode_stream_owns(path) || abs_episode_stream_complete(path);
+		if (full && duration > 0) abs_episode_playback_note(path, duration, duration, true, true);
+		else {
+			abs_episode_playback_note(path, state.progress_current_secs, duration, true, false);
+			gui_notify_popup("audiobookshelf_request_failed");
+		}
+		refresh_now_playing();
+		return;
+	}
 	if (podcast_stop_at_episode_end() && podcastcache_is_episode(path)) {
 		fprintf(stderr, "player: end of the episode; not starting the next\n");
 		refresh_now_playing();
@@ -4279,8 +4294,13 @@ static void update_progress(void) {
 		static audio_status_t episode_last_status = AUDIO_STATUS_STOPPED;
 		bool episode_changed = state.status != episode_last_status;
 		episode_last_status = state.status;
-		podcaststate_note(state.current_file, state.progress_current_secs, state.progress_total_secs,
-						  episode_changed);
+		abs_episode_manifest_t episode;
+		if (abs_episode_playback_identity(state.current_file, &episode)) {
+			if (state.status == AUDIO_STATUS_STOPPED) abs_episode_playback_deactivate();
+			else abs_episode_playback_note(state.current_file, state.progress_current_secs, state.progress_total_secs,
+				state.status != AUDIO_STATUS_PLAYING, false);
+		} else podcaststate_note(state.current_file, state.progress_current_secs, state.progress_total_secs,
+			episode_changed);
 	}
 
 	// "Remember track". The decision, and the writing, live in device_state.c:

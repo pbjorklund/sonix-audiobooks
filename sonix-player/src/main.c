@@ -45,6 +45,7 @@
 #include "src/system/streaming/abs_cover.h"
 #include "src/system/streaming/abs_profiles.h"
 #include "src/system/streaming/abs_download.h"
+#include "src/system/streaming/abs_episode_stream.h"
 #include "src/system/streaming/audiobookshelf.h"
 #include "src/system/streaming/qobuz.h"
 #include "src/system/streaming/tidal.h"
@@ -2242,7 +2243,12 @@ int main(int argc, char **argv) {
 	const char *card_root = storage_sd_root();
 	qobuzcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	tidalcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
-	podcastcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
+#ifdef HOST_BUILD
+	const char *podcast_root = gui_cfg.sd_root_path;
+#else
+	const char *podcast_root = card_root && card_root[0] ? card_root : gui_cfg.sd_root_path;
+#endif
+	podcastcache_set_root(podcast_root);
 	// §9.3: the authenticated Audiobookshelf cover cache lives beside the
 	// other streaming caches, on the same card with the same lifecycle.
 #ifdef HOST_BUILD
@@ -2257,8 +2263,8 @@ int main(int argc, char **argv) {
 #else
 	abs_cover_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 #endif
-	podcastsubs_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
-	podcaststate_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
+	podcastsubs_set_root(podcast_root);
+	podcaststate_set_root(podcast_root);
 	// And where a track arriving over DLNA lands: same card, same reason.
 	dlna_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	// And where the emulator looks for Games/GB and Games/GBC. Unlike the
@@ -2507,6 +2513,7 @@ int main(int argc, char **argv) {
 	// armed, or was already taken down by a card detach; a killed process
 	// loses this step by definition, which is what the §8.2 recovery table
 	// is for.
+	abs_episode_stream_quiesce();
 	abs_download_quiesce_storage();
 
 	printf("\n");

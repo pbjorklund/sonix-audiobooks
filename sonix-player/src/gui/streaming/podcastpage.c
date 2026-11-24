@@ -31,6 +31,7 @@
 #include "src/system/playback/device_state.h"
 #include "src/system/core/lang.h"
 #include "src/system/playback/playlist.h"
+#include "src/system/streaming/abs_episode_playback.h"
 #include "src/system/streaming/podcast.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/podcastdl.h"
@@ -138,7 +139,7 @@ typedef struct {
 static lv_obj_t *top_block;
 static lv_obj_t *now_header;
 static lv_obj_t *continue_header;
-static listen_row_t listen[LISTEN_ROWS];
+static listen_row_t listen_rows[LISTEN_ROWS];
 
 // What the "on the card" pill shows when the Podcast folder is empty: how to
 // fill it.
@@ -438,7 +439,7 @@ static bool art_any_pending(void) {
 		}
 	}
 	for (int i = 0; i < LISTEN_ROWS; i++) {
-		if (listen[i].cover_waiting) {
+		if (listen_rows[i].cover_waiting) {
 			return true;
 		}
 	}
@@ -2525,8 +2526,8 @@ static void refresh_corner_buttons(void) {
 static void refresh_pills(void) {
 	refresh_section_tabs();
 	for (int k = 0; k < LISTEN_ROWS; k++) {
-		if (listen[k].bar) {
-			lv_obj_set_style_bg_color(listen[k].bar, theme()->accent, LV_PART_INDICATOR);
+		if (listen_rows[k].bar) {
+			lv_obj_set_style_bg_color(listen_rows[k].bar, theme()->accent, LV_PART_INDICATOR);
 		}
 	}
 }
@@ -2607,7 +2608,7 @@ static void listen_thumb(listen_row_t *row, bool pictured) {
 // The picture of row `k`: the cover of the file at `path`, or the microphone
 // when there is no file to take it from.
 static void listen_cover(int k, const char *path) {
-	listen_row_t *row = &listen[k];
+	listen_row_t *row = &listen_rows[k];
 	char want[512] = "";
 	if (path && path[0] && access(path, F_OK) == 0 && !growfile_is_growing(path)) {
 		snprintf(want, sizeof(want), "%s", path);
@@ -2636,7 +2637,7 @@ static void listen_cover(int k, const char *path) {
 
 static void listen_art_poll(void) {
 	for (int k = 0; k < LISTEN_ROWS; k++) {
-		listen_row_t *row = &listen[k];
+		listen_row_t *row = &listen_rows[k];
 		if (!row->cover_waiting) {
 			continue;
 		}
@@ -2709,7 +2710,9 @@ static void refresh_listening(void) {
 
 	static device_state_t now;
 	device_state_get(&now);
-	bool playing_one = home && !now.live && now.status != AUDIO_STATUS_STOPPED && podcastcache_is_episode(now.current_file);
+	abs_episode_manifest_t abs;
+	bool playing_one = home && !now.live && now.status != AUDIO_STATUS_STOPPED && podcastcache_is_episode(now.current_file) &&
+		!abs_episode_playback_identity(now.current_file, &abs);
 	static char now_id_path[512];
 	static long long now_id;
 	if (playing_one) {
@@ -2717,7 +2720,7 @@ static void refresh_listening(void) {
 			snprintf(now_id_path, sizeof(now_id_path), "%s", now.current_file);
 			now_id = podcastcache_episode_id(now.current_file);
 		}
-		listen_row_t *row = &listen[0];
+		listen_row_t *row = &listen_rows[0];
 		podcaststate_t known;
 		bool described = podcaststate_get(now.current_file, &known) && known.title[0];
 		memset(&row->state, 0, sizeof(row->state));
@@ -2734,7 +2737,7 @@ static void refresh_listening(void) {
 		listen_cover(0, NULL);
 	}
 	lv_obj_set_hidden(now_header, !playing_one);
-	lv_obj_set_hidden(listen[0].button, !playing_one);
+	lv_obj_set_hidden(listen_rows[0].button, !playing_one);
 
 	int shown = 0;
 	if (home) {
@@ -2752,7 +2755,7 @@ static void refresh_listening(void) {
 			if (!on_card && !reachable) {
 				continue;
 			}
-			listen_row_t *row = &listen[1 + shown];
+			listen_row_t *row = &listen_rows[1 + shown];
 			row->state = *st;
 			listen_fill(row, st->title, st->show, st->position, st->duration);
 			listen_cover(1 + shown, on_card ? st->path : NULL);
@@ -2761,7 +2764,7 @@ static void refresh_listening(void) {
 		}
 	}
 	for (int k = 1 + shown; k < LISTEN_ROWS; k++) {
-		lv_obj_set_hidden(listen[k].button, true);
+		lv_obj_set_hidden(listen_rows[k].button, true);
 		listen_cover(k, NULL);
 	}
 	lv_obj_set_hidden(continue_header, shown == 0);
@@ -2777,8 +2780,9 @@ static void listen_tick(void) {
 	}
 	static device_state_t now;
 	device_state_get(&now);
+	abs_episode_manifest_t abs;
 	bool playing_one = listen_home() && !now.live && now.status != AUDIO_STATUS_STOPPED &&
-					   podcastcache_is_episode(now.current_file);
+					   podcastcache_is_episode(now.current_file) && !abs_episode_playback_identity(now.current_file, &abs);
 	if (strcmp(playing_one ? now.current_file : "", listen_now_path) != 0) {
 		refresh_listening();
 		return;
@@ -2786,7 +2790,7 @@ static void listen_tick(void) {
 	if (!playing_one) {
 		return;
 	}
-	listen_row_t *row = &listen[0];
+	listen_row_t *row = &listen_rows[0];
 	listen_fill(row, row->state.title, row->state.show, now.progress_current_secs, now.progress_total_secs);
 	lv_image_set_src(row->action_icon, now.status == AUDIO_STATUS_PLAYING ? &icon_pause_small : &icon_play_small);
 }
@@ -2817,7 +2821,7 @@ static void listen_row_cb(lv_event_t *e) {
 	if (target == row->action || target == row->action_icon) {
 		return;
 	}
-	if (row == &listen[0]) {
+	if (row == &listen_rows[0]) {
 		player_refresh_now_playing();
 		switch_screen(player_screen);
 		return;
@@ -2830,7 +2834,7 @@ static void listen_action_cb(lv_event_t *e) {
 		return;
 	}
 	listen_row_t *row = lv_event_get_user_data(e);
-	if (row == &listen[0]) {
+	if (row == &listen_rows[0]) {
 		player_key_play_pause();
 		listen_tick();
 		return;
@@ -2931,10 +2935,10 @@ static void build_top_block(int width) {
 	lv_obj_set_flex_flow(top_block, LV_FLEX_FLOW_COLUMN);
 
 	now_header = make_header(top_block, "podcast_now_listening");
-	build_listen_row(&listen[0], top_block);
+	build_listen_row(&listen_rows[0], top_block);
 	continue_header = make_header(top_block, "podcast_continue_listening");
 	for (int k = 1; k < LISTEN_ROWS; k++) {
-		build_listen_row(&listen[k], top_block);
+		build_listen_row(&listen_rows[k], top_block);
 	}
 	lv_obj_set_hidden(top_block, true);
 }

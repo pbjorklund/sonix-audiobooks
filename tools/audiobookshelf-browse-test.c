@@ -685,6 +685,77 @@ static void legacy_compat_tests(void) {
 	expect_str("no request on empty library", captured_path(), "(no request was captured)");
 }
 
+static void podcast_episode_tests(void) {
+	abs_auth_snapshot_t auth;
+	assert(audiobookshelf_browse_credentials(&auth));
+	abs_episode_t ep;
+	const char *body = "{\"id\":\"episode-1\",\"libraryItemId\":\"show-1\",\"podcastId\":\"not-the-show\","
+		"\"title\":\"Episode 1\",\"enclosure\":{\"url\":\"https://example.org/ignored\"},"
+		"\"audioFile\":{\"ino\":\"258638762231958\",\"duration\":17.5,\"mimeType\":\"audio/mpeg\","
+		"\"metadata\":{\"filename\":\"source.mp3\",\"size\":32768}}}";
+	snprintf(spy.body, sizeof(spy.body), "%s", body);
+	expect_bool("non-expanded episode", audiobookshelf_episode(&auth, "show-1", "episode-1", &ep, NULL), true);
+	expect_str("single-episode route", captured_path(), "/api/podcasts/show-1/episode/episode-1");
+	expect_str("server direct file", ep.track.content_url, "/api/items/show-1/file/258638762231958");
+	expect_int("episode exact byte count", ep.track.size, 32768);
+	assert(ep.track.duration == 17.5);
+	expect_bool("mismatched parent", audiobookshelf_episode(&auth, "other-show", "episode-1", &ep, NULL), false);
+	expect_bool("mismatched episode", audiobookshelf_episode(&auth, "show-1", "other-episode", &ep, NULL), false);
+	snprintf(spy.body, sizeof(spy.body), "{\"id\":\"episode-1\",\"libraryItemId\":\"show-1\"}");
+	expect_bool("no server audio", audiobookshelf_episode(&auth, "show-1", "episode-1", &ep, NULL), false);
+	abs_profiles_snapshot_wipe(&auth);
+}
+
+static void podcast_catalogue_tests(void) {
+	abs_auth_snapshot_t auth;
+	assert(audiobookshelf_browse_credentials(&auth));
+	bool more = false;
+	snprintf(spy.body, sizeof(spy.body), "{\"total\":3,\"results\":[{\"id\":\"show-1\",\"mediaType\":\"podcast\","
+		"\"media\":{\"metadata\":{\"title\":\"Example Show\",\"author\":\"Host\"},\"numEpisodes\":41}}]}");
+	expect_int("podcast shows", audiobookshelf_podcast_shows(&auth, "lib", NULL, 1, results, 1, &more), 1);
+	expect_str("minified show page", captured_path(),
+		"/api/libraries/lib/items?limit=1&page=1&sort=media.metadata.title&minified=1");
+	expect_str("podcast author", results[0].author, "Host");
+	expect_int("episode count", results[0].tracks, 41);
+	assert(more);
+	snprintf(spy.body, sizeof(spy.body), "{\"podcast\":[{\"libraryItem\":{\"id\":\"show-1\"}},"
+		"{\"libraryItem\":{\"id\":\"show-2\"}}],\"book\":[{\"libraryItem\":{\"id\":\"book-1\"}}]}");
+	expect_int("podcast search", audiobookshelf_podcast_shows(&auth, "lib", "show & host", 0, results, 1, &more), 1);
+	expect_str("search route", captured_path(), "/api/libraries/lib/search?q=show%20%26%20host&limit=2");
+	expect_str("podcast search result", results[0].id, "show-1");
+	assert(more);
+	snprintf(spy.body, sizeof(spy.body), "{\"episodes\":[{\"id\":\"ep\",\"libraryItemId\":\"show\","
+		"\"podcastId\":\"internal\",\"title\":\"Episode\",\"publishedAt\":1700000000000,\"duration\":60}]}");
+	abs_episode_row_t episodes[2];
+	expect_int("latest episodes", audiobookshelf_latest_episodes(&auth, "lib", 2, episodes, 2, &more), 1);
+	expect_str("latest route", captured_path(), "/api/libraries/lib/recent-episodes?limit=2&page=2");
+	expect_str("episode parent", episodes[0].show_id, "show");
+	expect_str("episode identity", episodes[0].episode_id, "ep");
+	assert(episodes[0].published_ms == 1700000000000LL && !more);
+	spy_oversize = true;
+	expect_int("truncated latest page retried as two half pages",
+		audiobookshelf_latest_episodes(&auth, "lib", 2, episodes, 2, &more), 2);
+	expect_str("second half preserves logical offset", captured_path(),
+		"/api/libraries/lib/recent-episodes?limit=1&page=5");
+	assert(more);
+	snprintf(spy.body, sizeof(spy.body), "{\"episodes\":null}");
+	expect_int("malformed episode list", audiobookshelf_latest_episodes(&auth, "lib", 0, episodes, 2, &more), -1);
+	abs_profiles_snapshot_wipe(&auth);
+}
+
+static void typed_library_tests(void) {
+	audiobookshelf_library_t out[2];
+	snprintf(spy.body, sizeof(spy.body), "{\"libraries\":[{\"id\":\"ignored\",\"mediaType\":\"unknown\"},"
+			"{\"id\":\"pod\",\"name\":\"Podcasts\",\"mediaType\":\"podcast\"},"
+			"{\"id\":\"legacy\",\"name\":\"Books\"},"
+			"{\"id\":\"book\",\"mediaType\":\"book\"}]}");
+	expect_int("mixed accepted library count", audiobookshelf_libraries(out, 2), 2);
+	expect_str("podcast type", out[0].media_type, "podcast");
+	expect_str("podcast id", out[0].id, "pod");
+	expect_str("legacy book type", out[1].media_type, "book");
+	expect_str("legacy book id", out[1].id, "legacy");
+}
+
 // Canned libraries envelope: one book library the diagnostics tests read.
 static void spy_libraries(void) {
 	snprintf(spy.body, sizeof(spy.body),
@@ -845,6 +916,9 @@ int main(int argc, char **argv) {
 	groups_tests();
 	legacy_compat_tests();
 	profile_diagnostics_tests();
+	typed_library_tests();
+	podcast_episode_tests();
+	podcast_catalogue_tests();
 
 	printf("audiobookshelf-browse-test: offline construction/response/ownership tests passed\n");
 	return 0;
@@ -1102,6 +1176,17 @@ int main(int argc, char **argv) {
 	live_browse();
 	live_groups();
 	live_search();
+	abs_auth_snapshot_t auth;
+	assert(audiobookshelf_browse_credentials(&auth));
+	abs_episode_row_t *episodes = NULL;
+	expect_int("41-episode show", audiobookshelf_show_episodes(&auth, "pod-41", NULL, &episodes), 41);
+	for (int i = 0; i < 41; i++) expect_str("show parent", episodes[i].show_id, "pod-41");
+	assert(episodes[0].published_ms >= episodes[1].published_ms);
+	free(episodes);
+	expect_int("show above ordinary response cap", audiobookshelf_show_episodes(&auth, "pod-big", NULL, &episodes), 120);
+	expect_str("large show parent", episodes[119].show_id, "pod-big");
+	free(episodes);
+	abs_profiles_snapshot_wipe(&auth);
 	free((void *)list_lib);
 	free((void *)search_lib);
 

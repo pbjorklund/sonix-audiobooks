@@ -13,6 +13,7 @@
 #include "src/system/decode/growfile.h"
 #include "src/system/net/http.h"
 #include "src/system/streaming/podcastdl.h"
+#include "src/system/streaming/abs_episode_stream.h"
 #include "src/system/streaming/streamturn.h"
 
 // The smallest head worth starting on, whatever the arithmetic says: a decoder
@@ -1060,7 +1061,9 @@ bool podcastcache_owns(const char *path) {
 	return path && cache_dir[0] && strncmp(path, cache_dir, strlen(cache_dir)) == 0;
 }
 
-bool podcastcache_is_episode(const char *path) { return podcastcache_owns(path) || podcastdl_owns(path); }
+bool podcastcache_is_episode(const char *path) {
+	return podcastcache_owns(path) || podcastdl_owns(path) || abs_episode_stream_owns(path);
+}
 
 static bool fetch_cover_to(const char *path, const char *url); // defined below
 

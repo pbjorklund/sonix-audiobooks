@@ -246,6 +246,7 @@ Xvfb -nolisten unix -listen tcp -ac -displayfd 3 -screen 0 600x900x24 \
 XVFB_PID=$!
 wait_for "Xvfb" 50 test -s "$DISPLAY_FILE"
 export DISPLAY="localhost:$(cat "$DISPLAY_FILE")"
+export SDL_VIDEODRIVER=x11
 
 # ---------------------------------------------------------------------------
 # Phase A: download the book under the profile-A identity.
@@ -254,7 +255,8 @@ start_player player-a
 
 click 356 160 1       # Home -> Streaming
 click 124 704 2       # Streaming -> Audiobookshelf (bottom-left tile)
-click 280 419 2       # library (one row below the Downloads row)
+click 280 569 2       # library below Downloaded episodes and Audiobooks
+click 240 200 1       # All books
 click 390 180 2       # Filter toolbar (§10.2: authors live under Filter now)
 click 240 200 2       # Authors kind
 click 240 200 2       # Test Author
@@ -286,7 +288,8 @@ wait_for "phase-B local row" 100 abs_row_indexed
 # instead; no "play requested" line may reference the A directory at all.
 click 356 160 1       # Home -> Streaming
 click 124 704 2       # Streaming -> Audiobookshelf
-click 280 419 2       # library (one row below the Downloads row)
+click 280 569 2       # library below Downloaded episodes and Audiobooks
+click 240 200 1       # All books
 click 390 180 2       # Filter toolbar (§10.2: authors live under Filter now)
 click 240 200 2       # Authors kind
 click 240 200 2       # Test Author

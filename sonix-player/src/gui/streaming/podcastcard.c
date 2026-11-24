@@ -288,7 +288,7 @@ int podcastcard_shows(podcastcard_show_t *out, int max) {
 	}
 	struct dirent *de;
 	while ((de = readdir(dir)) != NULL && count < max) {
-		if (de->d_name[0] == '.' || strlen(de->d_name) >= sizeof(out[0].name)) {
+		if (de->d_name[0] == '.' || !strcasecmp(de->d_name, "ABS") || strlen(de->d_name) >= sizeof(out[0].name)) {
 			continue;
 		}
 		char path[900];
@@ -329,6 +329,7 @@ int podcastcard_count_for_title(const char *title) {
 	}
 	char name[256];
 	podcastdl_safe_name(title, "Podcast", name, sizeof(name));
+	if (!strcasecmp(name, "ABS")) snprintf(name, sizeof(name), "ABS (RSS)");
 	char folder[600];
 	snprintf(folder, sizeof(folder), "%s/%s", root, name);
 	DIR *dir = opendir(folder);

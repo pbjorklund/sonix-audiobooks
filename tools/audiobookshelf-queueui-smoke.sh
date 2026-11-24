@@ -104,8 +104,10 @@ ICLICK_LINE=$(grep -n 'static void item_click_cb' "$PAGE" | tail -1 | cut -d: -f
 [[ -n "$ICLICK_LINE" ]] || fail_s "item_click_cb moved: the §9.2 assertions need re-anchoring"
 sed -n "$((ICLICK_LINE)),$((ICLICK_LINE + 30))p" "$PAGE" | grep -q 'unique_local_match' &&
 	fail_s "the row tap still runs the whole-catalog local match on the LVGL thread (§9.2)"
-sed -n "$((ICLICK_LINE)),$((ICLICK_LINE + 30))p" "$PAGE" | grep -q 'audiobookshelfdetail_open' ||
+sed -n "$((ICLICK_LINE)),$((ICLICK_LINE + 12))p" "$PAGE" | grep -q 'open_book_item' ||
 	fail_s "the row tap no longer opens the detail (§9.2)"
+grep -q 'audiobookshelfdetail_open(active_profile, active_library' "$PAGE" ||
+	fail_s "the selected book no longer opens the detail (§9.2)"
 grep -q 'JOB_DETAIL' "$PAGE" || fail_s "the page has no JOB_DETAIL (§9.2)"
 grep -q 'audiobookshelfdetail_receive' "$PAGE" || fail_s "the worker never hands the model to the detail screen"
 grep -q 'audiobookshelf_detail_free(done.payload)' "$PAGE" ||
@@ -179,7 +181,7 @@ libraries_requests() {
 enter_abs_libraries() {
 	local base
 	base=$(libraries_requests)
-	click 124 660 0.4                   # the Audiobookshelf tile from the Streaming grid
+	click 124 704 0.6                   # Audiobookshelf in the Streaming grid
 	for ((i = 0; i < 100; i++)); do
 		[[ "$(libraries_requests)" -gt "$base" ]] && break
 		sleep 0.1
@@ -289,7 +291,7 @@ Xvfb -nolisten unix -listen tcp -ac -displayfd 3 -screen 0 600x900x24 \
 	>"$WORK/xvfb.stdout" 2>"$WORK/xvfb.log" 3>"$WORK/x-display" &
 XVFB_PID=$!
 wait_for "Xvfb" 50 test -s "$WORK/x-display"
-export DISPLAY="localhost:$(cat "$WORK/x-display")"
+export DISPLAY="localhost:$(cat "$WORK/x-display")" SDL_VIDEODRIVER=x11
 
 (
 	cd "$RUN"
@@ -305,6 +307,9 @@ for ((i = 0; i < 100; i++)); do
 	sleep 0.1
 done
 [[ -n "$WINDOW" ]] || fail "the simulator window did not appear"
+wait_for 'simulator event loop' 120 grep -q 'Entering main event loop' "$WORK/player.log"
+WINDOW=$(xdotool search --onlyvisible --pid "$PLAYER_PID" 2>/dev/null | tail -n 1 || true)
+[[ -n "$WINDOW" ]] || fail 'the simulator window disappeared'
 sleep 1
 
 # ------------- P0: the Downloads row opens an empty queue ---------------
@@ -316,7 +321,8 @@ count_is 0 || fail "the queue started non-empty"
 
 # ------------- P1: enqueue via begin_download -> the row appears --------
 reopen_abs_libraries 2              # the fresh session: queue -> the ABS page -> Streaming
-click 236 417 1.2                   # Mock Audiobooks
+click 236 569 1.2                   # Mock Audiobooks
+click 236 200 .8                    # All books
 open_book_detail_and_queue          # the book -> detail -> Queue download -> the queue screen
 wait_for "begin_download to enqueue a job" 40 count_is 1
 wait_for "the worker to take the job" 110 is_state 1 DOWNLOADING
@@ -355,8 +361,9 @@ wait_for "the paused job to be removed" 40 count_is 0
 shot "$WORK/queue-after-remove.png"
 
 # ------------- P4: fresh enqueue -> DONE -> follow-up scan -> import ----
-reopen_abs_libraries                # from the emptied queue back to the library view
-click 236 417 1.2                   # Mock Audiobooks
+reopen_abs_libraries 5              # queue -> detail -> books -> shelves -> libraries -> Streaming
+click 236 569 1.2                   # Mock Audiobooks
+click 236 200 .8                    # All books
 open_book_detail_and_queue
 wait_for "durable queue DONE" 400 is_state 1 DONE
 wait_for "the acknowledgement commit" 100 ack_committed
@@ -381,16 +388,18 @@ wait_for "the imported 3.0 s checkpoint" 30 resume_30s
 # transfer refuses the wrong length and the row parks in WAITING_NETWORK
 # (§8.4, honest retry-on-network-change). While it is unfinished, a repeated
 # tap dedupes instead of queueing a second copy (§8.1).
-reopen_abs_libraries
-click 236 527 1.3                   # Fixture Search Range
+reopen_abs_libraries 5
+click 236 678 1.3                   # Fixture Search Range
+click 236 200 .8                    # All books
 open_book_detail_and_queue          # first fixture title -> detail -> Queue download
 wait_for "the wrong-length row to park" 100 is_state 2 WAITING_NETWORK
 shot "$WORK/queue-waiting-row.png"
 # Re-tap the same book: re-entering the ABS page re-runs its load job, which
 # redraws the library view -- no books view persists underneath a pop, so the
 # dedupe walk goes explicitly through the library view again.
-reopen_abs_libraries
-click 236 527 1.2                   # Fixture Search Range
+reopen_abs_libraries 5
+click 236 678 1.2                   # Fixture Search Range
+click 236 200 .8                    # All books
 open_book_detail_and_queue          # the same book again (dedupe path)
 sleep 1
 [[ "$(job_count)" == "2" ]] || fail "a duplicate enqueue of an unfinished row created a second copy (§8.1 dedup): $(sql 'SELECT id,state,title FROM DOWNLOAD_JOB;')"

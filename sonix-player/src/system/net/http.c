@@ -1032,13 +1032,20 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 		// A relative Location keeps the scheme and authority it came from; an
 		// absolute one may switch between http and https, and plenty of hosts
 		// answer port 80 with nothing but a redirect to their https self.
+		char next[2600];
 		if (location[0] == '/') {
 			char base[512];
 			snprintf(base, sizeof(base), "%s://%s:%d", u.secure ? "https" : "http", u.host, u.port);
-			snprintf(current, sizeof(current), "%s%s", base, location);
-		} else {
-			snprintf(current, sizeof(current), "%s", location);
+			snprintf(next, sizeof(next), "%s%s", base, location);
+		} else snprintf(next, sizeof(next), "%s", location);
+		if (!url_same_origin(current, next)) {
+			if ((hop_req.op && hop_req.op->same_origin_only) || hop_req.same_origin_only) {
+				set_last_error("request redirect changed origin");
+				return false;
+			}
+			hop_req.extra_headers = NULL;
 		}
+		snprintf(current, sizeof(current), "%s", next);
 	}
 	return false;
 }
@@ -1197,7 +1204,13 @@ bool http_stream_open_ex_op(http_stream_t *st, const char *url, const char *extr
 		// Bearer credentials belong to the original server. Audiobookshelf may
 		// redirect media to object storage; follow it, but never disclose its
 		// Authorization header to a different origin.
-		if (!url_same_origin(current, next)) hop_headers = NULL;
+		if (!url_same_origin(current, next)) {
+			if (op && op->same_origin_only) {
+				set_last_error("media redirect changed origin");
+				return false;
+			}
+			hop_headers = NULL;
+		}
 		snprintf(current, sizeof(current), "%s", next);
 	}
 	return false;

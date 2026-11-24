@@ -67,6 +67,16 @@ The indicator is hidden for music. Its label reads a small in-memory snapshot; i
 - With Wi-Fi enabled, background checks run roughly every 15 seconds. Pending attempts for a book are spaced about a minute apart; pause/stop can request an earlier attempt. Already-synced linked books are checked about every five minutes, and sooner on reconnect, so phone progress can arrive even without further R1 listening. Requests run serially, up to eight books per pass. Network association and server response time can add delay. The Wi-Fi toggle is not proof of server reachability: a verified server response is required before showing Synced.
 - These checks are independent of having the audiobook page open. No directory rescan, audio decoding or list allocation is needed to find pending saved checkpoints.
 
+## Audiobookshelf podcasts
+
+Open **Streaming → Audiobookshelf → Podcasts**, then choose a podcast library. **Shows** lists the library's shows and lets you search by show name. **Latest episodes** lists recent unfinished episodes. Open an episode to play it, queue a download, or mark it heard or unheard.
+
+Play uses the SD copy when one is available. Otherwise it reads the episode from Audiobookshelf over Wi-Fi. MP3 can start while the file arrives; a container that needs metadata at the end may take longer to prepare. This uses the Audiobookshelf profile, not a Podcast Index key. Server transcoding and subscription management are not supported.
+
+Open **Downloaded episodes** at the Audiobookshelf root to play without Wi-Fi, including after a reboot. The **Downloads** row opens the queue; clearing queue history does not delete completed audio. Use **Remove download** on the episode to remove its device copy. That action does not delete the episode from Audiobookshelf or reset your place.
+
+Progress and listening time are tied to the Audiobookshelf account and episode. Sonix retains offline updates and sends them after reconnect. If you replace the profile key, verify the account by opening the library online before using its downloads offline again.
+
 ## Scope and conflicts
 
 Progress is reconciled in both directions for linked books:

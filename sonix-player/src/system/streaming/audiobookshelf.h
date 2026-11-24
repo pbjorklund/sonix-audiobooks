@@ -109,6 +109,43 @@ typedef struct {
 } audiobookshelf_track_t;
 
 typedef struct {
+	char show_id[ABS_ID_MAX];
+	char episode_id[ABS_ID_MAX];
+	char file_id[ABS_ID_MAX];
+	long long file_updated_ms;
+	char title[ABS_NAME_MAX];
+	char description[8192];
+	audiobookshelf_track_t track;
+	int chapter_count;
+	struct { double start; char title[96]; } chapters[128];
+} abs_episode_t;
+
+bool audiobookshelf_episode(const abs_auth_snapshot_t *auth, const char *show_id,
+	const char *episode_id, abs_episode_t *out, http_op_t *op);
+bool audiobookshelf_episode_owner(const abs_auth_snapshot_t *auth, http_op_t *op, char owner[ABS_ID_MAX]);
+
+typedef struct {
+	char show_id[ABS_ID_MAX];
+	char episode_id[ABS_ID_MAX];
+	char title[ABS_NAME_MAX];
+	long long published_ms;
+	long long added_ms;
+	double duration;
+	bool downloaded, finished, in_progress;
+} abs_episode_row_t;
+
+bool audiobookshelf_episode_badges(const abs_auth_snapshot_t *auth, const char *owner,
+	abs_episode_row_t *rows, int count, http_op_t *op, bool online);
+
+int audiobookshelf_podcast_shows(const abs_auth_snapshot_t *auth, const char *library,
+	const char *search, int page, audiobookshelf_item_t *out, int cap, bool *more);
+int audiobookshelf_latest_episodes(const abs_auth_snapshot_t *auth, const char *library,
+	int page, abs_episode_row_t *out, int cap, bool *more);
+// Caller owns *out, including for an empty valid show. A negative count is an error.
+int audiobookshelf_show_episodes(const abs_auth_snapshot_t *auth, const char *show,
+	http_op_t *op, abs_episode_row_t **out);
+
+typedef struct {
 	audiobookshelf_item_t item;
 	char description[8192];
 	char series_part[32];
@@ -327,7 +364,7 @@ bool audiobookshelf_download(const audiobookshelf_book_t *book, const char *sd_r
 // a FINALIZING job adopted after a crash reconciles from the card instead —
 // a valid manifest completes offline, an incomplete one retries finalization
 // only. The acknowledgement reset (§8.2 step 8) resets book sync state
-// (audiobookdb_abs_reset); episodes are the podcast wave's refusal.
+// (audiobookdb_abs_reset); episodes keep their canonical checkpoint.
 // ---------------------------------------------------------------------------
 const abs_download_ops_t *audiobookshelf_queue_media_ops(void);
 

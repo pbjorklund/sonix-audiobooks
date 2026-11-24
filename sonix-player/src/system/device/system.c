@@ -38,6 +38,7 @@
 #include "src/system/core/panel.h"
 #include "src/system/streaming/abs_cover.h"
 #include "src/system/streaming/abs_download.h"
+#include "src/system/streaming/abs_episode_stream.h"
 #include "src/system/streaming/audiobookshelf.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/podcastcache.h"
@@ -824,6 +825,7 @@ static void card_databases_detach(void) {
 	// a card-state mutex the worker never touches -- not a UI or SQLite lock).
 	// On the card-reopen path card_databases_attach() re-arms the queue, so no
 	// snapshot from before the removal can survive the cycle.
+	abs_episode_stream_quiesce();
 	abs_download_quiesce_storage();
 
 	// §8.5, §9.3: the cover cache refuses new work beside the queue -- the

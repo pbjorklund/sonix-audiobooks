@@ -83,6 +83,7 @@ typedef struct {
 	char library_id[ABS_DL_ID_MAX];
 	char item_id[ABS_DL_ID_MAX];
 	char episode_id[ABS_DL_ID_MAX]; // empty for books
+	char owner_id[ABS_DL_ID_MAX];   // verified ABS user for episode jobs
 	char title[ABS_DL_TITLE_MAX];   // display only
 	char destination[ABS_DL_DEST_MAX]; // card-relative directory identity
 	abs_download_state_t state;
@@ -259,6 +260,7 @@ typedef struct {
 typedef struct {
 	const char *kind;               // ABS_DL_KIND_BOOK | ABS_DL_KIND_EPISODE
 	const char *profile_id;
+	const char *owner_id; // episode jobs only
 	const char *server;
 	const char *library_id;         // may be ""
 	const char *item_id;

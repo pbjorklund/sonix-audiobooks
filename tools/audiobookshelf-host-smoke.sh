@@ -204,6 +204,7 @@ Xvfb -nolisten unix -listen tcp -ac -displayfd 3 -screen 0 600x900x24 \
 XVFB_PID=$!
 wait_for "Xvfb" 50 test -s "$DISPLAY_FILE"
 export DISPLAY="localhost:$(cat "$DISPLAY_FILE")"
+export SDL_VIDEODRIVER=x11
 
 (
 	cd "$RUN"
@@ -258,7 +259,7 @@ fi
 
 click 356 160 1       # Home -> Streaming (upstream 1.3.0 home layout)
 click 124 704 2       # Streaming -> Audiobookshelf (fifth tile, bottom left)
-click 280 419 2       # library opens its home shelves
+click 280 569 2       # library opens its home shelves below the media type heading
 if [[ "$LARGE_TEXT" == 0 ]]; then
 	grep -q 'GET /api/libraries/mock-library/personalized?limit=4' "$WORK/progress.requests" || fail "home did not request shelves"
 	grep -q 'GET /api/items/mock-book/cover?format=jpeg&width=208 ' "$WORK/progress.requests" || fail "shelf cover did not request natural aspect ratio"

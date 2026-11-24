@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "src/system/streaming/abs_download.h"
+#include "src/system/streaming/abs_episode_stream.h"
 #include "src/system/streaming/audiobookshelf.h"
 #include "src/system/library/audiobookdb.h"
 #include "src/system/library/library.h"
@@ -715,6 +716,7 @@ static void storage_export(void) {
 	// the queue's database closes before the library and audiobook databases
 	// below it do. The unmount then cannot fail on a queue descriptor, and
 	// storage_restore() re-arms the queue when the card comes back.
+	abs_episode_stream_quiesce();
 	abs_download_quiesce_storage();
 
 	library_close();
