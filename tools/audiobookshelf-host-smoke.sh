@@ -329,10 +329,10 @@ open_book_detail
 # text-only fallback can never silently hide a mis-directed cache root again
 # (the old build pointed HOST_BUILD at /mnt/sd_0 every run without a word).
 wait_for "the detail cover request on the wire" 100 \
-	grep -q 'GET /api/items/.*/cover?format=jpeg&width=900&height=1280 ' "$WORK/progress.requests"
+	grep -q 'GET /api/items/.*/cover?format=jpeg&width=900 ' "$WORK/progress.requests"
 COVER_ITEM=$(sed -n 's/^GET \/api\/items\/\([^/?]*\)?expanded=1.*/\1/p' "$WORK/progress.requests" | head -n 1)
 [[ -n "$COVER_ITEM" ]] || fail "no detail request to hash for the cover cache"
-COVER_FILE="$SD/.local/abs-cover-cache/$ABS_HASH-$(printf '%s' "$COVER_ITEM" | sha256sum | cut -c1-12).jpg"
+COVER_FILE="$SD/.local/abs-cover-cache/$ABS_HASH-$(printf '%s' "$COVER_ITEM" | sha256sum | cut -c1-12)-detail.jpg"
 wait_for "the cover cache file on the simulated card" 100 test -s "$COVER_FILE"
 if [[ "$EXISTING" == 1 ]]; then
 	click 240 622 1   # Link existing copy (the §11.5 link job)

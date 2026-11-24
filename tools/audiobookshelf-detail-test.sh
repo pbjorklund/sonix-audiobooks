@@ -76,7 +76,7 @@ if grep -qE "http_|Bearer|Authorization|token" "$PLAYER/src/gui/library/imagevie
 	fail "§9.4: imageview grew networking; it reads local paths only"
 fi
 # The cover request stays the §9.1 endpoint with the reviewed parameters.
-grep -q "format=jpeg&width=900&height=1280" "$PLAYER/src/system/streaming/abs_cover.c" ||
+grep -q 'format=jpeg&width=900"' "$PLAYER/src/system/streaming/abs_cover.c" ||
 	fail "§9.1: the cover endpoint left the reviewed parameters"
 # The detail requests the queue's expanded endpoint; never a raw publisher
 # HTML pass-through (the parse goes through the shared helper).
@@ -233,7 +233,7 @@ for ALIAS in $ALIASES; do
 	# §9.1 wave 2 on the wire: the authenticated cover exactly once — the
 	# second fetch is a cache hit and asks the server for nothing.
 	for item in bk-full bk-minimal; do
-		count=$(grep -c "GET /api/items/$item/cover?format=jpeg&width=900&height=1280 " \
+		count=$(grep -c "GET /api/items/$item/cover?format=jpeg&width=900 " \
 			"$alias_dir/progress.requests" || true)
 		[[ "$count" == 1 ]] ||
 			fail "$ALIAS: the cover request for $item did not arrive exactly once (count $count)"
