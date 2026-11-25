@@ -62,10 +62,6 @@ void audiobook_set_stop_at_chapter_end(bool on);
 bool audiobook_duration_per_chapter(void);
 void audiobook_set_duration_per_chapter(bool on);
 
-// The sleep timer is one of the three in sleeptimer.h, which keeps the
-// audiobook one under the same [audiobook] keys. "Stop at the end of the
-// chapter" is the switch above, not a timer length.
-
 // Rewind after pause: pressing play after a pause winds back a few seconds, so
 // the sentence that was interrupted is heard whole.
 //

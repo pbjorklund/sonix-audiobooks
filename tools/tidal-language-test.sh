@@ -9,12 +9,16 @@ for source in "$source_dir"/*.ini; do
 		tidal_album_download_queued_note tidal_downloads_finished tidal_downloads_failed_note \
 		tidal_retry_failed_downloads tidal_remove_download tidal_download_remove_note \
 		tidal_download_progress tidal_album_partial tidal_album_downloaded tidal_download_queue_full \
+		tidal_album_refresh tidal_album_refresh_failed tidal_local_album_found tidal_link_local_album tidal_linked_tracks \
+		tidal_group_downloads tidal_group_partial tidal_group_not_downloaded \
 		tidal_download_missing tidal_saved_for_later tidal_listen_later tidal_remove_saved tidal_saved_failed \
-		tidal_tracks tidal_download_playlist tidal_download_quality albums artists playlists; do
+		tidal_tracks tidal_download_playlist tidal_download_quality tidal_upgrade_downloads \
+		tidal_downgrade_downloads tidal_change_download_quality tidal_replace_downloads_note albums artists playlists; do
 		if ! grep -Eq "^${key} = .+" "$language"; then
 			printf 'Missing translation %s in %s\n' "$key" "$language" >&2
 			exit 1
 		fi
 	done
+	grep -Eq '^tidal_replace_downloads_note = [^%]*%s[^%]*$' "$language"
 done
 printf 'TIDAL download labels verified in %s\n' "$lang_dir"

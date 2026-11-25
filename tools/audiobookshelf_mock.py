@@ -422,7 +422,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         if path == "/api/me":
-            self.send_json({"id": f"fixture-{credential_id}"})
+            payload = {"id": f"fixture-{credential_id}"}
+            if self.podcast_smoke:
+                state, episode = progress.get("pod-41/pod41-ep-001")
+                payload["mediaProgress"] = [dict(episode, libraryItemId="pod-41", episodeId="pod41-ep-001")] if state == "value" else []
+                if (self.media_dir / "show-progress-fixture").exists():
+                    payload["mediaProgress"] = [
+                        {"libraryItemId": "pod-41", "episodeId": "pod41-ep-002", "currentTime": 10, "isFinished": False},
+                        {"libraryItemId": "pod-41", "episodeId": "pod41-ep-003", "currentTime": 30, "isFinished": True},
+                    ]
+            self.send_json(payload)
             return
         if path == "/api/libraries":
             if self.podcast_smoke:
@@ -496,7 +505,14 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 episodes.append(episode)
         if self.podcast_smoke:
-            episodes = [episode for episode in episodes if episode["id"] == "pod41-ep-001"]
+            pending = (self.media_dir / "hold-podcast-download").exists()
+            episodes = [episode for episode in episodes if episode["id"] == "pod41-ep-001" or
+                        (pending and episode["id"] == "pod41-ep-002")]
+            if pending:
+                episodes = [dict(episode, publishedAt=0) if episode["id"] == "pod41-ep-002" else episode
+                            for episode in episodes]
+            if (self.media_dir / "podcast-no-date").exists():
+                episodes = [dict(episode, pubDate=None, publishedAt=None) for episode in episodes]
         episodes.sort(key=lambda episode: episode.get("publishedAt") or 0, reverse=True)
         self.send_json({"episodes": episodes[page * limit:(page + 1) * limit]})
 
@@ -664,6 +680,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         payload = json.loads(json.dumps(detail))
         payload["mediaType"] = "podcast" if "episodes" in payload.get("media", {}) else "book"
+        if self.podcast_smoke and item_id == "pod-41":
+            if (self.media_dir / "two-podcast-episodes").exists():
+                payload["media"]["episodes"] = payload["media"]["episodes"][:2]
+            elif (self.media_dir / "show-progress-fixture").exists():
+                payload["media"]["episodes"] = payload["media"]["episodes"][:3]
+        for library_id, rows in self.fixture.rows_by_library.items():
+            if any(row["id"] == item_id for row in rows):
+                payload.setdefault("libraryId", library_id)
+                break
         seed = progress.seed(item_id)
         if "__status__" not in seed:
             payload["userMediaProgress"] = json.loads(json.dumps(seed))
@@ -737,6 +762,13 @@ class Handler(BaseHTTPRequestHandler):
         item_id = path.split("/")[3]
         file_token = path.rsplit("/file/", 1)[1].removesuffix("/download")
         episode_file = self.smoke_media()
+        if item_id == "pod-41" and file_token == stable_ino("pod-41", 2) and episode_file is not None:
+            for _ in range(200):
+                if not (self.media_dir / "hold-podcast-download").exists():
+                    break
+                time.sleep(.1)
+            self.send_media_file(episode_file, file_token)
+            return
         if item_id == "pod-41" and file_token == "258638762231958" and episode_file is not None:
             self.send_media_file(episode_file, file_token)
             return
@@ -803,6 +835,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_cover(self):
         item_id = urlparse(self.path).path.split("/")[3]
+        if self.podcast_smoke and item_id == "pod-41" and (self.media_dir / "podcast-cover.jpg").is_file():
+            self.send_bytes(200, (self.media_dir / "podcast-cover.jpg").read_bytes(), "image/jpeg")
+            return
         if item_id == LEGACY_PRIMARY_ITEM:
             media_file = self.media_dir / "cover.jpg"
             if not media_file.is_file():
@@ -834,7 +869,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             old_json = json.loads(json.dumps(episode))
             episode_file = self.smoke_media()
-            if episode_id == "pod41-ep-001" and episode_file is not None:
+            if show_id == "pod-41" and episode_id in ("pod41-ep-001", "pod41-ep-002") and episode_file is not None:
                 metadata = old_json["audioFile"]["metadata"]
                 metadata["size"] = episode_file.stat().st_size
                 if episode_file.suffix == ".m4a":

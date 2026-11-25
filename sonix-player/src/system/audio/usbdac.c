@@ -579,7 +579,8 @@ static void *audio_main(void *arg) {
 
 		// Eight bytes to a frame, and audio_external_write() counts frames.
 		if (output_open) {
-			audio_external_write(buffer, (int)(got / 8));
+			if (dsd) audio_external_write_passthrough(buffer, (int)(got / 8));
+			else audio_external_write(buffer, (int)(got / 8));
 		}
 	}
 

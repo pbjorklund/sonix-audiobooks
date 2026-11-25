@@ -26,9 +26,11 @@
 // album carousel takes 84..89; and the cover at the head of an album's tracks
 // takes 90; the podcasts on the card take 91..102 for their twelve rows, 103
 // for the cover at the head of one of them and 104..107 for the episodes being
-// listened to; the Audiobookshelf book-detail screen takes 108 -- so the pools
-// never trample each other's requests.
-#define COVERLOADER_SLOTS 109
+// listened to; the Audiobookshelf book-detail screen takes 108 and its
+// podcast rows take 109..120.
+#define COVERLOADER_SLOTS 121
+#define COVERLOADER_ABS_EPISODE_BASE 109
+#define COVERLOADER_ABS_EPISODE_COUNT 12
 #define COVERLOADER_SEARCH_BASE 36
 #define COVERLOADER_SEARCH_COUNT 24
 #define COVERLOADER_AUDIOBOOKS_BASE 60

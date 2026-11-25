@@ -36,6 +36,9 @@ typedef enum {
 } tidalkeep_enqueue_result_t;
 
 tidalkeep_enqueue_result_t tidalkeep_enqueue(const tidal_track_t *track);
+tidalkeep_enqueue_result_t tidalkeep_enqueue_quality(const tidal_track_t *track, int quality, bool replace);
+// True for Sonix-owned downloads made with a different (or unrecorded) setting.
+bool tidalkeep_quality_differs(int kept_quality, int requested_quality);
 
 // A snapshot of the queue, safe to call from the GUI thread.
 tidalkeep_state_t tidalkeep_state(void);
@@ -53,6 +56,10 @@ void tidalkeep_set_done_cb(tidalkeep_done_cb_t cb);
 // Never call in production code.
 typedef bool (*tidalkeep_fetch_t)(const tidal_track_t *track, int quality, char *path_out, size_t size, bool *complete_transfer);
 void tidalkeep_set_executor(tidalkeep_fetch_t fn);
+
+typedef enum { TIDALKEEP_IDLE, TIDALKEEP_QUEUED, TIDALKEEP_ACTIVE } tidalkeep_activity_t;
+// Query by track ID, or by album ID when track_id is zero.
+tidalkeep_activity_t tidalkeep_activity(long track_id, const char *album_id);
 
 int tidalkeep_quality(void);
 void tidalkeep_set_quality(int value);

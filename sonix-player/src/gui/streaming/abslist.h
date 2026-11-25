@@ -41,6 +41,10 @@ typedef struct {
 	abs_list_bind_cb bind;
 	abs_list_click_cb click;
 	void *user;
+	// Optional fixed controls for callers that draw more than text. The
+	// decorator receives -1 when its pooled row goes out of use.
+	void (*decorate)(void *user, int index, int slot, lv_obj_t *image, lv_obj_t *action);
+	abs_list_click_cb action;
 } abs_list_config_t;
 
 // Builds the canvas and the row pool. Row text and style match the streaming
@@ -53,6 +57,7 @@ void abs_list_destroy(abs_list_t *list);
 
 // The number of data rows behind the canvas. Zero hides every row.
 void abs_list_set_count(abs_list_t *list, int count);
+void abs_list_refresh(abs_list_t *list);
 
 // Replaces the rows with one centred dim message (loading, empty, error, "no
 // matches"). NULL clears it and brings the rows back.

@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "src/system/core/sha256.h"
+#include "src/system/library/audiobookdb.h"
 
 static void hash(const char *a, const char *b, char hex[65]) {
 	sha256_ctx ctx;
@@ -144,7 +145,8 @@ static bool manifest_valid(const abs_episode_manifest_t *m) {
 	return good_text(m->server, sizeof(m->server), true) && good_text(m->owner, sizeof(m->owner), true) &&
 		good_text(m->show, sizeof(m->show), true) && good_text(m->episode, sizeof(m->episode), true) &&
 		good_text(m->file, sizeof(m->file), true) && good_text(m->audio, sizeof(m->audio), true) &&
-		good_text(m->title, sizeof(m->title), false) && !strncmp(m->audio, "audio-", 6) &&
+		good_text(m->title, sizeof(m->title), false) && good_text(m->show_title, sizeof(m->show_title), false) &&
+		m->published_ms >= 0 && !strncmp(m->audio, "audio-", 6) &&
 		strspn(m->audio + 6, "0123456789abcdef") == 16 && m->audio[22] == '.' &&
 		valid_ext(m->audio + 23) && m->bytes > 0 && isfinite(m->duration) && m->duration >= 0;
 }
@@ -172,12 +174,14 @@ static bool manifest_read_marker(const char *folder, const char *marker, abs_epi
 	FILE *f = fdopen(fd, "r");
 	if (!f) { close(fd); return false; }
 	char line[ABS_SERVER_MAX + 96];
-	const char *keys[] = {"server=", "owner=", "show=", "episode=", "file=", "audio=", "title="};
-	char *fields[] = {out->server, out->owner, out->show, out->episode, out->file, out->audio, out->title};
+	const char *keys[] = {"server=", "owner=", "show=", "episode=", "file=", "audio=", "title=", "show_title="};
+	char *fields[] = {out->server, out->owner, out->show, out->episode, out->file, out->audio, out->title, out->show_title};
 	size_t sizes[] = {sizeof(out->server), sizeof(out->owner), sizeof(out->show), sizeof(out->episode),
-		sizeof(out->file), sizeof(out->audio), sizeof(out->title)};
-	bool ok = fgets(line, sizeof(line), f) && !strcmp(line, "version=1\n");
-	for (int i = 0; ok && i < 7; i++) {
+		sizeof(out->file), sizeof(out->audio), sizeof(out->title), sizeof(out->show_title)};
+	bool header = fgets(line, sizeof(line), f) != NULL;
+	bool v2 = header && !strcmp(line, "version=2\n");
+	bool ok = v2 || (header && !strcmp(line, "version=1\n"));
+	for (int i = 0; ok && i < (v2 ? 8 : 7); i++) {
 		ok = fgets(line, sizeof(line), f) && !strncmp(line, keys[i], strlen(keys[i]));
 		if (!ok) break;
 		const char *value = line + strlen(keys[i]);
@@ -185,6 +189,7 @@ static bool manifest_read_marker(const char *folder, const char *marker, abs_epi
 		ok = value[n] == '\n' && n < sizes[i];
 		if (ok) { memcpy(fields[i], value, n); fields[i][n] = '\0'; }
 	}
+	if (ok && v2) ok = fscanf(f, "published=%lld", &out->published_ms) == 1 && fgetc(f) == '\n';
 	if (ok) ok = fscanf(f, "bytes=%lld\nduration=%lf", &out->bytes, &out->duration) == 2 &&
 		fgetc(f) == '\n' && fgetc(f) == EOF && !ferror(f);
 	fclose(f);
@@ -212,8 +217,9 @@ bool abs_episode_manifest_commit(const char *folder, const abs_episode_manifest_
 	if (fd < 0) return false;
 	FILE *f = fdopen(fd, "w");
 	if (!f) { close(fd); unlink(temp); return false; }
-	bool ok = fprintf(f, "version=1\nserver=%s\nowner=%s\nshow=%s\nepisode=%s\nfile=%s\naudio=%s\ntitle=%s\nbytes=%lld\nduration=%.3f\n",
-		m->server, m->owner, m->show, m->episode, m->file, m->audio, m->title, m->bytes, m->duration) > 0 &&
+	bool ok = fprintf(f, "version=2\nserver=%s\nowner=%s\nshow=%s\nepisode=%s\nfile=%s\naudio=%s\ntitle=%s\nshow_title=%s\npublished=%lld\nbytes=%lld\nduration=%.3f\n",
+		m->server, m->owner, m->show, m->episode, m->file, m->audio, m->title, m->show_title,
+		m->published_ms, m->bytes, m->duration) > 0 &&
 		fflush(f) == 0 && fsync(fd) == 0;
 	if (fclose(f) != 0) ok = false;
 	if (!ok || rename(temp, path) != 0) { unlink(temp); return false; }
@@ -252,8 +258,30 @@ bool abs_episode_card_identity(const char *path, abs_episode_manifest_t *out) {
 	if (!base || base == folder) return false;
 	*base++ = '\0';
 	if (!abs_episode_manifest_read(folder, out) || strcmp(base, out->audio)) return false;
-	return abs_episode_download_path(out->server, out->owner, out->show, out->episode,
-		NULL, checked, sizeof(checked)) && !strcmp(checked, path);
+	// The manifest was already validated against the audio in this folder.
+	// Verify the canonical location and download state without reopening it.
+	char rel[ABS_DL_DEST_MAX];
+	return abs_episode_destination(out->server, out->owner, out->show, out->episode, rel, sizeof(rel)) &&
+		abs_episode_card_dir(rel, checked, sizeof(checked)) && !strcmp(checked, folder) &&
+		!abs_download_sync_blocked(rel);
+}
+
+bool abs_episode_local_cover(const char *audio, char *out, size_t cap) {
+	if (!out || !cap) return false;
+	out[0] = '\0';
+	const char *slash = audio ? strrchr(audio, '/') : NULL;
+	if (!slash || (size_t)(slash - audio) >= SONIX_LINKED_PATH_MAX) return false;
+	int n = snprintf(out, cap, "%.*s/" ABS_EPISODE_COVER, (int)(slash - audio), audio);
+	struct stat st;
+	if (n > 0 && (size_t)n < cap && lstat(out, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) return true;
+	out[0] = '\0';
+	return false;
+}
+
+static void remove_cover(const char *folder) {
+	char cover[SONIX_LINKED_PATH_MAX];
+	if (path_for(folder, ABS_EPISODE_COVER, cover)) (void)unlink(cover);
+	if (path_for(folder, ABS_EPISODE_COVER ".part", cover)) (void)unlink(cover);
 }
 
 static void finish_removal(const char *folder, const char *server, const char *owner) {
@@ -273,6 +301,7 @@ static void finish_removal(const char *folder, const char *server, const char *o
 	rc = lstat(audio, &st);
 	if (rc == 0 && (!S_ISREG(st.st_mode) || (long long)st.st_size != m.bytes || unlink(audio) != 0)) return;
 	if (rc != 0 && errno != ENOENT) return;
+	remove_cover(folder);
 	(void)unlink(marker);
 }
 
@@ -297,7 +326,7 @@ static int by_title(const void *a, const void *b) {
 	return n ? n : strcmp(x->episode_id, y->episode_id);
 }
 
-int abs_episode_download_list(const char *server, const char *owner, int offset,
+int abs_episode_download_list(const char *server, const char *owner, const char *show, int offset,
 	abs_episode_row_t *out, int cap, bool *more) {
 	if (!server || !owner || !owner[0] || !out || !more || offset < 0 || cap <= 0 ||
 		cap > ABS_PAGE_LIMIT || offset > 4096 - cap) return -1;
@@ -314,12 +343,15 @@ int abs_episode_download_list(const char *server, const char *owner, int offset,
 	if (!abs_episode_card_dir(probe, checked, sizeof(checked))) return -1;
 	DIR *shows = open_folder(root);
 	if (!shows) return errno == ENOENT ? 0 : -1;
+	char wanted[65];
+	if (show) hash(show, NULL, wanted);
 	int count = 0, total = 0, keep = offset + cap;
 	abs_episode_row_t *rows = calloc((size_t)keep, sizeof(*rows));
 	if (!rows) { closedir(shows); return -1; }
 	struct dirent *ds;
 	while ((ds = readdir(shows)) != NULL) {
-		if (!hash_name(ds->d_name)) continue;
+		if (!hash_name(ds->d_name) || (show && strncmp(ds->d_name, wanted, 24))) continue;
+		abs_episode_row_t group = {0};
 		char showdir[SONIX_LINKED_PATH_MAX];
 		if (!path_for(root, ds->d_name, showdir)) continue;
 		DIR *episodes = open_folder(showdir);
@@ -336,7 +368,13 @@ int abs_episode_download_list(const char *server, const char *owner, int offset,
 				!abs_episode_destination(server, owner, m.show, m.episode, expected, sizeof(expected)) ||
 				!abs_episode_card_dir(expected, checked, sizeof(checked)) || strcmp(checked, folder) ||
 				abs_download_sync_blocked(expected)) continue;
-			abs_episode_row_t row = {.duration = m.duration};
+			if (show && strcmp(show, m.show)) continue;
+			if (!show) {
+				if (!group.show_id[0]) strcpy(group.show_id, m.show);
+				if (!group.title[0] && m.show_title[0]) strcpy(group.title, m.show_title);
+				continue;
+			}
+			abs_episode_row_t row = {.duration = m.duration, .published_ms = m.published_ms, .downloaded = true};
 			strcpy(row.show_id, m.show);
 			strcpy(row.episode_id, m.episode);
 			strcpy(row.title, m.title);
@@ -350,6 +388,16 @@ int abs_episode_download_list(const char *server, const char *owner, int offset,
 			rows[at] = row;
 		}
 		closedir(episodes);
+		if (!show && group.show_id[0]) {
+			total++;
+			int at = count;
+			if (at == keep) {
+				if (by_title(&group, &rows[at - 1]) >= 0) continue;
+				at--;
+			} else count++;
+			while (at > 0 && by_title(&group, &rows[at - 1]) < 0) { rows[at] = rows[at - 1]; at--; }
+			rows[at] = group;
+		}
 	}
 	closedir(shows);
 	int n = count > offset ? count - offset : 0;
@@ -373,7 +421,63 @@ bool abs_episode_download_remove(const char *server, const char *owner, const ch
 	// The renamed marker keeps the downloaded row out of the index during
 	// removal. Restore visibility if the filesystem refuses the unlink.
 	if (unlink(audio) != 0 && errno != ENOENT) { (void)rename(removing, marker); return false; }
+	remove_cover(folder);
 	(void)unlink(removing);
 	(void)rmdir(folder);
 	return true;
+}
+
+static bool removal_eligible(const abs_episode_removal_t *plan, const char *episode, const char *in_use) {
+	abs_episode_manifest_t id;
+	char audio[SONIX_LINKED_PATH_MAX];
+	if (!abs_episode_download_path(plan->server, plan->owner, plan->show, episode, &id, audio, sizeof(audio)) ||
+		(in_use && !strcmp(in_use, audio))) return false;
+	if (!plan->finished_only) return true;
+	abs_episode_checkpoint_t checkpoint;
+	return audiobookdb_episode_get(&id, &checkpoint, NULL) && checkpoint.finished;
+}
+
+bool abs_episode_removal_plan(abs_episode_removal_t *plan, const char *in_use) {
+	if (!plan || plan->episodes || !plan->show[0]) return false;
+	plan->generation = abs_download_card_generation();
+	if (!plan->generation) return false;
+	plan->count = 0;
+	int capacity = 0;
+	abs_episode_row_t *rows = calloc(ABS_PAGE_LIMIT, sizeof(*rows));
+	if (!rows) return false;
+	bool more = false, ok = true;
+	for (int offset = 0; ; offset += ABS_PAGE_LIMIT) {
+		int n = abs_episode_download_list(plan->server, plan->owner, plan->show, offset, rows, ABS_PAGE_LIMIT, &more);
+		if (n < 0) { ok = false; break; }
+		for (int i = 0; i < n; i++) {
+			if (!removal_eligible(plan, rows[i].episode_id, in_use)) continue;
+			if (plan->count == capacity) {
+				capacity = capacity ? capacity * 2 : ABS_PAGE_LIMIT;
+				void *next = realloc(plan->episodes, (size_t)capacity * sizeof(*plan->episodes));
+				if (!next) { ok = false; break; }
+				plan->episodes = next;
+			}
+			strcpy(plan->episodes[plan->count++], rows[i].episode_id);
+		}
+		if (!ok || !more) break;
+	}
+	free(rows);
+	if (!ok || plan->generation != abs_download_card_generation()) {
+		free(plan->episodes);
+		plan->episodes = NULL;
+		plan->count = 0;
+		return false;
+	}
+	return true;
+}
+
+int abs_episode_removal_apply(const abs_episode_removal_t *plan, const char *in_use) {
+	if (!plan || !plan->episodes || !plan->generation || plan->generation != abs_download_card_generation()) return -1;
+	int removed = 0;
+	for (int i = 0; i < plan->count && plan->generation == abs_download_card_generation(); i++) {
+		const char *episode = plan->episodes[i];
+		if (removal_eligible(plan, episode, in_use) &&
+			abs_episode_download_remove(plan->server, plan->owner, plan->show, episode, in_use)) removed++;
+	}
+	return removed;
 }

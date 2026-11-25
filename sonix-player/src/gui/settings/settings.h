@@ -8,6 +8,7 @@
 extern lv_obj_t *settings_screen;
 
 void settings_init(gui_config_t *cfg);
+lv_obj_t *settings_sleep_screen(void);
 
 // Hands power.c the screen timeout as it was last left ([power]
 // screen_off_seconds). Call once at startup, after power_init(); the Screen

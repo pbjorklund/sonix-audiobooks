@@ -14,6 +14,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RESOURCE = Path("usr/resource/sonix")
 CHUNK = 524288
+OTA_REPO = "pbjorklund/sonix-audiobooks"
+
+
+def r1_build_info(data, build_id):
+    info = {**data, "build_version": build_id, "ota-repo": OTA_REPO}
+    # The internet updater compares against OS_version, not the build label.
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+){2,3}", build_id):
+        info["OS_version"] = build_id
+    return info
 
 
 def digest(data):
@@ -129,8 +138,8 @@ def pack(args):
             raise ValueError("Expected 12 R1 language files")
         for src in assets:
             shutil.copyfile(src, tree / RESOURCE / "language" / src.name)
-        data["build_version"] = args.build_id
-        info.write_text(json.dumps(data, indent=4) + "\n")
+        packaged_info = (json.dumps(r1_build_info(data, args.build_id), indent=4) + "\n").encode()
+        info.write_bytes(packaged_info)
         rootfs.unlink()
         run(
             "mksquashfs",
@@ -161,6 +170,8 @@ def pack(args):
                 != src.read_bytes()
             ):
                 raise ValueError(f"Packaged file differs: {path}")
+        if run("unsquashfs", "-cat", str(rootfs), str(RESOURCE / "components/system-info.json"), capture=True) != packaged_info:
+            raise ValueError("Packaged OTA channel or build metadata differs")
         result = work / "verified"
         result.mkdir()
         artifact.rename(result / "r1.upt")

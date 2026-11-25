@@ -87,6 +87,7 @@ typedef struct {
 #define QUEUE_ACTION_CELLS QUEUE_ROW_ACTIONS_MAX
 
 static lv_obj_t *queue_screen;
+static bool podcasts_only;
 static lv_obj_t *content;
 static abs_list_t *list;
 static lv_obj_t *clear_row;
@@ -137,10 +138,15 @@ lv_obj_t *audiobookshelfqueue_screen(void) {
 	return queue_screen;
 }
 
-void audiobookshelfqueue_open(void) {
+static void open_queue(bool podcasts) {
 	if (!queue_screen) return;
+	podcasts_only = podcasts;
+	lv_label_set_text(settingsrow_page_title(queue_screen), tr(podcasts ? "abs_podcast_transfer_queue" : "abs_book_downloads"));
 	switch_screen(queue_screen);
 }
+
+void audiobookshelfqueue_open(void) { open_queue(false); }
+void audiobookshelfqueue_open_podcasts(void) { open_queue(true); }
 
 // The §8.1 allowed-actions table, as the row menu offers it. PAUSING and
 // FINALIZING rows open nothing: both are worker-owned transitional states
@@ -221,7 +227,8 @@ static void queue_action_cb(void *user) {
 static void clear_finished_cb(lv_event_t *e) {
 	(void)e;
 	char error[ABS_DL_ERROR_MAX];
-	if (!abs_download_clear_finished(error, sizeof(error)))
+	if (!abs_download_clear_finished_kind(podcasts_only ? ABS_DL_KIND_EPISODE : ABS_DL_KIND_BOOK,
+		error, sizeof(error)))
 		toast_error(error[0] ? error : tr("audiobookshelf_request_failed"));
 }
 
@@ -346,6 +353,13 @@ static void poll_once(void) {
 		return;
 	}
 
+	int visible = 0;
+	for (int i = 0; i < snap->job_count; i++) {
+		if (strcmp(snap->jobs[i].kind, podcasts_only ? ABS_DL_KIND_EPISODE : ABS_DL_KIND_BOOK)) continue;
+		if (visible != i) snap->jobs[visible] = snap->jobs[i];
+		visible++;
+	}
+	snap->job_count = visible;
 	if (!queue_snapshot_changed(snap)) return; // the coalesced idle tick
 	repaint_count++;
 
@@ -403,7 +417,7 @@ static void queue_screen_delete_cb(lv_event_t *e) {
 
 void audiobookshelfqueue_init(gui_config_t *cfg) {
 	queue_screen = lv_obj_create(NULL);
-	content = settingsrow_page(queue_screen, cfg, "audiobookshelf_downloads");
+	content = settingsrow_page(queue_screen, cfg, "abs_book_downloads");
 
 	// The clear-finished action and the storage note above the rows, toggled
 	// by the poll when the queue has something to say. Both just hide — the

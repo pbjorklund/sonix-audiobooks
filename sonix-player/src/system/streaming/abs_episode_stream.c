@@ -12,6 +12,7 @@
 
 #include "src/system/core/utils.h"
 #include "src/system/decode/growfile.h"
+#include "src/system/decode/mp4.h"
 #include "src/system/streaming/streamturn.h"
 
 #define STREAM_MAX_BYTES (384L * 1024 * 1024)
@@ -25,6 +26,7 @@ typedef struct {
 	double resume, duration;
 	long long bytes;
 	bool progressive;
+	bool mp4;
 	unsigned generation;
 } transfer_t;
 
@@ -121,7 +123,7 @@ static void *download(void *arg) {
 		done += got;
 		if (grew) {
 			growfile_progress(job->path, done);
-			if (done >= head) {
+			if (done >= head && !ready && (!job->mp4 || mp4_front_metadata_ready(job->path, (uint64_t)done))) {
 				pthread_mutex_lock(&lock);
 				if (!ready) { ready = true; pthread_cond_broadcast(&changed); }
 				pthread_mutex_unlock(&lock);
@@ -162,7 +164,8 @@ bool abs_episode_stream_start(const abs_auth_snapshot_t *auth, const abs_episode
 	job->bytes = episode->track.size;
 	job->resume = resume;
 	job->duration = episode->track.duration;
-	job->progressive = !strcmp(ext, "mp3") || !strcmp(ext, "flac");
+	job->mp4 = !strcmp(ext, "m4a") || !strcmp(ext, "m4b");
+	job->progressive = job->mp4 || !strcmp(ext, "mp3") || !strcmp(ext, "flac");
 	int n = snprintf(job->url, sizeof(job->url), "%s%s", auth->server, episode->track.content_url);
 	if (!job->generation || n <= 0 || (size_t)n >= sizeof(job->url)) { free(job); return false; }
 	pthread_mutex_lock(&lock);

@@ -3,6 +3,7 @@ name: Host build
 on:
   push:
     branches: [main, rebase/**]
+    tags: ['v*']
   pull_request:
 
 concurrency:
@@ -27,7 +28,7 @@ jobs:
           sudo apt-get install -y \
             build-essential git pkg-config libsdl2-dev libfreetype-dev \
             libopusfile-dev libwavpack-dev libasound2-dev \
-            ffmpeg sqlite3 xvfb xdotool scrot
+            ffmpeg sqlite3 xvfb xdotool scrot tesseract-ocr tesseract-ocr-eng
       - name: Compile the host simulator
         # The Makefile target is `host`; it builds sonix_player_host and clones
         # LVGL 9.6.0 on first use.
@@ -42,13 +43,54 @@ jobs:
         env:
           SONIX_SMOKE_SKIP_BUILD: 1
         run: tools/audiobookshelf-host-smoke.sh
+      - name: Check sleep timer with a controlled clock
+        working-directory: ${{ github.workspace }}
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -I sonix-player -Wl,--wrap=clock_gettime,--wrap=time \
+            tools/sleeptimer-test.c sonix-player/src/system/playback/sleeptimer.c -o /tmp/sonix-sleeptimer-test
+          /tmp/sonix-sleeptimer-test
       - name: Exercise Audiobookshelf podcast playback and offline restart
         working-directory: ${{ github.workspace }}
         run: |
           SONIX_PODCAST_SMOKE_RSS=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_FORMAT=m4a tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_INTERRUPT=1 tools/audiobookshelf-podcast-smoke.sh
-          SONIX_PODCAST_SMOKE_SYNC=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_SYNC=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_FILTERS=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_ROW_DOWNLOAD=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_ROW_DOWNLOAD=1 SONIX_PODCAST_SMOKE_NO_DATE=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_DETAIL_QUEUE=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_SHOWS=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_LABELS=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_SLEEP=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_NEXT=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_SHOW_FILTERS=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_FROM_MUSIC=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_FROM_MUSIC=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_HANDOFF=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_HANDOFF=1 SONIX_PODCAST_SMOKE_FASTSTART=1 SONIX_PODCAST_SMOKE_FORMAT=m4a tools/audiobookshelf-podcast-smoke.sh
+      - name: Check shared streaming artwork loader
+        working-directory: ${{ github.workspace }}
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -pthread -DLV_CONF_INCLUDE_SIMPLE \
+            -I sonix-player -I sonix-player/lvgl/include tools/stream-art-test.c \
+            sonix-player/src/gui/streaming/qobuzart.c sonix-player/src/system/core/md5.c -o /tmp/sonix-stream-art-test
+          /tmp/sonix-stream-art-test "$(mktemp -d)"
+      - name: Check offline TIDAL Downloads views
+        working-directory: ${{ github.workspace }}
+        run: |
+          tools/tidal-downloads-ui-smoke.sh
+          tools/tidal-downloads-ui-smoke.sh empty
+          tools/tidal-downloads-ui-smoke.sh favourites
+          tools/tidal-downloads-ui-smoke.sh saved
+          tools/tidal-downloads-ui-smoke.sh local
+          tools/tidal-downloads-ui-smoke.sh cache
+          tools/tidal-downloads-ui-smoke.sh quality
+      - name: Check TIDAL download queue and R1 firmware tooling
+        working-directory: ${{ github.workspace }}
+        run: |
+          tools/tidalkeep-test.sh
+          python3 tools/pack-r1-test.py
       - name: Run episode progress, history and show parsing tests
         working-directory: ${{ github.workspace }}
         run: tools/audiobookshelf-episode-test.sh

@@ -47,4 +47,7 @@ void speed_reset(speed_t *s);
 int speed_pull(speed_t *s, short *out, int want, int (*fill)(void *user, short *dst, int frames), void *user,
 			   uint64_t *input_frames);
 
+// Input already read from the decoder but not yet consumed by the effect.
+unsigned speed_pending_input(const speed_t *s);
+
 #endif /* SPEED_H */

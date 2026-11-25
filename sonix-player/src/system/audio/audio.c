@@ -13,9 +13,11 @@
 #include "src/system/device/power.h"
 #include "src/system/core/utils.h"
 #include "src/system/streaming/abs_history.h"
+#include "src/system/streaming/abs_episode_stream.h"
 
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -471,6 +473,11 @@ bool audio_output_is_bluetooth(void) { return output_is_bluetooth(); }
 
 static volatile bool fade_enabled;
 static volatile int fade_secs = 3;
+static atomic_int sleep_gain_q10 = 1024;
+
+void audio_set_sleep_gain(int gain_q10) {
+	atomic_store_explicit(&sleep_gain_q10, gain_q10, memory_order_relaxed);
+}
 
 // Bit-perfect (audio_set_bit_perfect): the samples reach the output as the
 // decoder made them, with no effect and no fade. Read at every buffer, so a
@@ -478,8 +485,8 @@ static volatile int fade_secs = 3;
 // a codec of its own whatever is sent to it.
 //
 // Despite the name it is an effects bypass, not an end-to-end guarantee: the
-// path before this guard (time-stretch, USB software volume) and the ALSA
-// rate/depth fallback behind it are untouched. Do not present the feature as
+// path before this guard (time-stretch, USB software volume), the explicit
+// sleep fade, and the ALSA rate/depth fallback are untouched. Do not present the feature as
 // bit-identical end to end.
 static volatile bool bit_perfect;
 
@@ -3074,8 +3081,12 @@ static void play_wav_file(const char *filepath) {
 		}
 
 		snd_pcm_uframes_t frames_to_write = (snd_pcm_uframes_t)frames_read;
+		int gain = atomic_load_explicit(&sleep_gain_q10, memory_order_relaxed);
 		if (fade_enabled && !pure_now()) {
-			int gain = fade_gain_q10((double)bytes_played / bytes_per_sec, (double)info.data_size / bytes_per_sec);
+			gain = gain * fade_gain_q10((double)bytes_played / bytes_per_sec,
+				(double)info.data_size / bytes_per_sec) / 1024;
+		}
+		if (gain < 1024) {
 			int samples = (int)frames_to_write * info.channels;
 			if (info.out_bits == 32) {
 				fade_apply_s32((int32_t *)buffer, samples, gain);
@@ -3209,6 +3220,20 @@ static int bluetooth_decimation(int sample_rate, int channels, int out_bits, boo
 	}
 	unsigned sink_rate = bluetooth_sink_rate();
 	return sink_rate ? decimate_factor_for(sample_rate, (int)sink_rate) : 1;
+}
+
+static decoder_t *open_episode_copy(const char *source, const decoder_t *playing,
+	decode_format_t format, uint64_t frame, char *path, size_t cap) {
+	if (!abs_episode_playback_local(source, path, cap)) return NULL;
+	decoder_t *local = decoder_open(path, format);
+	if (!local) return NULL;
+	if (decoder_sample_rate(local) != decoder_sample_rate(playing) ||
+		decoder_channels(local) != decoder_channels(playing) || decoder_source_bits(local) != decoder_source_bits(playing) ||
+		frame >= decoder_total_pcm_frames(local) || !decoder_seek_to_frame(local, frame)) {
+		decoder_close(local);
+		return NULL;
+	}
+	return local;
 }
 
 static void play_decoded_file(const char *filepath, decode_format_t format) {
@@ -3412,6 +3437,8 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 	bool played_to_the_end = false;
 	int route_check = 0;
 	int track_route = alsa_output_key(); // the output auto_set_output just applied
+	bool seek_local_copy = !passthrough && abs_episode_stream_owns(filepath);
+	long local_probe_ms = 0;
 
 	// The time stretcher. Only on the 16-bit path: what it is for is
 	// audiobooks, which are AAC and so always 16-bit, and a hi-res FLAC has no
@@ -3684,6 +3711,24 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 			}
 		}
 
+		// Keep the current PCM, effects, clock and listening session. Only
+		// replace the decoder, at the first source frame not already fed in.
+		if (seek_local_copy && log_ms() >= local_probe_ms) {
+			local_probe_ms = log_ms() + 500;
+			char local[512];
+			uint64_t frame = (uint64_t)(bytes_played / frame_bytes) + speed_pending_input(stretch);
+			decoder_t *copy = open_episode_copy(filepath, dec, format, frame, local, sizeof(local));
+			if (copy) {
+				decoder_close(dec);
+				dec = copy;
+				fill_ctx.dec = copy;
+				seek_local_copy = false;
+				abs_episode_playback_did_switch(filepath, local);
+				fprintf(stderr, "audio[%ld]: continued Audiobookshelf episode from verified local audio at %.3f s\n",
+					log_ms(), (double)frame / sample_rate);
+			}
+		}
+
 		// --- the reserve of a track that is still downloading ----------------
 		//
 		// A streamed track plays while it downloads. Ahead of the play position
@@ -3861,8 +3906,12 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 		}
 
 		// The fade is a gain, so it is one more thing a DoP stream cannot have.
+		int gain = atomic_load_explicit(&sleep_gain_q10, memory_order_relaxed);
 		if (fade_enabled && !passthrough && !pure_now()) {
-			int gain = fade_gain_q10((double)bytes_played / bytes_per_sec, (double)total_frames / sample_rate);
+			gain = gain * fade_gain_q10((double)bytes_played / bytes_per_sec,
+				(double)total_frames / sample_rate) / 1024;
+		}
+		if (!passthrough && gain < 1024) {
 			int samples = (int)frames_read * channels;
 			if (out_bits == 32) {
 				fade_apply_s32((int32_t *)buffer, samples, gain);
@@ -4184,6 +4233,7 @@ int audio_play(const char *filepath) {
 	pthread_mutex_lock(&audio_mutex);
 	restart_fresh_pending = false; // an explicit play beats the armed restart
 	strncpy(current_filepath, filepath, sizeof(current_filepath) - 1);
+	audio_set_sleep_gain(1024);
 	play_request = true;
 	play_request_ms = log_ms();
 	write_fail_retry_used = false;
@@ -4229,6 +4279,7 @@ int audio_play_at(const char *filepath, double start_secs) {
 	play_request = true;
 	play_request_ms = log_ms();
 	write_fail_retry_used = false;
+	audio_set_sleep_gain(1024);
 	audio_command = AUDIO_CMD_PLAY;
 	playback_status = AUDIO_STATUS_PLAYING;
 	if (start_secs > 0) {
@@ -4431,6 +4482,7 @@ void audio_resume(void) {
 	printf("resuming\n");
 
 	pthread_mutex_lock(&audio_mutex);
+	audio_set_sleep_gain(1024);
 	audio_command = AUDIO_CMD_RESUME;
 
 	// Same reasoning as audio_pause(): the intent is the truth until the
@@ -4870,7 +4922,7 @@ static bool external_wait_room(long *last_progress_ms) {
 	return true;
 }
 
-int audio_external_write(const void *frames, int count) {
+static int external_write(const void *frames, int count, bool passthrough) {
 	pthread_mutex_lock(&external_lock);
 
 	if (!external_pcm || count <= 0) {
@@ -4890,10 +4942,28 @@ int audio_external_write(const void *frames, int count) {
 	long last_progress_ms = log_ms();
 	while (written < count) {
 		const void *chunk = (const char *)frames + (size_t)written * external_frame_bytes;
-		if (pcm_takes_s24(external_pcm, external_bits)) {
-			chunk = s24_from_s32(&external_s24, chunk, (size_t)(count - written) * (size_t)external_channels);
+		int n = count - written;
+		int gain = atomic_load_explicit(&sleep_gain_q10, memory_order_relaxed);
+		union { int32_t s32[512]; short s16[512]; } faded;
+		if (!passthrough && gain < 1024 && (external_bits == 16 || external_bits == 32) &&
+			external_channels > 0 && external_channels <= 512) {
+			int cap = 512 / external_channels;
+			if (n > cap) n = cap;
+			int samples = n * external_channels;
+			if (external_bits == 32) {
+				memcpy(faded.s32, chunk, (size_t)n * external_frame_bytes);
+				fade_apply_s32(faded.s32, samples, gain);
+				chunk = faded.s32;
+			} else {
+				memcpy(faded.s16, chunk, (size_t)n * external_frame_bytes);
+				fade_apply_s16(faded.s16, samples, gain);
+				chunk = faded.s16;
+			}
 		}
-		snd_pcm_sframes_t got = chunk ? snd_pcm_writei(external_pcm, chunk, (snd_pcm_uframes_t)(count - written)) : -ENOMEM;
+		if (pcm_takes_s24(external_pcm, external_bits)) {
+			chunk = s24_from_s32(&external_s24, chunk, (size_t)n * (size_t)external_channels);
+		}
+		snd_pcm_sframes_t got = chunk ? snd_pcm_writei(external_pcm, chunk, (snd_pcm_uframes_t)n) : -ENOMEM;
 		if (got > 0) {
 			written += (int)got;
 			last_progress_ms = log_ms();
@@ -4934,6 +5004,9 @@ int audio_external_write(const void *frames, int count) {
 	pthread_mutex_unlock(&external_lock);
 	return written;
 }
+
+int audio_external_write(const void *frames, int count) { return external_write(frames, count, false); }
+int audio_external_write_passthrough(const void *frames, int count) { return external_write(frames, count, true); }
 
 void audio_external_end(void) {
 	pthread_mutex_lock(&external_lock);

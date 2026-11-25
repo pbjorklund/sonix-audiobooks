@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "abs_download.h" // abs_download_op_cancelled() polling helper (§8.5)
+#include "abs_episode_card.h" // ABS_EPISODE_COVER
 #include "src/system/core/sha256.h"
 #include "src/system/net/http.h"
 
@@ -34,7 +35,7 @@
 #define ABS_COVER_HASH_LEN 12
 #define ABS_COVER_NAME_MAX 64
 #define ABS_COVER_ROOT_MAX 512
-#define ABS_COVER_FILE_PATH_MAX (ABS_COVER_ROOT_MAX + ABS_COVER_NAME_MAX + 2)
+#define ABS_COVER_FILE_PATH_MAX SONIX_LINKED_SIDECAR_PATH_MAX
 #define ABS_COVER_URL_MAX 1200
 #define ABS_COVER_ENTRY_MAX 512 // directory scan cap; a larger cache is still pruned
 #define ABS_COVER_CHUNK 16384   // stream read unit; the 2 MiB cap is 128 units
@@ -193,9 +194,47 @@ void abs_cover_quiesce(void) {
 	pthread_mutex_unlock(&cover_lock);
 }
 
+static bool cover_cache_name(const char *server, const char *item, bool shelf, char *name, size_t size) {
+	char normalized[ABS_SERVER_MAX];
+	abs_profiles_normalize_server(server, normalized, sizeof(normalized));
+	if (!normalized[0]) return false;
+	char server_hash[ABS_COVER_HASH_LEN + 1], item_hash[ABS_COVER_HASH_LEN + 1];
+	cover_hash_prefix(normalized, server_hash, sizeof(server_hash));
+	cover_hash_prefix(item, item_hash, sizeof(item_hash));
+	int n = snprintf(name, size, "%s-%s%s.jpg", server_hash, item_hash, shelf ? "-shelf" : "-detail");
+	return n > 0 && (size_t)n < size;
+}
+
+static bool cover_exists(const char *path) {
+	struct stat st;
+	return lstat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
+static bool cached_cover(const char *server, const char *item, bool shelf, char *out, size_t cap) {
+	if (!out || !cap) return false;
+	out[0] = '\0';
+	char root[ABS_COVER_ROOT_MAX], name[ABS_COVER_NAME_MAX];
+	pthread_mutex_lock(&cover_lock);
+	snprintf(root, sizeof(root), "%s", cover_quiesced ? "" : cover_root);
+	pthread_mutex_unlock(&cover_lock);
+	if (!root[0] || !server || !item || !item[0] || !cover_cache_name(server, item, shelf, name, sizeof(name))) return false;
+	int n = snprintf(out, cap, "%s/" ABS_COVER_CACHE_DIR "/%s", root, name);
+	if (n > 0 && (size_t)n < cap && cover_exists(out)) return true;
+	out[0] = '\0';
+	return false;
+}
+
+bool abs_cover_cached(const char *server, const char *item, char *out, size_t cap) {
+	return cached_cover(server, item, false, out, cap);
+}
+
+bool abs_cover_cached_shelf(const char *server, const char *item, char *out, size_t cap) {
+	return cached_cover(server, item, true, out, cap);
+}
+
 static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bool shelf,
-					 const volatile int *cancel, char *path_out, size_t path_size,
-					 char *error, size_t error_size) {
+					 const volatile int *cancel, http_op_t *op, const char *folder,
+					 char *path_out, size_t path_size, char *error, size_t error_size) {
 	if (path_out && path_size) path_out[0] = '\0';
 	if (error && error_size) error[0] = '\0';
 #define COVER_FAIL(message)                                                  \
@@ -224,23 +263,23 @@ static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bo
 	abs_profiles_normalize_server(auth->server, normalized, sizeof(normalized));
 	if (!normalized[0])
 		COVER_FAIL("The cover's server address is unusable.");
-	char server_hash[ABS_COVER_HASH_LEN + 1], item_hash[ABS_COVER_HASH_LEN + 1];
-	cover_hash_prefix(normalized, server_hash, sizeof(server_hash));
-	cover_hash_prefix(item_id, item_hash, sizeof(item_hash));
 	char name[ABS_COVER_NAME_MAX];
-	snprintf(name, sizeof(name), "%s-%s%s.jpg", server_hash, item_hash, shelf ? "-shelf" : "-detail");
+	if (folder) snprintf(name, sizeof(name), ABS_EPISODE_COVER);
+	else if (!cover_cache_name(normalized, item_id, shelf, name, sizeof(name)))
+		COVER_FAIL("The cover cache name does not fit the card.");
 
 	char dir[ABS_COVER_FILE_PATH_MAX];
 	char final_path[ABS_COVER_FILE_PATH_MAX];
 	// The path-length refusals decide BEFORE any filesystem side effect, so a
 	// genuinely over-long path keeps the length message and a failing mkdir
 	// cannot be mistaken for it: these two checks share nothing else.
-	size_t dir_len = (size_t)snprintf(dir, sizeof(dir), "%s/" ABS_COVER_CACHE_DIR, root);
+	size_t dir_len = folder ? (size_t)snprintf(dir, sizeof(dir), "%s", folder) :
+		(size_t)snprintf(dir, sizeof(dir), "%s/" ABS_COVER_CACHE_DIR, root);
 	if (dir_len >= sizeof(dir) ||
 		(size_t)snprintf(final_path, sizeof(final_path), "%s/%s", dir, name) >= sizeof(final_path) ||
-		strlen(final_path) >= ABS_COVER_PATH_MAX)
+		strlen(final_path) >= path_size)
 		COVER_FAIL("The cover cache path does not fit the card.");
-	if (!cover_make_dirs(root))
+	if (!folder && !cover_make_dirs(root))
 		// A refusal from mkdir is a card/permission problem, not a path-length
 		// one (observed live: an unattached root logged the length message for
 		// a plain ENOENT). cover_make_dirs() logs the exact path it could not
@@ -249,9 +288,8 @@ static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bo
 		// longer card root.
 		COVER_FAIL("The cover cache folder could not be created on the card.");
 
-	struct stat existing;
-	if (stat(final_path, &existing) == 0 && S_ISREG(existing.st_mode) && existing.st_size > 0) {
-		cover_touch(final_path); // LRU: a view is a use
+	if (cover_exists(final_path)) {
+		if (!folder) cover_touch(final_path); // LRU: a view is a use
 		snprintf(path_out, path_size, "%s", final_path);
 		return true;
 	}
@@ -278,7 +316,9 @@ static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bo
 		COVER_FAIL("The cover's login does not fit the request.");
 
 	http_stream_t stream;
-	if (!http_stream_open_ex(&stream, url, headers, ABS_COVER_TIMEOUT_SECS))
+	bool opened = op ? http_stream_open_ex_op(&stream, url, headers, ABS_COVER_TIMEOUT_SECS, op, NULL) :
+		http_stream_open_ex(&stream, url, headers, ABS_COVER_TIMEOUT_SECS);
+	if (!opened)
 		COVER_FAIL("The cover could not be downloaded.");
 	if (stream.content_length > ABS_COVER_ENCODED_MAX) {
 		// Refuse before a byte lands: a stated-oversize response never even
@@ -292,8 +332,10 @@ static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bo
 		http_stream_close(&stream);
 		COVER_FAIL("The cover cache path does not fit the card.");
 	}
-	FILE *f = fopen(part_path, "wb");
+	int fd = open(part_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+	FILE *f = fd < 0 ? NULL : fdopen(fd, "wb");
 	if (!f) {
+		if (fd >= 0) { close(fd); unlink(part_path); }
 		http_stream_close(&stream);
 		COVER_FAIL("The cover could not be written to the card.");
 	}
@@ -308,7 +350,8 @@ static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bo
 			ok = false;
 		}
 		if (!ok) break;
-		int n = http_stream_read(&stream, buffer, sizeof(buffer));
+		int n = op ? http_stream_read_op(&stream, buffer, sizeof(buffer), op) :
+			http_stream_read(&stream, buffer, sizeof(buffer));
 		if (n == 0) break; // end of body
 		if (n < 0) {
 			ok = false;
@@ -330,15 +373,17 @@ static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bo
 	http_stream_close(&stream);
 	if (ok && stream.content_length > 0 && done != stream.content_length) ok = false;
 	if (ok && done == 0) ok = false; // an empty answer is not a cover
-	if (ok && rename(part_path, final_path) != 0) ok = false;
+	if (ok && (http_op_cancelled(op) || abs_download_op_cancelled(cancel) || rename(part_path, final_path) != 0)) ok = false;
 	if (!ok) {
 		remove(part_path);
 		COVER_FAIL(cancelled ? "The cover download was cancelled."
 							 : "The cover download was interrupted.");
 	}
 
-	cover_touch(final_path); // a fetch is a use
-	cover_prune(dir, name);
+	if (!folder) {
+		cover_touch(final_path); // a fetch is a use
+		cover_prune(dir, name);
+	}
 	snprintf(path_out, path_size, "%s", final_path);
 	return true;
 #undef COVER_FAIL
@@ -347,10 +392,21 @@ static bool cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id, bo
 bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 					 const volatile int *cancel, char *path_out, size_t path_size,
 					 char *error, size_t error_size) {
-	return cover_fetch(auth, item_id, false, cancel, path_out, path_size, error, error_size);
+	return cover_fetch(auth, item_id, false, cancel, NULL, NULL, path_out, path_size, error, error_size);
 }
 
 bool abs_cover_fetch_shelf(const abs_auth_snapshot_t *auth, const char *item_id,
 					 char *path_out, size_t path_size) {
-	return cover_fetch(auth, item_id, true, NULL, path_out, path_size, NULL, 0);
+	return abs_cover_fetch_shelf_op(auth, item_id, NULL, path_out, path_size);
+}
+
+bool abs_cover_fetch_shelf_op(const abs_auth_snapshot_t *auth, const char *item_id,
+	http_op_t *op, char *path_out, size_t path_size) {
+	return cover_fetch(auth, item_id, true, NULL, op, NULL, path_out, path_size, NULL, 0);
+}
+
+bool abs_cover_download_episode(const abs_auth_snapshot_t *auth, const char *show, const char *folder,
+	const volatile int *cancel, http_op_t *op) {
+	char path[ABS_COVER_FILE_PATH_MAX];
+	return folder && cover_fetch(auth, show, false, cancel, op, folder, path, sizeof(path), NULL, 0);
 }

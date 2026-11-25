@@ -80,19 +80,21 @@ static const char *column_text(sqlite3_stmt *stmt, int index) {
 }
 
 int tidalsaved_list(const char *root, int offset, tidal_album_t *out, int max) {
-	if (!out || max <= 0 || offset < 0) {
-		return 0;
-	}
+	if (!out || max <= 0 || offset < 0) return -1;
+	char path[512];
+	struct stat st;
+	if (!root || !root[0] || stat(root, &st) != 0 || !S_ISDIR(st.st_mode) ||
+		snprintf(path, sizeof(path), "%s/.local/tidal-saved.db", root) >= (int)sizeof(path)) return -1;
+	if (stat(path, &st) != 0) return errno == ENOENT ? 0 : -1;
+	if (!S_ISREG(st.st_mode)) return -1;
 	sqlite3 *db = open_db(root, false);
-	if (!db) {
-		return 0;
-	}
+	if (!db) return -1;
 	sqlite3_stmt *stmt = NULL;
-	int count = 0;
+	int count = 0, rc = SQLITE_ERROR;
 	if (sqlite3_prepare_v2(db, "SELECT id,title,artist,cover,released,tracks FROM saved "
 			"ORDER BY rowid DESC LIMIT ?1 OFFSET ?2", -1, &stmt, NULL) == SQLITE_OK &&
 		sqlite3_bind_int(stmt, 1, max) == SQLITE_OK && sqlite3_bind_int(stmt, 2, offset) == SQLITE_OK) {
-		while (count < max && sqlite3_step(stmt) == SQLITE_ROW) {
+		while (count < max && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
 			tidal_album_t *album = &out[count++];
 			*album = (tidal_album_t){0};
 			snprintf(album->id_text, sizeof(album->id_text), "%s", column_text(stmt, 0));
@@ -105,7 +107,7 @@ int tidalsaved_list(const char *root, int offset, tidal_album_t *out, int max) {
 	}
 	sqlite3_finalize(stmt);
 	sqlite3_close(db);
-	return count;
+	return rc == SQLITE_DONE || (rc == SQLITE_ROW && count == max) ? count : -1;
 }
 
 bool tidalsaved_playlist_set(const char *root, const char *id, const char *name, const long *tracks, int count) {

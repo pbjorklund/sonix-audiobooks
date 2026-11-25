@@ -23,6 +23,7 @@
 typedef struct {
 	char url[QOBUZART_URL_MAX];
 	int size;
+	bool local;
 
 	uint32_t generation; // bumped by every request and every release
 	bool pending;
@@ -40,12 +41,41 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wakeup = PTHREAD_COND_INITIALIZER;
 static bool started;
 
+// An encoded file on disk still needs a JPEG decode for each row. Keep the
+// last few small remote thumbnails so repeated tracks and podcast episodes
+// can take their own pixel buffers without re-decoding the source.
+#define DECODED_SLOTS 4
+#define DECODED_MAX_BYTES (120u * 120 * 2)
+static struct {
+	char url[QOBUZART_URL_MAX];
+	int size;
+	cover_image_t image;
+} decoded[DECODED_SLOTS];
+static unsigned decoded_next, decoded_epoch;
+
+static void decoded_clear_locked(void) {
+	for (int i = 0; i < DECODED_SLOTS; i++) cover_free(&decoded[i].image);
+	decoded_next = 0;
+	decoded_epoch++;
+}
+
+static bool copy_image(cover_image_t *out, const cover_image_t *image) {
+	uint8_t *pixels = malloc(image->dsc.data_size);
+	if (!pixels) return false;
+	memcpy(pixels, image->pixels, image->dsc.data_size);
+	*out = *image;
+	out->pixels = pixels;
+	out->dsc.data = pixels;
+	return true;
+}
+
 void qobuzart_set_root(const char *sd_root) {
+	char dir[sizeof(art_dir)] = "";
+	if (sd_root && *sd_root) snprintf(dir, sizeof(dir), "%s/%s", sd_root, ART_DIR);
 	pthread_mutex_lock(&lock);
-	if (!sd_root || !*sd_root) {
-		art_dir[0] = '\0';
-	} else {
-		snprintf(art_dir, sizeof(art_dir), "%s/%s", sd_root, ART_DIR);
+	if (strcmp(art_dir, dir)) {
+		strcpy(art_dir, dir);
+		decoded_clear_locked();
 	}
 	pthread_mutex_unlock(&lock);
 }
@@ -163,17 +193,29 @@ static void *worker_main(void *arg) {
 		char url[QOBUZART_URL_MAX];
 		memcpy(url, slot->url, sizeof(url));
 		int size = slot->size;
+		bool local = slot->local;
 		uint32_t generation = slot->generation;
+		unsigned epoch = decoded_epoch;
+		cover_image_t image = {0};
+		bool reused = false;
+		if (!local) {
+			for (int i = 0; i < DECODED_SLOTS; i++) {
+				if (decoded[i].image.pixels && decoded[i].size == size && !strcmp(decoded[i].url, url)) {
+					reused = copy_image(&image, &decoded[i].image);
+					break;
+				}
+			}
+		}
 
 		slot->pending = false;
 		slot->running = true;
 		pthread_mutex_unlock(&lock);
 
 		char path[600];
-		cover_image_t image;
-		memset(&image, 0, sizeof(image));
-		bool found = false;
-		if (art_path(url, path, sizeof(path)) && fetch(url, path)) {
+		bool found = reused;
+		if (local) {
+			found = cover_load_image_file(url, size, size, COVER_FIT_COVER, &image);
+		} else if (!reused && art_path(url, path, sizeof(path)) && fetch(url, path)) {
 			found = cover_load_image_file(path, size, size, COVER_FIT_COVER, &image);
 			if (!found) {
 				// Downloaded but undecodable is a different fault from never
@@ -184,7 +226,18 @@ static void *worker_main(void *arg) {
 
 		pthread_mutex_lock(&lock);
 		slot->running = false;
-		if (slot->generation != generation) {
+		if (found && !local && !reused && epoch == decoded_epoch && image.dsc.data_size <= DECODED_MAX_BYTES) {
+			cover_image_t copy;
+			if (copy_image(&copy, &image)) {
+				unsigned i = decoded_next++ % DECODED_SLOTS;
+				cover_free(&decoded[i].image);
+				decoded[i].image = copy;
+				decoded[i].size = size;
+				strcpy(decoded[i].url, url);
+			}
+		}
+		if (slot->generation != generation || (!local && epoch != decoded_epoch)) {
+			if (slot->generation == generation) { slot->done = true; slot->found = false; }
 			// The slot was reused for something else while the fetch ran (the
 			// list scrolled), so nobody wants this image any more.
 			if (found) {
@@ -248,7 +301,7 @@ static void take_pool_locked(const void *owner) {
 	pool_owner = owner;
 }
 
-void qobuzart_request(const void *owner, int slot_index, const char *url, int size) {
+static void request_art(const void *owner, int slot_index, const char *url, int size, bool local) {
 	if (slot_index < 0 || slot_index >= QOBUZART_SLOTS || !url || !url[0] || size <= 0) {
 		return;
 	}
@@ -264,7 +317,7 @@ void qobuzart_request(const void *owner, int slot_index, const char *url, int si
 	// stops owning it, so without the found check reopening the same list would
 	// drop the request as already done with nothing left to hand over, and the
 	// rows would stay grey.
-	if (slot->done && slot->found && slot->size == size && strcmp(slot->url, url) == 0) {
+	if (slot->done && slot->found && slot->size == size && slot->local == local && strcmp(slot->url, url) == 0) {
 		pthread_mutex_unlock(&lock);
 		return;
 	}
@@ -272,9 +325,18 @@ void qobuzart_request(const void *owner, int slot_index, const char *url, int si
 	reset_locked(slot);
 	snprintf(slot->url, sizeof(slot->url), "%s", url);
 	slot->size = size;
+	slot->local = local;
 	slot->pending = true;
 	pthread_cond_signal(&wakeup);
 	pthread_mutex_unlock(&lock);
+}
+
+void qobuzart_request(const void *owner, int slot_index, const char *url, int size) {
+	request_art(owner, slot_index, url, size, false);
+}
+
+void qobuzart_request_local(const void *owner, int slot_index, const char *path, int size) {
+	request_art(owner, slot_index, path, size, true);
 }
 
 void qobuzart_release(const void *owner, int slot_index) {
@@ -333,6 +395,7 @@ bool qobuzart_take(const void *owner, int slot_index, cover_image_t *out, bool *
 
 void qobuzart_clear(void) {
 	pthread_mutex_lock(&lock);
+	decoded_clear_locked();
 	char dir[512];
 	snprintf(dir, sizeof(dir), "%s", art_dir);
 	for (int i = 0; i < QOBUZART_SLOTS; i++) {

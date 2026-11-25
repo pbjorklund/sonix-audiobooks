@@ -302,6 +302,7 @@ typedef struct {
 	// "application/x-www-form-urlencoded", which is what both Tidal's login
 	// endpoint and its writes expect.
 	const char *content_type;
+	const char *accept; // NULL means */*.
 
 	// Keep the body of a 4xx instead of discarding it: that is where the API
 	// says why it refused. See http_get_ex().

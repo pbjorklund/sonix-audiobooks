@@ -1260,6 +1260,15 @@ static void test_capacity_dedup(void) {
 	e.owner_id = "owner-b";
 	CHECK(abs_download_enqueue_episode(&e, &other_owner, &deduped, err, sizeof(err)) &&
 		!deduped && other_owner != ep_id, "different owner deduped\n");
+	CHECK(abs_download_episode_state(e.server, "owner-b", e.item_id, e.episode_id) == ABS_DL_QUEUED,
+		"queued episode state missing\n");
+	CHECK(abs_download_episode_state(e.server, "owner-c", e.item_id, e.episode_id) == ABS_DL_STATE_COUNT &&
+		abs_download_episode_state(e.server, "owner-b", "other-show", e.episode_id) == ABS_DL_STATE_COUNT &&
+		abs_download_episode_state("http://other.test", "owner-b", e.item_id, e.episode_id) == ABS_DL_STATE_COUNT,
+		"episode state leaked across accounts, servers, or shows\n");
+	CHECK(abs_download_remove(other_owner, err, sizeof(err)) &&
+		abs_download_episode_state(e.server, "owner-b", e.item_id, e.episode_id) == ABS_DL_STATE_COUNT,
+		"removed episode still reports a queue state: %s\n", err);
 	e.owner_id = NULL;
 	CHECK(!abs_download_enqueue_episode(&e, NULL, NULL, err, sizeof(err)), "episode without an owner passed\n");
 
@@ -1481,6 +1490,12 @@ static void test_lifecycle(void) {
 	CHECK(file_bytes(ep_final) == 42, "episode file missing (%lld)\n", file_bytes(ep_final));
 	CHECK(!abs_download_sync_blocked("Podcasts/abs-4b1f/Show/Episode Nine"),
 		  "episode barrier must release after DONE\n");
+	CHECK(abs_download_clear_finished_kind(ABS_DL_KIND_BOOK, err, sizeof(err)), "clear finished books: %s\n", err);
+	CHECK(abs_download_episode_state(ereq.server, ereq.owner_id, ereq.item_id, ereq.episode_id) == ABS_DL_DONE,
+		"clearing book jobs removed a podcast job\n");
+	CHECK(abs_download_clear_finished_kind(ABS_DL_KIND_EPISODE, err, sizeof(err)), "clear finished podcasts: %s\n", err);
+	CHECK(abs_download_episode_state(ereq.server, ereq.owner_id, ereq.item_id, ereq.episode_id) == ABS_DL_STATE_COUNT &&
+		file_bytes(ep_final) == 42, "clearing podcast jobs did not preserve published audio\n");
 
 	abs_download_quiesce_storage();
 	printf("ok\n");

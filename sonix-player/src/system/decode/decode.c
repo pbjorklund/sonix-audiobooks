@@ -2232,8 +2232,10 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 		// The container is opened before deciding which decoder to build: .m4a
 		// and .m4b can hold either AAC or ALAC, and the sample entry is the
 		// only place that says which.
-		mp4_file_t *mp4 = mp4_open(filepath);
+		growfile_t *reader = growfile_is_growing(filepath) ? growfile_open(filepath) : NULL;
+		mp4_file_t *mp4 = mp4_open_growing(filepath, reader);
 		if (!mp4) {
+			growfile_close(reader);
 			fprintf(stderr, "decode: %s is not an MP4 with audio we know how to play\n", filepath);
 			free(dec);
 			return NULL;
@@ -2246,6 +2248,7 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 			alac_state_t *s = calloc(1, sizeof(*s));
 			if (!s) {
 				mp4_close(mp4);
+				growfile_close(reader);
 				free(dec);
 				return NULL;
 			}
@@ -2258,6 +2261,7 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 			s->alac = alacdec_open(cfg, cfg_len);
 			if (!s->alac) {
 				alac_state_free(s);
+				growfile_close(reader);
 				free(dec);
 				return NULL;
 			}
@@ -2272,6 +2276,7 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 			s->pcm = malloc((size_t)s->pcm_capacity_frames * (size_t)dec->channels * sizeof(int32_t));
 			if (!s->au || !s->pcm) {
 				alac_state_free(s);
+				growfile_close(reader);
 				free(dec);
 				return NULL;
 			}
@@ -2279,12 +2284,14 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 			// ALAC does not misreport its rate the way HE-AAC does, so the
 			// duration comes from the container with nothing decoded first.
 			dec->total_pcm_frames = (uint64_t)(mp4_duration_seconds(s->mp4) * (double)dec->sample_rate);
+			dec->growing = reader;
 			break;
 		}
 
 		aac_state_t *s = calloc(1, sizeof(*s));
 		if (!s) {
 			mp4_close(mp4);
+			growfile_close(reader);
 			free(dec);
 			return NULL;
 		}
@@ -2297,6 +2304,7 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 		if (!s->aac) {
 			fprintf(stderr, "decode: AAC not available (%s)\n", aacdec_last_error());
 			aac_state_free(s);
+			growfile_close(reader);
 			free(dec);
 			return NULL;
 		}
@@ -2307,6 +2315,7 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 		s->pcm = malloc(AAC_PCM_CAPACITY * sizeof(short));
 		if (!s->au || !s->pcm) {
 			aac_state_free(s);
+			growfile_close(reader);
 			free(dec);
 			return NULL;
 		}
@@ -2318,6 +2327,7 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 		if (!aac_fill(dec)) {
 			fprintf(stderr, "decode: no decodable audio in %s\n", filepath);
 			aac_state_free(s);
+			growfile_close(reader);
 			free(dec);
 			return NULL;
 		}
@@ -2332,6 +2342,7 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 		// frame count.
 		dec->total_pcm_frames = (uint64_t)(mp4_duration_seconds(s->mp4) * (double)dec->sample_rate);
 		dec->bitrate_kbps = mp4_audio_bitrate_kbps(s->mp4);
+		dec->growing = reader;
 
 		// The priming and the padding the encoder added, when the file says
 		// how much. Only when the decoder runs at the track's own rate: an

@@ -71,6 +71,10 @@ typedef enum {
 
 const char *abs_download_state_name(abs_download_state_t state);
 
+// Returns ABS_DL_STATE_COUNT if no job matches the episode's account and identity.
+abs_download_state_t abs_download_episode_state(const char *server, const char *owner,
+	const char *show, const char *episode);
+
 // Mirror of one DOWNLOAD_JOB row, plus worker RAM fields (last two). The
 // database, not this struct, is the source of truth; the volatile generation
 // changes on every committed, user-visible state transition so a >=4 Hz
@@ -376,6 +380,7 @@ bool abs_download_retry(long long job_id, char *error, size_t error_size);
 
 // "Clear finished": removes every DONE/FAILED/CANCELLED row (frees capacity).
 bool abs_download_clear_finished(char *error, size_t error_size);
+bool abs_download_clear_finished_kind(const char *kind, char *error, size_t error_size);
 
 // The file rows of a job (bounded to ABS_DL_FILE_CAP).
 int abs_download_job_files(long long job_id, abs_download_file_t *out, int max);

@@ -1,4 +1,6 @@
 #include "mp4.h"
+#include "growfile.h"
+#include <limits.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -84,6 +86,7 @@ typedef struct {
 
 struct mp4_file {
 	int fd;
+	growfile_t *growing;
 	uint64_t file_size;
 
 	track_t tracks[MAX_TRACKS];
@@ -147,6 +150,13 @@ static bool read_at(const mp4_file_t *m, uint64_t off, void *buf, size_t len) {
 	size_t done = 0;
 	while (done < len) {
 		ssize_t n = pread(m->fd, (char *)buf + done, len - done, (off_t)(off + done));
+		if (n == 0 && m->growing && off + done <= LONG_MAX) {
+			// Seek only at the delivery edge; ordinary sample and table reads
+			// retain the original pread path.
+			long pos = (long)(off + done);
+			if (growfile_tell(m->growing) != pos && !growfile_seek(m->growing, pos, 0)) return false;
+			n = (ssize_t)growfile_read(m->growing, (char *)buf + done, len - done);
+		}
 		if (n <= 0) {
 			return false;
 		}
@@ -173,7 +183,7 @@ typedef struct {
 } box_t;
 
 static bool read_box(const mp4_file_t *m, uint64_t off, uint64_t limit, box_t *out) {
-	if (off + 8 > limit) {
+	if (off > limit || limit - off < 8) {
 		return false;
 	}
 	unsigned char head[16];
@@ -185,7 +195,7 @@ static bool read_box(const mp4_file_t *m, uint64_t off, uint64_t limit, box_t *o
 	uint64_t content = off + 8;
 
 	if (size == 1) {
-		if (off + 16 > limit || !read_at(m, off + 8, head + 8, 8)) {
+		if (limit - off < 16 || !read_at(m, off + 8, head + 8, 8)) {
 			return false;
 		}
 		size = be64(head + 8);
@@ -194,7 +204,7 @@ static bool read_box(const mp4_file_t *m, uint64_t off, uint64_t limit, box_t *o
 		size = limit - off; // "to the end of the enclosing box"
 	}
 
-	if (size < content - off || off + size > limit) {
+	if (size < content - off || size > limit - off) {
 		return false;
 	}
 
@@ -1295,7 +1305,24 @@ bool mp4_probe(const char *path) {
 	return ok;
 }
 
-mp4_file_t *mp4_open(const char *path) {
+bool mp4_front_metadata_ready(const char *path, uint64_t available) {
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) return false;
+	mp4_file_t probe = {.fd = fd};
+	bool ready = false;
+	for (uint64_t at = 0; at < available; ) {
+		box_t box;
+		if (!read_box(&probe, at, available, &box) || box.type == FOURCC('m', 'd', 'a', 't')) break;
+		if (box.type == FOURCC('m', 'o', 'o', 'v')) { ready = true; break; }
+		at = box.next;
+	}
+	close(fd);
+	return ready;
+}
+
+mp4_file_t *mp4_open(const char *path) { return mp4_open_growing(path, NULL); }
+
+mp4_file_t *mp4_open_growing(const char *path, growfile_t *reader) {
 	mp4_file_t *m = calloc(1, sizeof(*m));
 	if (!m) {
 		return NULL;
@@ -1315,7 +1342,9 @@ mp4_file_t *mp4_open(const char *path) {
 		return NULL;
 	}
 	m->file_size = (uint64_t)end;
-
+	// Parse only published bytes: a front-loaded moov is already complete.
+	// Attach the waitable data reader after metadata so trailing boxes and
+	// chapter samples cannot delay the start of an otherwise playable file.
 	parse_boxes(m, 0, m->file_size, NULL, 0);
 
 	for (int i = 0; i < m->track_count; i++) {
@@ -1359,6 +1388,7 @@ mp4_file_t *mp4_open(const char *path) {
 		m->chapter_count = 0;
 	}
 
+	m->growing = reader;
 	return m;
 }
 

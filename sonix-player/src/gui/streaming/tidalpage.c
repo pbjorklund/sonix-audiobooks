@@ -86,6 +86,7 @@ typedef enum {
 	JOB_FAV_TRACKS,
 	JOB_FAV_ALBUMS,
 	JOB_SAVED_ALBUMS,
+	JOB_SAVE_ACCOUNT_ALBUM,
 	JOB_USER_PLAYLISTS,
 	JOB_FEATURED,
 	JOB_PLAY,
@@ -95,6 +96,8 @@ typedef enum {
 	JOB_KEPT_PLAYLISTS,
 	JOB_DOWNLOAD_PLAYLIST,
 	JOB_DOWNLOAD_ALBUM,
+	JOB_LINK_KEPT_ALBUMS,
+	JOB_REFRESH_KEPT_ALBUM,
 } job_kind_t;
 
 typedef struct {
@@ -108,7 +111,11 @@ typedef struct {
 	long id;   // numeric identifier: artists only
 	int index; // which track playback starts from; which showcase for the featured lists
 	char artist[TIDAL_NAME_MAX];
+	// Known catalogue metadata can travel with the job through paging and Back.
+	tidal_album_t album_hint;
 	int offset; // which entry this page starts at: 0 = new list
+	int download_quality;
+	bool background;
 } job_t;
 
 static pthread_mutex_t job_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -120,6 +127,46 @@ static bool worker_started;
 // Job generation: when it changes, a late result belongs to a request nobody
 // cares about any more and is discarded.
 static unsigned job_serial;
+static bool worker_writes_results; // guarded by job_lock
+
+// Only the GUI owns snapshots. Background requests build separate results so
+// a slow response cannot overwrite rows the user is still interacting with.
+#define TIDAL_LIST_CACHE_SLOTS 5
+typedef struct {
+	job_t job;
+	void *rows;
+	int count;
+	bool more;
+	unsigned touched;
+} list_cache_t;
+static list_cache_t list_cache[TIDAL_LIST_CACHE_SLOTS];
+static unsigned cache_clock;
+static lv_obj_t *refresh_spinner;
+
+static size_t cache_row_size(job_kind_t kind) {
+	if (kind == JOB_FAV_ALBUMS || kind == JOB_SAVED_ALBUMS) return sizeof(tidal_album_t);
+	if (kind == JOB_ALBUM_TRACKS || kind == JOB_FAV_TRACKS || kind == JOB_PLAYLIST_TRACKS) return sizeof(tidal_track_t);
+	return 0;
+}
+
+static bool same_cached_list(const job_t *a, const job_t *b) {
+	return a->kind == b->kind && !strcmp(a->id_text, b->id_text);
+}
+
+static list_cache_t *cache_find(const job_t *job) {
+	for (int i = 0; i < TIDAL_LIST_CACHE_SLOTS; i++) {
+		if (list_cache[i].rows && same_cached_list(job, &list_cache[i].job)) return &list_cache[i];
+	}
+	return NULL;
+}
+
+static void cache_invalidate(job_kind_t kind) {
+	for (int i = 0; i < TIDAL_LIST_CACHE_SLOTS; i++) {
+		if (kind != JOB_NONE && list_cache[i].job.kind != kind) continue;
+		free(list_cache[i].rows);
+		list_cache[i] = (list_cache_t){0};
+	}
+}
 
 // What came back. Only the worker writes here, and only while the GUI is not
 // reading (it reads inside the async, which runs after the worker is done).
@@ -224,6 +271,7 @@ static void build_busy_layer(void) {
 
 static lv_obj_t *list_container;
 static lv_obj_t *list_title;
+static lv_obj_t *list_album_menu;
 static lv_obj_t *list_empty;
 static lv_obj_t *home_download_status;
 static lv_obj_t *list_download_status;
@@ -244,7 +292,9 @@ static const char *tidal_card_root(void) {
 static void refresh_download_status(tidalkeep_state_t state);
 static void refresh_album_badges(void);
 static void simple_job_cb(lv_event_t *e);
+static void download_tab_cb(lv_event_t *e);
 static void reload_download_view(void);
+static bool result_kept_album;
 static bool download_view(job_kind_t kind) {
 	return kind == JOB_KEPT_ALBUMS || kind == JOB_KEPT_ARTISTS || kind == JOB_KEPT_PLAYLISTS || kind == JOB_KEPT_TRACKS;
 }
@@ -263,6 +313,10 @@ static void featured_gone(int slot);
 static bool job_is_list(job_kind_t kind);
 static void list_nav_commit(void);
 static void list_nav_drop(void);
+static void cache_save_current(void);
+static bool show_cached_list(const job_t *job);
+static void background_list(const job_t *job, unsigned serial);
+static void discard_background_refresh(void);
 
 // "3:42"
 static void duration_text(int seconds, char *out, size_t size) {
@@ -300,6 +354,15 @@ typedef enum {
 	ROW_MENU_PLAYLIST_DELETE,
 	ROW_MENU_KEPT_REMOVE, // "remove download" on a kept track
 } row_menu_t;
+
+static bool can_link_album_list(job_kind_t kind) {
+	return kind == JOB_FAV_ALBUMS || kind == JOB_SAVED_ALBUMS || kind == JOB_SEARCH_ALBUMS ||
+		kind == JOB_ARTIST_ALBUMS || kind == JOB_FEATURED;
+}
+
+static void mark_album_folders(tidal_album_t *albums, int count) {
+	for (int i = 0; i < count; i++) albums[i].local_folder = tidalcache_has_album_folder(&albums[i]);
+}
 
 static row_menu_t row_menu_kind(job_kind_t kind) {
 	switch (kind) {
@@ -354,6 +417,7 @@ static void sync_result_async(void *user) {
 		return;
 	}
 	if (reload) {
+		cache_invalidate(list_kind);
 		reload_current_list();
 	}
 }
@@ -382,6 +446,7 @@ static void do_track_add(void *user) {
 		return;
 	}
 	long id = result_tracks[menu_index].id;
+	cache_invalidate(JOB_FAV_TRACKS);
 	tidalsync_favorite_toggle(id, true, row_added_done, NULL);
 }
 
@@ -398,6 +463,7 @@ static void do_album_add(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	cache_invalidate(JOB_FAV_ALBUMS);
 	tidalsync_album_favorite(result_albums[menu_index].id_text, true, row_added_done, NULL);
 }
 
@@ -414,15 +480,20 @@ static void set_listen_later(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
-	if (!tidalsaved_set(tidal_card_root(), &result_albums[menu_index], save)) {
-		gui_notify_popup("tidal_saved_failed");
+	const tidal_album_t *album = &result_albums[menu_index];
+	cache_invalidate(JOB_SAVED_ALBUMS);
+	if (!save && !album->saved_on_account && tidalsaved_has(tidal_card_root(), album->id_text)) {
+		if (!tidalsaved_set(tidal_card_root(), album, false)) gui_notify_popup("tidal_saved_failed");
+		else if (list_kind == JOB_SAVED_ALBUMS) reload_current_list();
 		return;
 	}
-	if (list_kind == JOB_SAVED_ALBUMS) {
-		reload_current_list();
-	} else if (save) {
-		toast_success("tidal_saved_for_later");
+	if (!wifi_is_connected() || !tidal_logged_in()) {
+		gui_notify_popup(!wifi_is_connected() ? "enable_wi_fi_first" : "tidal_sign_in_to_tidal");
+		return;
 	}
+	job_t job = {.kind = JOB_SAVE_ACCOUNT_ALBUM, .id = save};
+	snprintf(job.id_text, sizeof(job.id_text), "%s", album->id_text);
+	run(&job, "loading");
 }
 
 static void do_playlist_delete(void *user) {
@@ -444,12 +515,29 @@ static void download_queued_async(void *user) {
 	toast_success("tidal_download_queued");
 }
 
-static void do_track_download(void *user) {
-	(void)user;
-	if (menu_index < 0 || menu_index >= result_count) {
-		return;
-	}
-	tidalkeep_enqueue_result_t result = tidalkeep_enqueue(&result_tracks[menu_index]);
+static const char *const QUALITY_NAMES[4] = {"tidal_low_aac_96", "tidal_high_aac_320", "tidal_cd_flac_16_44",
+	"tidal_hi_res_flac_24"};
+
+static void confirm_download_quality(int quality, bool upgrade, bool downgrade, bool unknown,
+		void (*action)(void *)) {
+	const char *title = !unknown && upgrade && !downgrade ? "tidal_upgrade_downloads" :
+		!unknown && downgrade && !upgrade ? "tidal_downgrade_downloads" : "tidal_change_download_quality";
+	char message[256];
+	snprintf(message, sizeof(message), tr("tidal_replace_downloads_note"), tr(QUALITY_NAMES[quality]));
+	confirm_show(title, message, "ok", action, NULL);
+}
+
+static bool can_change_track_quality(const tidal_track_t *track) {
+	return track->streamable && tidal_logged_in() && wifi_is_connected() &&
+		tidalkeep_activity(track->id, NULL) == TIDALKEEP_IDLE &&
+		tidalkeep_quality_differs(tidalcache_kept_quality(track->id), tidalkeep_quality());
+}
+
+static tidal_track_t download_track;
+static int download_track_quality;
+
+static void queue_download_track(bool replace) {
+	tidalkeep_enqueue_result_t result = tidalkeep_enqueue_quality(&download_track, download_track_quality, replace);
 	if (result == TIDALKEEP_ADDED) {
 		gui_post(download_queued_async, NULL);
 	} else if (result == TIDALKEEP_REJECTED) {
@@ -457,8 +545,27 @@ static void do_track_download(void *user) {
 	}
 }
 
-// A whole album, from an album row. The enumeration is a job (network, pages),
-// so the count is reported from job_done_cb.
+static void replace_download_track(void *user) {
+	(void)user;
+	queue_download_track(true);
+}
+
+static void do_track_download(void *user) {
+	(void)user;
+	if (menu_index < 0 || menu_index >= result_count) return;
+	download_track = result_tracks[menu_index];
+	download_track_quality = tidalkeep_quality();
+	int previous = tidalcache_kept_quality(download_track.id);
+	if (tidalkeep_quality_differs(previous, download_track_quality)) {
+		confirm_download_quality(download_track_quality, previous < download_track_quality,
+			previous > download_track_quality, previous == TIDALCACHE_QUALITY_UNKNOWN, replace_download_track);
+	} else {
+		queue_download_track(false);
+	}
+}
+
+// A whole album, from an album row. The worker enumerates the tracks before
+// the GUI decides whether to ask about replacing any existing copies.
 static void do_album_download(void *user) {
 	(void)user;
 	if (menu_index < 0 || menu_index >= result_count) {
@@ -466,6 +573,7 @@ static void do_album_download(void *user) {
 	}
 	job_t job = {0};
 	job.kind = JOB_DOWNLOAD_ALBUM;
+	job.download_quality = tidalkeep_quality();
 	snprintf(job.id_text, sizeof(job.id_text), "%s", result_albums[menu_index].id_text);
 	snprintf(job.text, sizeof(job.text), "%s", result_albums[menu_index].title);
 	run(&job, "loading");
@@ -475,7 +583,7 @@ static void do_playlist_download(void *user) {
 	(void)user;
 	if (menu_index < 0 || menu_index >= result_count) return;
 	const tidal_playlist_t *p = &result_playlists[menu_index];
-	job_t job = {.kind = JOB_DOWNLOAD_PLAYLIST};
+	job_t job = {.kind = JOB_DOWNLOAD_PLAYLIST, .download_quality = tidalkeep_quality()};
 	snprintf(job.id_text, sizeof(job.id_text), "%s", p->id);
 	snprintf(job.text, sizeof(job.text), "%s", p->name);
 	run(&job, "loading");
@@ -564,6 +672,8 @@ static void do_kept_remove(void *user) {
 		// The row the list is drawn from is gone: redrawing the local list is
 		// enough, with no network.
 		reload_download_view();
+	} else {
+		refresh_album_badges();
 	}
 }
 
@@ -622,6 +732,8 @@ static void row_menu_cb(lv_event_t *e) {
 	if (index < 0 || index >= result_count) {
 		return;
 	}
+	// A menu or its confirmation must keep acting on the row it opened on.
+	discard_background_refresh();
 	menu_index = index;
 
 	popover_item_t items[3];
@@ -639,9 +751,9 @@ static void row_menu_cb(lv_event_t *e) {
 			items[0].label = "medialist_add_to_favourites";
 			items[0].action = do_track_add;
 		}
-		// Download goes beside the favourite action; only when the track is
-		// neither kept nor already on the queue.
-		if (!tidalcache_is_kept(result_tracks[index].id)) {
+		if ((!tidalcache_is_kept(result_tracks[index].id) &&
+			tidalkeep_activity(result_tracks[index].id, NULL) == TIDALKEEP_IDLE) ||
+			can_change_track_quality(&result_tracks[index])) {
 			items[count].label = "tidal_download";
 			items[count].action = do_track_download;
 			count++;
@@ -650,16 +762,19 @@ static void row_menu_cb(lv_event_t *e) {
 	case ROW_MENU_TRACK_REMOVE:
 		items[0].label = "remove_from_favourites";
 		items[0].action = ask_track_remove;
-		if (!tidalcache_is_kept(result_tracks[index].id)) {
-			items[count].label = "tidal_download";
-			items[count].action = do_track_download;
-			count++;
+		if (tidalcache_is_kept(result_tracks[index].id)) {
+			items[count++] = (popover_item_t){.label = "tidal_remove_download", .action = ask_kept_remove};
+			if (can_change_track_quality(&result_tracks[index])) {
+				items[count++] = (popover_item_t){.label = "tidal_download", .action = do_track_download};
+			}
+		} else if (tidalkeep_activity(result_tracks[index].id, NULL) == TIDALKEEP_IDLE) {
+			items[count++] = (popover_item_t){.label = "tidal_download", .action = do_track_download};
 		}
 		break;
 	case ROW_MENU_ALBUM_ADD:
 	case ROW_MENU_ALBUM_REMOVE: {
 		bool favourite = list_kind == JOB_FAV_ALBUMS;
-		bool saved = list_kind == JOB_SAVED_ALBUMS || tidalsaved_has(tidal_card_root(), result_albums[index].id_text);
+		bool saved = list_kind == JOB_SAVED_ALBUMS || result_albums[index].saved_on_account || tidalsaved_has(tidal_card_root(), result_albums[index].id_text);
 		count = 0;
 		if (tidal_logged_in() && wifi_is_connected()) {
 			items[count++] = (popover_item_t){.label = favourite ? "remove_from_favourites" : "medialist_add_to_favourites",
@@ -680,6 +795,9 @@ static void row_menu_cb(lv_event_t *e) {
 	case ROW_MENU_KEPT_REMOVE:
 		items[0].label = "tidal_remove_download";
 		items[0].action = ask_kept_remove;
+		if (can_change_track_quality(&result_tracks[index])) {
+			items[count++] = (popover_item_t){.label = "tidal_download", .action = do_track_download};
+		}
 		break;
 	default:
 		return;
@@ -702,6 +820,7 @@ static void row_menu_cb(lv_event_t *e) {
 // qobuzart.h). The URLs here are built by tidal.c from a UUID and are short,
 // well within QOBUZART_URL_MAX.
 static lv_obj_t *row_thumbs[TIDAL_MAX_HELD];
+static lv_obj_t *art_rows[TIDAL_MAX_HELD];
 static char row_cover_url[TIDAL_MAX_HELD][QOBUZART_URL_MAX];
 static cover_image_t row_images[TIDAL_MAX_HELD];
 static bool row_has_image[TIDAL_MAX_HELD];
@@ -752,6 +871,15 @@ static void art_release_slot(int slot) {
 // ready appears on the next pass.
 static void art_request_visible(void);
 
+static void art_show_row(int row, int decoded_row) {
+	row_has_image[row] = true;
+	lv_obj_remove_style(row_thumbs[row], &theme_style_icon, 0);
+	lv_obj_set_style_image_recolor_opa(row_thumbs[row], LV_OPA_TRANSP, 0);
+	lv_obj_set_style_radius(row_thumbs[row], 6, 0);
+	lv_obj_set_style_clip_corner(row_thumbs[row], true, 0);
+	lv_image_set_src(row_thumbs[row], &row_images[decoded_row].dsc);
+}
+
 static void art_poll_cb(lv_timer_t *timer) {
 	bool freed = false;
 	if (!art_any_pending()) {
@@ -768,23 +896,23 @@ static void art_poll_cb(lv_timer_t *timer) {
 		bool finished = false;
 		if (!qobuzart_take(&tidal_art_owner, slot, &image, &finished)) {
 			if (finished) {
-				row_art_failed[row] = true; // failed: never ask again
+				for (int other = 0; other < TIDAL_MAX_HELD; other++) {
+					if (row_thumbs[other] && !strcmp(row_cover_url[other], row_cover_url[row]))
+						row_art_failed[other] = true;
+				}
 				freed = true;
 				slot_owner[slot] = -1; // nothing to show: slot back to the pool
 			}
 			continue;
 		}
 
-		cover_free(&row_images[row]);
 		row_images[row] = image;
-		row_has_image[row] = true;
-		// The grey note placeholder was recoloured by the theme; a real cover
-		// must keep its own colours or it becomes a solid square.
-		lv_obj_remove_style(row_thumbs[row], &theme_style_icon, 0);
-		lv_obj_set_style_image_recolor_opa(row_thumbs[row], LV_OPA_TRANSP, 0);
-		lv_obj_set_style_radius(row_thumbs[row], 6, 0);
-		lv_obj_set_style_clip_corner(row_thumbs[row], true, 0);
-		lv_image_set_src(row_thumbs[row], &row_images[row].dsc);
+		// All rows in an album often use the exact same file. Share one decoded
+		// image for the lifetime of the list rather than decoding it per track.
+		for (int other = 0; other < TIDAL_MAX_HELD; other++) {
+			if (row_thumbs[other] && !row_has_image[other] && !strcmp(row_cover_url[other], row_cover_url[row]))
+				art_show_row(other, row);
+		}
 
 		// Served: the slot returns to the pool for the next row.
 		slot_owner[slot] = -1;
@@ -813,24 +941,30 @@ static void art_request_visible(void) {
 	int32_t view_height = lv_obj_get_height(list_container);
 	int32_t margin = view_height / 2;
 
-	uint32_t children = lv_obj_get_child_count(list_container);
-	for (uint32_t c = 0; c < children && c < TIDAL_MAX_HELD; c++) {
-		int row = (int)c;
+	for (int row = 0; row < TIDAL_MAX_HELD; row++) {
 		if (!row_thumbs[row] || row_has_image[row] || row_art_failed[row] || !row_cover_url[row][0]) {
 			continue;
 		}
 
-		lv_obj_t *widget = lv_obj_get_child(list_container, (int32_t)c);
+		lv_obj_t *widget = art_rows[row];
 		int32_t y = lv_obj_get_y(widget);
 		int32_t h = lv_obj_get_height(widget);
 		if (y + h < view_top - margin || y > view_top + view_height + margin) {
 			continue; // too far away to be worth a request
 		}
 
-		// Already queued for this row?
+		// Reuse covers for rows appended after a previous page decoded them.
+		int decoded = 0;
+		while (decoded < TIDAL_MAX_HELD &&
+			(!row_images[decoded].pixels || strcmp(row_cover_url[decoded], row_cover_url[row]))) decoded++;
+		if (decoded < TIDAL_MAX_HELD) {
+			art_show_row(row, decoded);
+			continue;
+		}
 		bool queued = false;
 		for (int slot = 0; slot < QOBUZART_SLOTS && !queued; slot++) {
-			queued = slot_owner[slot] == row;
+			int pending_row = slot_owner[slot];
+			queued = pending_row >= 0 && !strcmp(row_cover_url[pending_row], row_cover_url[row]);
 		}
 		if (queued) {
 			continue;
@@ -848,7 +982,9 @@ static void art_request_visible(void) {
 
 		slot_owner[free_slot] = row;
 		art_wake();
-		qobuzart_request(&tidal_art_owner, free_slot, row_cover_url[row], ROW_THUMB);
+		if (download_view(list_kind))
+			qobuzart_request_local(&tidal_art_owner, free_slot, row_cover_url[row], ROW_THUMB);
+		else qobuzart_request(&tidal_art_owner, free_slot, row_cover_url[row], ROW_THUMB);
 	}
 }
 
@@ -868,6 +1004,7 @@ static void art_forget_rows(void) {
 	}
 	for (int row = 0; row < TIDAL_MAX_HELD; row++) {
 		row_thumbs[row] = NULL;
+		art_rows[row] = NULL;
 		row_cover_url[row][0] = '\0';
 		row_has_image[row] = false;
 		row_art_failed[row] = false;
@@ -899,8 +1036,9 @@ static void art_drop_pictures(void) {
 			lv_obj_set_style_radius(row_thumbs[row], 0, 0);
 		}
 		row_has_image[row] = false;
-		cover_free(&row_images[row]);
 	}
+	// Detach all widgets before freeing any shared descriptors.
+	for (int row = 0; row < TIDAL_MAX_HELD; row++) cover_free(&row_images[row]);
 }
 
 // Two hundred rows of 60x60 is 1.4 MB, held until the list is rebuilt, so the
@@ -941,6 +1079,7 @@ static void list_loaded_cb(lv_event_t *e) {
 
 static void list_unloaded_cb(lv_event_t *e) {
 	(void)e;
+	discard_background_refresh();
 	if (art_drop_timer) {
 		lv_timer_reset(art_drop_timer);
 		lv_timer_resume(art_drop_timer);
@@ -958,31 +1097,85 @@ typedef struct {
 	char id[TIDAL_ID_MAX];
 	char detail[TIDAL_NAME_MAX + 32];
 	int total;
+	long track_id;
+	bool local_folder;
+	bool show_kept;
+	lv_obj_t *spinner;
+	lv_obj_t *queue;
 } album_badge_t;
 
 static album_badge_t album_badges[TIDAL_MAX_HELD];
 static int album_badge_count;
+static bool group_favourite_downloads;
+static bool grouped_layout;
+static bool grouping_rows;
+static lv_obj_t *download_group_headings[3];
+static int download_groups[TIDAL_MAX_HELD];
+static int grouped_count;
+
+static void arrange_favourite_albums(const int *counts) {
+	if (list_kind != JOB_FAV_ALBUMS || grouping_rows) return;
+	bool changed = grouped_layout != group_favourite_downloads || grouped_count != album_badge_count;
+	for (int i = 0; i < album_badge_count; i++) {
+		int total = album_badges[i].total;
+		int group = counts[i] > 0 ? (total > 0 && counts[i] >= total ? 0 : 1) : 2;
+		if (group_favourite_downloads && download_groups[i] != group) changed = true;
+		download_groups[i] = group;
+	}
+	if (!changed) return;
+	grouped_count = album_badge_count;
+	grouped_layout = group_favourite_downloads;
+	grouping_rows = true;
+	for (int group = 0; group < 3; group++) lv_obj_set_hidden(download_group_headings[group], true);
+	for (int group = 0; group < (grouped_layout ? 3 : 1); group++) {
+		bool heading = false;
+		for (int i = 0; i < album_badge_count; i++) {
+			if (grouped_layout && download_groups[i] != group) continue;
+			if (grouped_layout && !heading) {
+				lv_obj_set_hidden(download_group_headings[group], false);
+				// Move the section to the end, then append its rows in catalogue order.
+				lv_obj_move_to_index(download_group_headings[group], -1);
+				heading = true;
+			}
+			lv_obj_t *row = lv_obj_get_parent(lv_obj_get_parent(album_badges[i].label));
+			lv_obj_move_to_index(row, -1);
+		}
+	}
+	lv_obj_update_layout(list_container);
+	grouping_rows = false;
+}
 
 static void refresh_album_badges(void) {
 	const char *ids[TIDAL_MAX_HELD];
-	int counts[TIDAL_MAX_HELD];
+	int counts[TIDAL_MAX_HELD] = {0};
+	bool count_albums = false;
 	for (int i = 0; i < album_badge_count; i++) {
-		ids[i] = album_badges[i].id;
+		ids[i] = album_badges[i].track_id || !album_badges[i].show_kept ? "" : album_badges[i].id;
+		count_albums |= ids[i][0] != '\0';
 	}
-	tidalcache_kept_album_counts(ids, counts, album_badge_count);
+	if (count_albums) tidalcache_kept_album_counts(ids, counts, album_badge_count);
+	arrange_favourite_albums(counts);
 	for (int i = 0; i < album_badge_count; i++) {
 		album_badge_t *badge = &album_badges[i];
 		char detail[400];
+		if (badge->track_id) counts[i] = badge->show_kept && tidalcache_is_kept(badge->track_id);
+		if (badge->spinner) {
+			tidalkeep_activity_t state = tidalkeep_activity(badge->track_id, badge->id);
+			lv_obj_set_hidden(badge->spinner, state != TIDALKEEP_ACTIVE);
+			lv_obj_set_hidden(badge->queue, state != TIDALKEEP_QUEUED);
+		}
 		if (counts[i] && badge->total > 0 && counts[i] == badge->total) {
 			snprintf(detail, sizeof(detail), "%s · %s", tr("tidal_album_downloaded"), badge->detail);
 		} else if (counts[i]) {
 			char partial[128];
 			snprintf(partial, sizeof(partial), tr("tidal_album_partial"), counts[i]);
 			snprintf(detail, sizeof(detail), "%s · %s", partial, badge->detail);
+		} else if (badge->local_folder) {
+			snprintf(detail, sizeof(detail), "%s · %s", tr("tidal_local_album_found"), badge->detail);
 		} else {
 			snprintf(detail, sizeof(detail), "%s", badge->detail);
 		}
-		lv_label_set_text(badge->label, detail);
+		if (strcmp(lv_label_get_text(badge->label), detail)) lv_label_set_text(badge->label, detail);
 	}
 }
 
@@ -1009,7 +1202,7 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 	// The cover, where there is a URL for it. Starts as the grey note and
 	// becomes the real image once the thread has downloaded it, so the list is
 	// readable at once without waiting for the network.
-	if (cover_url && cover_url[0] && index < TIDAL_MAX_HELD) {
+	if (cover_url && index < TIDAL_MAX_HELD) {
 		lv_obj_t *thumb = lv_image_create(row);
 		lv_obj_set_size(thumb, ROW_THUMB, ROW_THUMB);
 		lv_image_set_inner_align(thumb, LV_IMAGE_ALIGN_CENTER);
@@ -1018,6 +1211,7 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 		lv_obj_set_style_image_recolor_opa(thumb, LV_OPA_COVER, 0);
 		lv_obj_set_event_bubble(thumb, true);
 		row_thumbs[index] = thumb;
+		art_rows[index] = row;
 		snprintf(row_cover_url[index], sizeof(row_cover_url[0]), "%s", cover_url);
 	}
 
@@ -1078,9 +1272,26 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 	return sub;
 }
 
+static void make_activity_badge(album_badge_t *badge) {
+	lv_obj_t *row = lv_obj_get_parent(lv_obj_get_parent(badge->label));
+	badge->spinner = spinner_create(row, &icon_loader_small);
+	badge->queue = lv_image_create(row);
+	lv_image_set_src(badge->queue, &icon_list_queue);
+	lv_obj_add_style(badge->queue, &theme_style_icon, 0);
+	lv_obj_set_hidden(badge->spinner, true);
+	lv_obj_set_hidden(badge->queue, true);
+}
+
 // `from` is the first row to create: 0 rebuilds everything, a higher value
 // appends the new rows at the bottom without touching the others -- which is
 // what keeps the scroll position steady when the next page arrives.
+static void track_activity_badge(const tidal_track_t *track, lv_obj_t *subtitle, const char *detail, bool show_kept) {
+	album_badge_t *badge = &album_badges[album_badge_count++];
+	*badge = (album_badge_t){.label = subtitle, .track_id = track->id, .total = 1, .show_kept = show_kept};
+	snprintf(badge->detail, sizeof(badge->detail), "%.159s", detail);
+	make_activity_badge(badge);
+}
+
 static void fill_list(int from) {
 	if (from == 0) {
 		art_forget_rows();
@@ -1092,7 +1303,7 @@ static void fill_list(int from) {
 			list_download_status = make_download_status(list_container);
 			retry_download_row = settingsrow_add(list_container, "tidal_retry_failed_downloads", NULL, retry_downloads_cb, NULL);
 			refresh_download_status(tidalkeep_state());
-			{
+			if (!result_kept_album) {
 				lv_obj_t *tabs = lv_obj_create(list_container);
 				lv_obj_remove_style_all(tabs);
 				lv_obj_set_size(tabs, lv_pct(100), LV_SIZE_CONTENT);
@@ -1102,12 +1313,29 @@ static void fill_list(int from) {
 				const char *labels[] = {"albums", "artists", "playlists", "tidal_tracks"};
 				const job_kind_t kinds[] = {JOB_KEPT_ALBUMS, JOB_KEPT_ARTISTS, JOB_KEPT_PLAYLISTS, JOB_KEPT_TRACKS};
 				for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
-					settingsrow_pill(tabs, labels[i], kinds[i], simple_job_cb);
+					settingsrow_pill(tabs, labels[i], kinds[i], download_tab_cb);
 				}
+			}
+		}
+		list_empty = lv_label_create(list_container);
+		lv_obj_set_width(list_empty, lv_pct(100));
+		lv_label_set_text(list_empty, tr("no_results"));
+		lv_obj_set_style_text_align(list_empty, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_add_style(list_empty, &theme_style_text_dim, 0);
+		lv_obj_set_style_text_font(list_empty, &font_ui_24, 0);
+		lv_obj_set_hidden(list_empty, true);
+		grouped_count = 0;
+		grouped_layout = false;
+		if (result_kind == JOB_FAV_ALBUMS) {
+			const char *labels[] = {"tidal_album_downloaded", "tidal_group_partial", "tidal_group_not_downloaded"};
+			for (int i = 0; i < 3; i++) {
+				download_group_headings[i] = settingsrow_heading(list_container, labels[i]);
+				lv_obj_set_hidden(download_group_headings[i], true);
 			}
 		}
 	}
 	list_kind = result_kind;
+	lv_obj_set_hidden(list_album_menu, !result_kept_album && !can_link_album_list(result_kind));
 
 	for (int i = from; i < result_count; i++) {
 		char detail[400];
@@ -1122,7 +1350,8 @@ static void fill_list(int from) {
 			if (result_kind == JOB_KEPT_TRACKS) {
 				snprintf(detail, sizeof(detail), "%s%s%s", t->artist,
 						 t->artist[0] && t->album[0] ? " · " : "", t->album);
-				make_row(t->title, detail[0] ? detail : NULL, NULL, false, i);
+				lv_obj_t *subtitle = make_row(t->title, detail, t->cover, false, i);
+				track_activity_badge(t, subtitle, detail, false);
 				break;
 			}
 			char length[16];
@@ -1135,18 +1364,17 @@ static void fill_list(int from) {
 			} else {
 				snprintf(detail, sizeof(detail), "%s \xC2\xB7 %s", t->artist, length);
 			}
-			make_row(t->title, detail, t->cover, !t->streamable, i);
+			lv_obj_t *subtitle = make_row(t->title, detail, t->cover, !t->streamable, i);
+			track_activity_badge(t, subtitle, detail, true);
 			break;
 		}
-		case JOB_KEPT_ALBUMS:
-		case JOB_KEPT_ARTISTS: {
-			const tidal_album_t *a = &result_albums[i];
-			make_row(a->title[0] ? a->title : tr("unknown"), result_kind == JOB_KEPT_ALBUMS ? a->artist : NULL, NULL, false, i);
+		case JOB_KEPT_ARTISTS:
+			make_row(result_albums[i].title, NULL, NULL, false, i);
 			break;
-		}
 		case JOB_KEPT_PLAYLISTS:
 			make_row(result_playlists[i].name, NULL, NULL, false, i);
 			break;
+		case JOB_KEPT_ALBUMS:
 		case JOB_SEARCH_ALBUMS:
 		case JOB_FAV_ALBUMS:
 		case JOB_ARTIST_ALBUMS:
@@ -1154,10 +1382,14 @@ static void fill_list(int from) {
 		case JOB_FEATURED: {
 			const tidal_album_t *a = &result_albums[i];
 			album_badge_t *badge = &album_badges[album_badge_count++];
+			*badge = (album_badge_t){0};
 			snprintf(badge->detail, sizeof(badge->detail), "%s%s%s", a->artist, a->released[0] ? " · " : "", a->released);
 			snprintf(badge->id, sizeof(badge->id), "%s", a->id_text);
 			badge->total = a->track_count;
-			badge->label = make_row(a->title, badge->detail, a->cover, false, i);
+			badge->local_folder = a->local_folder;
+			badge->show_kept = result_kind != JOB_KEPT_ALBUMS;
+			badge->label = make_row(a->title[0] ? a->title : tr("unknown"), badge->detail, a->cover, false, i);
+			make_activity_badge(badge);
 			break;
 		}
 		case JOB_SEARCH_ARTISTS: {
@@ -1207,6 +1439,14 @@ static void job_result_taken(void) {
 static int downloads_queued;
 static bool download_queue_full;
 
+static struct {
+	job_t job;
+	tidal_track_t tracks[TIDAL_MAX_HELD];
+	bool replace[TIDAL_MAX_HELD];
+	int count;
+	bool truncated;
+} download_batch;
+
 static void report_album_queued(void) {
 	char message[192];
 	snprintf(message, sizeof(message), tr("tidal_album_download_queued_note"), downloads_queued);
@@ -1215,6 +1455,53 @@ static void report_album_queued(void) {
 		snprintf(message + length, sizeof(message) - length, "\n%s", tr("tidal_download_queue_full"));
 	}
 	gui_notify_popup(message);
+}
+
+static void queue_download_batch(void *user) {
+	(void)user;
+	const job_t *job = &download_batch.job;
+	int count = download_batch.count;
+	if (job->kind == JOB_DOWNLOAD_PLAYLIST) {
+		long ids[TIDAL_MAX_HELD];
+		for (int i = 0; i < count; i++) ids[i] = download_batch.tracks[i].id;
+		if (!tidalsaved_playlist_set(tidal_card_root(), job->id_text, job->text, ids, count)) {
+			gui_notify_popup("download_failed");
+			return;
+		}
+	}
+	downloads_queued = 0;
+	download_queue_full = download_batch.truncated;
+	for (int i = 0; i < count; i++) {
+		tidalkeep_enqueue_result_t queued = tidalkeep_enqueue_quality(&download_batch.tracks[i],
+			job->download_quality, download_batch.replace[i]);
+		if (queued == TIDALKEEP_REJECTED) {
+			download_queue_full = true;
+			break;
+		}
+		downloads_queued += queued == TIDALKEEP_ADDED;
+	}
+	report_album_queued();
+}
+
+static void offer_download_batch(void) {
+	int quality = download_batch.job.download_quality;
+	bool upgrade = false, downgrade = false, unknown = false;
+	for (int i = 0; i < download_batch.count; i++) {
+		const tidal_track_t *track = &download_batch.tracks[i];
+		int previous = tidalcache_kept_quality(track->id);
+		bool replace = track->streamable && tidalkeep_activity(track->id, NULL) == TIDALKEEP_IDLE &&
+			tidalkeep_quality_differs(previous, quality);
+		download_batch.replace[i] = replace;
+		if (!replace) continue;
+		unknown |= previous == TIDALCACHE_QUALITY_UNKNOWN;
+		upgrade |= previous >= TIDAL_QUALITY_LOW && previous < quality;
+		downgrade |= previous > quality;
+	}
+	if (upgrade || downgrade || unknown) {
+		confirm_download_quality(quality, upgrade, downgrade, unknown, queue_download_batch);
+	} else {
+		queue_download_batch(NULL);
+	}
 }
 
 static void job_done_cb(void *user) {
@@ -1261,11 +1548,26 @@ static void job_done_cb(void *user) {
 		// whatever page the user has since opened.
 		break;
 
+	case JOB_SAVE_ACCOUNT_ALBUM:
+		if (lv_screen_active() == list_screen && list_kind == JOB_SAVED_ALBUMS) reload_current_list();
+		else toast_success("done");
+		break;
+
+	case JOB_LINK_KEPT_ALBUMS: {
+		refresh_album_badges();
+		char message[128];
+		snprintf(message, sizeof(message), tr("tidal_linked_tracks"), downloads_queued);
+		gui_notify_popup(message);
+		break;
+	}
+
+	case JOB_REFRESH_KEPT_ALBUM:
+		toast_success("done");
+		break;
+
 	case JOB_DOWNLOAD_ALBUM:
 	case JOB_DOWNLOAD_PLAYLIST:
-		// The album did not open a list; the enumeration already queued the
-		// tracks and only the count is worth saying.
-		report_album_queued();
+		offer_download_batch();
 		break;
 
 	case JOB_FEATURED:
@@ -1295,8 +1597,9 @@ static void job_done_cb(void *user) {
 		// A full last page probably means another one follows; a short one
 		// means the list really ended and nothing more is requested.
 		page_loading = false;
-		page_more = (result_count - result_from == TIDAL_PAGE_LIMIT) && result_count < TIDAL_MAX_HELD;
+		page_more = result_kind != JOB_SAVED_ALBUMS && (result_count - result_from == TIDAL_PAGE_LIMIT) && result_count < TIDAL_MAX_HELD;
 		list_nav_commit();
+		cache_save_current();
 		if (lv_screen_active() != list_screen && result_from == 0) {
 			switch_screen(list_screen);
 		}
@@ -1774,10 +2077,11 @@ static void queue_watch_cb(lv_timer_t *timer) {
 	(void)timer;
 	tidalkeep_state_t downloads = tidalkeep_state();
 	refresh_download_status(downloads);
-	static int last_done = -1;
-	if (lv_screen_active() == list_screen && album_badge_count && last_done != downloads.done) {
+	static tidalkeep_state_t last_badges;
+	if (lv_screen_active() == list_screen && album_badge_count &&
+		(downloads.active || last_badges.active || downloads.done != last_badges.done)) {
 		refresh_album_badges();
-		last_done = downloads.done;
+		last_badges = downloads;
 	}
 	// A queue that is a library list holds no cache files, and walking it here
 	// would be a database read per entry, once a second, for nothing. The
@@ -1977,6 +2281,77 @@ static void *prefetch_main(void *arg) {
 static tidal_login_t login;
 static tidal_login_state_t login_result;
 
+static int load_saved_albums(tidal_album_t *albums, int max) {
+	bool online = wifi_is_connected() && tidal_logged_in();
+	int remote = online ? tidal_saved_albums(albums, max) : 0;
+	if (remote < 0) return -1;
+	int count = remote;
+	const char *root = tidal_card_root();
+	if (root && *root && remote < max) {
+		int got = tidalsaved_list(root, 0, albums + remote, max - remote);
+		if (got < 0) return -1;
+		for (int j = remote; j < remote + got; j++) {
+			bool present = false;
+			for (int i = 0; i < remote; i++) {
+				if (!strcmp(albums[i].id_text, albums[j].id_text)) { present = true; break; }
+			}
+			if (!present) albums[count++] = albums[j];
+		}
+	}
+	return count || online ? count : -1;
+}
+
+static int link_album_page(const tidal_album_t *albums, int count, tidal_track_t *tracks) {
+	int kept[TIDAL_PAGE_LIMIT];
+	const char *ids[TIDAL_PAGE_LIMIT];
+	for (int i = 0; i < count; i++) ids[i] = albums[i].id_text;
+	tidalcache_kept_album_counts(ids, kept, count);
+	int linked = 0;
+	bool failed = false;
+	for (int i = 0; i < count; i++) {
+		const tidal_album_t *album = &albums[i];
+		if ((album->track_count > 0 && kept[i] >= album->track_count) || !tidalcache_has_album_folder(album)) continue;
+		for (int offset = 0; offset < 1000; offset += TIDAL_PAGE_LIMIT) {
+			int n = tidal_album_tracks_known(album, offset, tracks, TIDAL_PAGE_LIMIT);
+			if (n < 0) { failed = true; break; }
+			linked += tidalcache_link_album_tracks(album, tracks, n);
+			if (n < TIDAL_PAGE_LIMIT || (album->track_count > 0 && offset + n >= album->track_count)) break;
+		}
+	}
+	return failed ? -linked - 1 : linked;
+}
+
+static int link_list_albums(int visible, bool all_favourites, char *error, size_t cap) {
+	tidal_album_t *albums = calloc(TIDAL_PAGE_LIMIT, sizeof(*albums));
+	tidal_track_t *tracks = calloc(TIDAL_PAGE_LIMIT, sizeof(*tracks));
+	int linked = 0;
+	bool failed = !albums || !tracks;
+	if (!failed) {
+		for (int offset = 0; offset < 5000; offset += TIDAL_PAGE_LIMIT) {
+			int n;
+			if (offset < visible) {
+				n = visible - offset < TIDAL_PAGE_LIMIT ? visible - offset : TIDAL_PAGE_LIMIT;
+				memcpy(albums, result_albums + offset, (size_t)n * sizeof(*albums));
+			} else {
+				if (!all_favourites) break;
+				n = tidal_favorite_albums(offset, albums, TIDAL_PAGE_LIMIT);
+				if (n < 0) { failed = true; break; }
+			}
+			int added = link_album_page(albums, n, tracks);
+			linked += added < 0 ? -added - 1 : added;
+			failed |= added < 0;
+			if (n < TIDAL_PAGE_LIMIT) break;
+		}
+	}
+	free(albums);
+	free(tracks);
+	if (failed) {
+		int n = snprintf(error, cap, tr("tidal_linked_tracks"), linked);
+		if (n >= 0 && (size_t)n < cap) snprintf(error + n, cap - (size_t)n, "\n%s", tr("tidal_change_refused"));
+	}
+	return linked;
+}
+
 static void *worker_main(void *arg) {
 	(void)arg;
 
@@ -2003,8 +2378,15 @@ static void *worker_main(void *arg) {
 		}
 
 		job_t job = pending;
+		unsigned serial = job_serial;
 		have_pending = false;
+		worker_writes_results = !job.background;
 		pthread_mutex_unlock(&job_lock);
+
+		if (job.background) {
+			background_list(&job, serial);
+			continue;
+		}
 
 		result_error[0] = '\0';
 		result_kind = job.kind;
@@ -2041,8 +2423,10 @@ static void *worker_main(void *arg) {
 		// makes do_play() a no-op: it finds an empty list and returns
 		// silently.) Nor does an extra page clear it: the old rows stay on
 		// screen and usable while the new ones download.
-		bool enqueue_job = job.kind == JOB_DOWNLOAD_ALBUM || job.kind == JOB_DOWNLOAD_PLAYLIST;
-		if (job.kind != JOB_PLAY && !enqueue_job && off == 0) {
+		bool preserve_list = job.kind == JOB_PLAY || job.kind == JOB_DOWNLOAD_ALBUM ||
+			job.kind == JOB_DOWNLOAD_PLAYLIST || job.kind == JOB_REFRESH_KEPT_ALBUM ||
+			job.kind == JOB_SAVE_ACCOUNT_ALBUM || job.kind == JOB_LINK_KEPT_ALBUMS;
+		if (!preserve_list && off == 0) {
 			result_count = 0;
 			result_title[0] = '\0';
 		}
@@ -2078,7 +2462,9 @@ static void *worker_main(void *arg) {
 			break;
 
 		case JOB_ALBUM_TRACKS:
-			n = tidal_album_tracks(job.id_text, off, result_tracks + off, want);
+			n = job.album_hint.cover[0] && job.album_hint.artist[0]
+				? tidal_album_tracks_known(&job.album_hint, off, result_tracks + off, want)
+				: tidal_album_tracks(job.id_text, off, result_tracks + off, want);
 			snprintf(result_title, sizeof(result_title), "%.150s", job.text);
 			break;
 		case JOB_ARTIST_ALBUMS:
@@ -2100,9 +2486,35 @@ static void *worker_main(void *arg) {
 			n = tidal_favorite_albums(off, result_albums + off, want);
 			snprintf(result_title, sizeof(result_title), "%s", tr("favourite_albums"));
 			break;
-		case JOB_SAVED_ALBUMS:
-			n = tidalsaved_list(tidal_card_root(), off, result_albums + off, want);
+		case JOB_SAVED_ALBUMS: {
+			tidal_album_t *albums = calloc(TIDAL_MAX_HELD, sizeof(*albums));
+			if (!albums) { snprintf(result_error, sizeof(result_error), "%s", tr("tidal_saved_failed")); break; }
+			n = load_saved_albums(albums, TIDAL_MAX_HELD);
+			if (n >= 0) memcpy(result_albums, albums, (size_t)n * sizeof(*albums));
+			else {
+				const char *error = !wifi_is_connected() ? tr("enable_wi_fi_first") :
+					!tidal_logged_in() ? tr("tidal_sign_in_to_tidal") : tidal_last_error();
+				snprintf(result_error, sizeof(result_error), "%s", *error ? error : tr("tidal_saved_failed"));
+				n = 0;
+			}
+			free(albums);
 			snprintf(result_title, sizeof(result_title), "%s", tr("tidal_saved_for_later"));
+			break;
+		}
+		case JOB_SAVE_ACCOUNT_ALBUM:
+			if (!tidal_saved_album_set(job.id_text, job.id != 0)) {
+				snprintf(result_error, sizeof(result_error), "%s", tidal_last_error());
+			} else {
+				for (int i = 0; i < kept_count; i++) {
+					if (!strcmp(result_albums[i].id_text, job.id_text)) result_albums[i].saved_on_account = job.id != 0;
+				}
+				if (!job.id && tidalsaved_has(tidal_card_root(), job.id_text)) {
+					tidal_album_t local = {0};
+					snprintf(local.id_text, sizeof(local.id_text), "%s", job.id_text);
+					if (!tidalsaved_set(tidal_card_root(), &local, false))
+						snprintf(result_error, sizeof(result_error), "%s", tr("tidal_saved_failed"));
+				}
+			}
 			break;
 		case JOB_USER_PLAYLISTS:
 			n = tidal_user_playlists(off, result_playlists + off, want);
@@ -2147,57 +2559,66 @@ static void *worker_main(void *arg) {
 			snprintf(result_title, sizeof(result_title), "%.159s", job.text[0] ? job.text : tr("tidal_tracks"));
 			break;
 
-		case JOB_DOWNLOAD_PLAYLIST: {
-			downloads_queued = 0;
-			download_queue_full = false;
-			tidal_track_t *tracks = calloc(TIDAL_MAX_HELD, sizeof(*tracks));
-			long ids[TIDAL_MAX_HELD];
-			int count = 0;
-			bool ok = tracks != NULL;
-			while (ok && count < TIDAL_MAX_HELD) {
-				int got = tidal_playlist_tracks(job.id_text, count, tracks + count, TIDAL_PAGE_LIMIT);
-				if (got < 0) { ok = false; break; }
-				count += got;
-				if (got < TIDAL_PAGE_LIMIT) break;
+		case JOB_REFRESH_KEPT_ALBUM: {
+			tidal_track_t *page = calloc(TIDAL_PAGE_LIMIT, sizeof(*page));
+			if (!page) {
+				snprintf(result_error, sizeof(result_error), "%s", tr("tidal_album_refresh_failed"));
+				break;
 			}
-			if (ok && count == TIDAL_MAX_HELD) {
-				tidal_track_t extra;
-				ok = tidal_playlist_tracks(job.id_text, count, &extra, 1) == 0;
-			}
-			for (int i = 0; i < count; i++) ids[i] = tracks[i].id;
-			if (ok && tidalsaved_playlist_set(tidal_card_root(), job.id_text, job.text, ids, count)) {
-				for (int i = 0; i < count; i++) {
-					tidalkeep_enqueue_result_t result = tidalkeep_enqueue(&tracks[i]);
-					downloads_queued += result == TIDALKEEP_ADDED;
-					download_queue_full |= result == TIDALKEEP_REJECTED;
-				}
-			} else snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
-			free(tracks);
-			break;
-		}
-		case JOB_DOWNLOAD_ALBUM: {
-			downloads_queued = 0;
-			download_queue_full = false;
-			int seen = 0;
-			while (!download_queue_full) {
-				tidal_track_t page[TIDAL_PAGE_LIMIT];
-				int got = tidal_album_tracks(job.id_text, seen, page, TIDAL_PAGE_LIMIT);
-				if (got < 0) {
-					snprintf(result_error, sizeof(result_error), "%s", tidal_last_error());
+			char last_folder[512] = "";
+			for (int offset = 0; offset < TIDAL_MAX_HELD; offset += TIDAL_PAGE_LIMIT) {
+				int got = tidal_album_tracks(job.id_text, offset, page, TIDAL_PAGE_LIMIT);
+				if (got < 0 || (!offset && !got)) {
+					snprintf(result_error, sizeof(result_error), "%s", tr("tidal_album_refresh_failed"));
 					break;
 				}
 				for (int i = 0; i < got; i++) {
-					tidalkeep_enqueue_result_t queued = tidalkeep_enqueue(&page[i]);
-					if (queued == TIDALKEEP_REJECTED) {
-						download_queue_full = true;
-						break;
-					}
-					downloads_queued += queued == TIDALKEEP_ADDED;
+					char path[512];
+					tidal_track_t kept;
+					if (strcmp(page[i].album_id, job.id_text) || !tidalcache_kept_track(page[i].id, &kept) ||
+						strcmp(kept.album_id, job.id_text) ||
+						strcmp(kept.album_artist[0] ? kept.album_artist : kept.artist, job.artist) ||
+						!tidalcache_find(page[i].id, path, sizeof(path))) continue;
+					char *slash = strrchr(path, '/');
+					if (!slash) continue;
+					*slash = '\0';
+					if (strcmp(path, last_folder) && page[i].cover[0]) {
+						tidalcache_refresh_extras(&page[i]);
+						snprintf(last_folder, sizeof(last_folder), "%s", path);
+					} else tidalcache_download_extras(&page[i]);
 				}
-				seen += got;
-				if (got < TIDAL_PAGE_LIMIT) {
+				if (got < TIDAL_PAGE_LIMIT) break;
+			}
+			free(page);
+			break;
+		}
+
+		case JOB_LINK_KEPT_ALBUMS:
+			downloads_queued = link_list_albums(kept_count, job.id == JOB_FAV_ALBUMS, result_error, sizeof(result_error));
+			break;
+		case JOB_DOWNLOAD_PLAYLIST:
+		case JOB_DOWNLOAD_ALBUM: {
+			bool playlist = job.kind == JOB_DOWNLOAD_PLAYLIST;
+			int (*load)(const char *, int, tidal_track_t *, int) = playlist ? tidal_playlist_tracks : tidal_album_tracks;
+			download_batch.job = job;
+			download_batch.count = 0;
+			download_batch.truncated = false;
+			while (download_batch.count < TIDAL_MAX_HELD) {
+				int offset = download_batch.count;
+				int got = load(job.id_text, offset, download_batch.tracks + offset, TIDAL_PAGE_LIMIT);
+				if (got < 0) {
+					snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
 					break;
 				}
+				download_batch.count += got;
+				if (got < TIDAL_PAGE_LIMIT) break;
+			}
+			if (download_batch.count == TIDAL_MAX_HELD) {
+				tidal_track_t extra;
+				int got = load(job.id_text, download_batch.count, &extra, 1);
+				if (got < 0 || (playlist && got > 0)) {
+					snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
+				} else download_batch.truncated = got > 0;
 			}
 			break;
 		}
@@ -2214,7 +2635,7 @@ static void *worker_main(void *arg) {
 			snprintf(result_error, sizeof(result_error), "%s", tidal_last_error());
 			n = 0;
 		}
-		if (job.kind != JOB_PLAY && !enqueue_job) {
+		if (!preserve_list) {
 			// A job that will draw nothing -- an error, or a vanished showcase
 			// -- restores what it saved: the list on screen is still the
 			// previous one, and these numbers must keep describing it. Zero
@@ -2224,12 +2645,15 @@ static void *worker_main(void *arg) {
 				result_count = kept_count;
 				snprintf(result_title, sizeof(result_title), "%s", kept_title);
 			} else {
+				if (can_link_album_list(job.kind)) mark_album_folders(result_albums + off, n);
 				result_from = off;
 				result_count = off + n;
+				result_kept_album = job.kind == JOB_KEPT_TRACKS && job.id == 2;
 			}
 		}
 
 		pthread_mutex_lock(&job_lock);
+		worker_writes_results = false;
 		result_pending = true;
 		pthread_mutex_unlock(&job_lock);
 		gui_post(job_done_cb, NULL);
@@ -2283,9 +2707,11 @@ static bool have_current_list;
 static job_t inflight_job;
 static bool inflight_valid;
 static bool inflight_is_back; // going back consumes a step instead of adding one
+static bool inflight_replace; // tab switches replace the displayed view
 
 static bool job_is_list(job_kind_t kind) {
-	return kind != JOB_PLAY && kind != JOB_DOWNLOAD_ALBUM && kind != JOB_DOWNLOAD_PLAYLIST && kind != JOB_LOGIN_BEGIN &&
+	return kind != JOB_PLAY && kind != JOB_DOWNLOAD_ALBUM && kind != JOB_DOWNLOAD_PLAYLIST &&
+		   kind != JOB_REFRESH_KEPT_ALBUM && kind != JOB_SAVE_ACCOUNT_ALBUM && kind != JOB_LINK_KEPT_ALBUMS && kind != JOB_LOGIN_BEGIN &&
 		   kind != JOB_LOGIN_POLL && kind != JOB_NONE;
 }
 
@@ -2317,7 +2743,8 @@ static void list_nav_commit(void) {
 					strcmp(current_list_job.id_text, inflight_job.id_text) == 0 &&
 					strcmp(current_list_job.artist, inflight_job.artist) == 0 &&
 					strcmp(current_list_job.text, inflight_job.text) == 0;
-		if (have_current_list && !same && lv_screen_active() == list_screen && list_history_len < LIST_HISTORY_DEPTH) {
+		if (have_current_list && !same && !inflight_replace && lv_screen_active() == list_screen &&
+			list_history_len < LIST_HISTORY_DEPTH) {
 			list_history[list_history_len++] = current_list_job;
 		} else if (lv_screen_active() != list_screen) {
 			list_history_len = 0; // entering from outside: the history restarts
@@ -2328,12 +2755,155 @@ static void list_nav_commit(void) {
 	have_current_list = true;
 }
 
+static void discard_background_refresh(void) {
+	if (lv_obj_is_hidden(refresh_spinner)) return;
+	lv_obj_set_hidden(refresh_spinner, true);
+	pthread_mutex_lock(&job_lock);
+	job_serial++;
+	if (have_pending && pending.background) have_pending = false;
+	pthread_mutex_unlock(&job_lock);
+}
+
+static void *cache_result_rows(job_kind_t kind) {
+	return kind == JOB_FAV_ALBUMS || kind == JOB_SAVED_ALBUMS ? (void *)result_albums : result_tracks;
+}
+
+static void cache_save_current(void) {
+	if (!have_current_list || list_kind != current_list_job.kind) return;
+	size_t size = cache_row_size(list_kind);
+	if (!size) return;
+	void *rows = malloc(result_count ? size * result_count : 1);
+	if (!rows) return;
+	memcpy(rows, cache_result_rows(list_kind), size * result_count);
+	list_cache_t *entry = cache_find(&current_list_job);
+	if (!entry) {
+		entry = &list_cache[0];
+		for (int i = 1; i < TIDAL_LIST_CACHE_SLOTS; i++) {
+			if (list_cache[i].touched < entry->touched) entry = &list_cache[i];
+		}
+	}
+	free(entry->rows);
+	*entry = (list_cache_t){.job = current_list_job, .rows = rows, .count = result_count,
+		.more = page_more, .touched = ++cache_clock};
+}
+
+static bool show_cached_list(const job_t *job) {
+	if (!cache_row_size(job->kind)) return false;
+	list_cache_t *entry = cache_find(job);
+	if (!entry || job->offset || !tidal_logged_in()) return false;
+	pthread_mutex_lock(&job_lock);
+	bool occupied = worker_writes_results || result_pending || (have_pending && !pending.background);
+	pthread_mutex_unlock(&job_lock);
+	if (occupied) return false;
+	discard_background_refresh();
+	bool refresh = wifi_is_connected();
+	result_kind = job->kind;
+	result_count = entry->count;
+	result_from = 0;
+	result_kept_album = false;
+	const char *title = job->kind == JOB_FAV_ALBUMS ? tr("favourite_albums") :
+		job->kind == JOB_FAV_TRACKS ? tr("favourite_tracks") :
+		job->kind == JOB_SAVED_ALBUMS ? tr("tidal_saved_for_later") : job->text;
+	snprintf(result_title, sizeof(result_title), "%.159s", title);
+	memcpy(cache_result_rows(job->kind), entry->rows, cache_row_size(job->kind) * entry->count);
+	page_more = false; // Do not append a page while replacing the visible snapshot.
+	page_loading = false;
+	entry->touched = ++cache_clock;
+	fill_list(0);
+	page_more = entry->more;
+	list_nav_commit();
+	if (lv_screen_active() != list_screen) switch_screen(list_screen);
+	if (refresh) {
+		job_t request = *job;
+		request.background = true;
+		lv_obj_set_hidden(refresh_spinner, false);
+		start_worker();
+		submit(&request);
+	}
+	return true;
+}
+
+typedef struct {
+	job_t job;
+	unsigned serial;
+	int count;
+	int limit;
+	void *rows;
+} background_result_t;
+
+static void apply_background_list(void *user) {
+	background_result_t *result = user;
+	pthread_mutex_lock(&job_lock);
+	bool current = job_serial == result->serial;
+	pthread_mutex_unlock(&job_lock);
+	if (current) lv_obj_set_hidden(refresh_spinner, true);
+	lv_indev_t *pointer = lv_indev_get_next(NULL);
+	if (current && result->count >= 0 && (!pointer || lv_indev_get_state(pointer) != LV_INDEV_STATE_PRESSED) &&
+		lv_screen_active() == list_screen && have_current_list &&
+		same_cached_list(&result->job, &current_list_job) && !switcher_back_drag_active() && !player_sheet_drag_active()) {
+		size_t bytes = cache_row_size(result->job.kind) * result->count;
+		void *rows = cache_result_rows(result->job.kind);
+		bool same_prefix = result_count >= result->count && !memcmp(rows, result->rows, bytes);
+		if (!same_prefix || (result_count != result->count && result->count < result->limit)) {
+			int scroll = lv_obj_get_scroll_y(list_container);
+			memcpy(rows, result->rows, bytes);
+			result_count = result->count;
+			result_kind = result->job.kind;
+			result_from = 0;
+			page_more = false;
+			page_loading = false;
+			fill_list(0);
+			page_more = result->count == result->limit && result->limit < TIDAL_MAX_HELD;
+			lv_obj_scroll_to_y(list_container, scroll, LV_ANIM_OFF);
+			cache_save_current();
+		}
+	}
+	free(result->rows);
+	free(result);
+}
+
+static void background_list(const job_t *job, unsigned serial) {
+	background_result_t *result = calloc(1, sizeof(*result));
+	if (!result) return;
+	result->job = *job;
+	result->serial = serial;
+	result->limit = job->kind == JOB_SAVED_ALBUMS ? TIDAL_MAX_HELD : TIDAL_PAGE_LIMIT;
+	result->rows = calloc(result->limit, cache_row_size(job->kind));
+	result->count = -1;
+	if (result->rows) {
+		switch (job->kind) {
+		case JOB_FAV_ALBUMS: {
+			tidal_album_t *albums = result->rows;
+			result->count = tidal_favorite_albums(0, albums, result->limit);
+			break;
+		}
+		case JOB_FAV_TRACKS: result->count = tidal_favorite_tracks(0, result->rows, result->limit); break;
+		case JOB_ALBUM_TRACKS:
+			result->count = job->album_hint.cover[0] && job->album_hint.artist[0]
+				? tidal_album_tracks_known(&job->album_hint, 0, result->rows, result->limit)
+				: tidal_album_tracks(job->id_text, 0, result->rows, result->limit);
+			break;
+		case JOB_PLAYLIST_TRACKS: result->count = tidal_playlist_tracks(job->id_text, 0, result->rows, result->limit); break;
+		case JOB_SAVED_ALBUMS:
+			if (wifi_is_connected() && tidal_logged_in()) result->count = load_saved_albums(result->rows, result->limit);
+			break;
+		default: break;
+		}
+	}
+	if (can_link_album_list(job->kind)) mark_album_folders(result->rows, result->count);
+	if (!gui_post(apply_background_list, result)) {
+		free(result->rows);
+		free(result);
+	}
+}
+
 // Preview for the back swipe: is there a step to consume inside the page? It
 // moves nothing -- it only stops another screen's page being drawn under the
 // finger.
 static bool list_back_has_step(void) { return list_history_len > 0; }
 
 static bool list_back_guard(void) {
+	discard_background_refresh();
 	if (list_history_len == 0) {
 		have_current_list = false;
 		return false; // nothing underneath: leave the page
@@ -2347,6 +2917,8 @@ static bool list_back_guard(void) {
 	inflight_is_back = true;
 	page_more = false;
 	page_loading = false;
+	if (show_cached_list(&previous)) return true;
+	lv_obj_set_hidden(refresh_spinner, true);
 	start_worker();
 	busy_show("loading");
 	submit(&previous);
@@ -2360,6 +2932,7 @@ static void run(const job_t *job, const char *waiting_text) {
 		inflight_job = *job;
 		inflight_valid = true;
 		inflight_is_back = false;
+		inflight_replace = false;
 	}
 
 	// A new list is starting: the old one's pagination must not fire while
@@ -2369,6 +2942,8 @@ static void run(const job_t *job, const char *waiting_text) {
 		page_loading = false;
 	}
 
+	if (job_is_list(job->kind) && show_cached_list(job)) return;
+	discard_background_refresh();
 	start_worker();
 	// No veil for playback (it starts immediately) or for login, which has its
 	// own spinner on the code page.
@@ -2383,7 +2958,7 @@ static void run(const job_t *job, const char *waiting_text) {
 // deliberately left off so list_nav_commit() does not count the continuation
 // as a step forward), and the existing rows stay usable meanwhile.
 static void maybe_load_more(void) {
-	if (page_loading || !page_more) {
+	if (page_loading || grouping_rows || !page_more || !lv_obj_is_hidden(refresh_spinner)) {
 		return;
 	}
 	if (lv_screen_active() != list_screen || !have_current_list || !job_is_list(current_list_job.kind)) {
@@ -2446,6 +3021,7 @@ static void row_clicked_cb(lv_event_t *e) {
 			return;
 		}
 		job.kind = JOB_ALBUM_TRACKS;
+		job.album_hint = result_albums[index];
 		snprintf(job.id_text, sizeof(job.id_text), "%s", result_albums[index].id_text);
 		snprintf(job.text, sizeof(job.text), "%s", result_albums[index].title);
 		run(&job, "loading");
@@ -2991,11 +3567,6 @@ static bool featured_hidden[3];
 static const int QUALITY_VALUES[4] = {TIDAL_QUALITY_LOW, TIDAL_QUALITY_HIGH, TIDAL_QUALITY_LOSSLESS,
 									  TIDAL_QUALITY_HIRES};
 
-// The perceived quality first, then the format underneath: "High" alone is not
-// distinguishable from "Hi-res", and "AAC 320" alone tells nobody it is lossy.
-static const char *const QUALITY_NAMES[4] = {"tidal_low_aac_96", "tidal_high_aac_320", "tidal_cd_flac_16_44",
-											 "tidal_hi_res_flac_24"};
-
 // The two corner buttons: the gear (Tidal settings) and the magnifier. Shown
 // only when signed in, because otherwise there is nothing to configure and
 // nothing to search.
@@ -3016,8 +3587,8 @@ static void update_corner_buttons(void) {
 
 // Same shape as the Music page corner buttons: 56 px, transparent, aligned top
 // right and stepped leftwards one by one.
-static lv_obj_t *corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph, lv_event_cb_t cb) {
-	lv_obj_t *button = lv_btn_create(tidal_screen);
+static lv_obj_t *corner_button(lv_obj_t *screen, gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph, lv_event_cb_t cb) {
+	lv_obj_t *button = lv_btn_create(screen);
 	lv_obj_set_size(button, 56, 56);
 	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(button, 0, 0);
@@ -3076,6 +3647,11 @@ static void quality_pick_cb(lv_event_t *e) {
 
 static void do_logout(void *user) {
 	(void)user;
+	pthread_mutex_lock(&job_lock);
+	job_serial++;
+	if (have_pending && pending.background) have_pending = false;
+	pthread_mutex_unlock(&job_lock);
+	cache_invalidate(JOB_NONE);
 	tidal_logout();
 	// The remembered favourites and playlists belonged to that account; under
 	// another user they would be lies.
@@ -3133,6 +3709,12 @@ static void simple_job_cb(lv_event_t *e) {
 	run(&job, "loading");
 }
 
+static void download_tab_cb(lv_event_t *e) {
+	job_t job = {.kind = (job_kind_t)(intptr_t)lv_event_get_user_data(e)};
+	run(&job, "loading");
+	inflight_replace = true;
+}
+
 static void featured_job_cb(lv_event_t *e) {
 	int slot = (int)(intptr_t)lv_event_get_user_data(e);
 	if (slot < 0 || slot >= 3) {
@@ -3174,9 +3756,7 @@ static void open_wifi_settings_cb(lv_event_t *e) {
 	switch_screen(wifisettings_screen);
 }
 
-// Whether the network is really there. Tidal has nothing to show without it:
-// every list comes from the server, and with no IP address each request ends
-// in a generic error that does not tell the user what they need to know.
+// Cached lists and downloads can be shown offline; new account requests need a connection.
 static bool wifi_is_connected(void) {
 #ifdef HOST_BUILD
 	// The simulator runs on a machine that has a network but no wlan0; without
@@ -3273,8 +3853,8 @@ static void home_loaded_cb(lv_event_t *e) {
 #ifndef HOST_BUILD
 	// On the device the card may have changed; the simulator keeps its fixture root.
 	tidalcache_set_root(storage_sd_root());
-	qobuzart_set_root(storage_sd_root());
 #endif
+	qobuzart_set_root(tidal_card_root());
 
 	// Every showcase is tried again: the one that did not answer last time may
 	// well have been a one-second disconnection.
@@ -3289,20 +3869,84 @@ static void home_loaded_cb(lv_event_t *e) {
 
 // ---------------------------------------------------------------------------
 
+static void refresh_kept_album(void *user) {
+	(void)user;
+	if (!wifi_is_connected() || !tidal_logged_in()) {
+		gui_notify_popup(!wifi_is_connected() ? "enable_wi_fi_first" : "tidal_sign_in_to_tidal");
+		return;
+	}
+	if (!current_list_job.id_text[0]) {
+		gui_notify_popup("tidal_album_refresh_failed");
+		return;
+	}
+	job_t job = current_list_job;
+	job.kind = JOB_REFRESH_KEPT_ALBUM;
+	job.offset = 0;
+	run(&job, "loading");
+}
+
+static void download_kept_album(void *user) {
+	(void)user;
+	job_t job = current_list_job;
+	job.kind = JOB_DOWNLOAD_ALBUM;
+	job.offset = 0;
+	job.download_quality = tidalkeep_quality();
+	run(&job, "loading");
+}
+
+static void link_local_albums(void *user) {
+	(void)user;
+	if (!wifi_is_connected() || !tidal_logged_in()) {
+		gui_notify_popup(!wifi_is_connected() ? "enable_wi_fi_first" : "tidal_sign_in_to_tidal");
+		return;
+	}
+	if (!can_link_album_list(list_kind)) return;
+	const job_t job = {.kind = JOB_LINK_KEPT_ALBUMS, .id = list_kind};
+	run(&job, "loading");
+}
+
+static void toggle_download_groups(void *user) {
+	(void)user;
+	group_favourite_downloads = !group_favourite_downloads;
+	refresh_album_badges();
+	lv_obj_scroll_to_y(list_container, 0, LV_ANIM_OFF);
+	art_request_visible();
+}
+
+static void list_album_menu_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) return;
+	discard_background_refresh();
+	if (list_kind == JOB_FAV_ALBUMS) {
+		const popover_item_t items[] = {
+			{.label = "tidal_link_local_album", .action = link_local_albums},
+			{.label = "tidal_group_downloads", .action = toggle_download_groups, .checked = group_favourite_downloads},
+		};
+		popover_show(lv_event_get_current_target(e), items, 2);
+	} else if (can_link_album_list(list_kind)) {
+		const popover_item_t item = {.label = "tidal_link_local_album", .action = link_local_albums};
+		popover_show(lv_event_get_current_target(e), &item, 1);
+	} else {
+		const popover_item_t items[] = {
+			{.label = "tidal_album_refresh", .action = refresh_kept_album},
+			{.label = "tidal_download_album", .action = download_kept_album},
+		};
+		int count = current_list_job.id_text[0] && tidal_logged_in() && wifi_is_connected() ? 2 : 1;
+		popover_show(lv_event_get_current_target(e), items, count);
+	}
+}
+
 static void build_list_page(gui_config_t *cfg) {
 	list_screen = lv_obj_create(NULL);
 	lv_obj_add_event_cb(list_screen, list_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	lv_obj_add_event_cb(list_screen, list_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 	list_container = settingsrow_page(list_screen, cfg, "tidal");
 	list_title = settingsrow_page_title(list_screen);
-
-	list_empty = lv_label_create(list_screen);
-	lv_label_set_text(list_empty, tr("no_results"));
-	lv_obj_set_style_text_align(list_empty, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_add_style(list_empty, &theme_style_text_dim, 0);
-	lv_obj_set_style_text_font(list_empty, &font_ui_24, 0);
-	lv_obj_align(list_empty, LV_ALIGN_TOP_MID, 0, settingsrow_content_top(cfg) + 100);
-	lv_obj_set_hidden(list_empty, true);
+	settingsrow_title_corner_slots(list_title, cfg, 1);
+	refresh_spinner = spinner_create(list_screen, &icon_loader_small);
+	lv_obj_align(refresh_spinner, LV_ALIGN_TOP_RIGHT, -cfg->padding - 15, cfg->padding + cfg->top_bar_height + 15);
+	lv_obj_set_hidden(refresh_spinner, true);
+	list_album_menu = corner_button(list_screen, cfg, 0, &icon_ellipsis_vertical, list_album_menu_cb);
+	lv_obj_set_hidden(list_album_menu, true);
 
 	lv_obj_add_event_cb(list_container, list_scrolled_cb, LV_EVENT_SCROLL, NULL);
 	switcher_attach_back_gesture(list_screen);
@@ -3321,8 +3965,8 @@ void tidalpage_init(gui_config_t *cfg) {
 	// Two buttons top right, like the Music page gear. The title has to be
 	// told the corner is taken, or its text runs underneath them.
 	settingsrow_title_corner_slots(settingsrow_page_title(tidal_screen), cfg, 2);
-	settings_btn = corner_button(cfg, 0, &icon_music_settings, open_settings_cb);
-	search_btn = corner_button(cfg, 1, &icon_search, open_search_cb);
+	settings_btn = corner_button(tidal_screen, cfg, 0, &icon_music_settings, open_settings_cb);
+	search_btn = corner_button(tidal_screen, cfg, 1, &icon_search, open_search_cb);
 
 	build_list_page(cfg);
 	build_search_page(cfg);

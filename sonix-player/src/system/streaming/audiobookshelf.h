@@ -92,6 +92,7 @@ typedef struct {
 	double progress;
 	bool finished;
 	int tracks;
+	int unheard; // podcast only; -1 when account progress is unavailable
 } audiobookshelf_item_t;
 
 typedef struct {
@@ -113,6 +114,7 @@ typedef struct {
 	char episode_id[ABS_ID_MAX];
 	char file_id[ABS_ID_MAX];
 	long long file_updated_ms;
+	long long published_ms;
 	char title[ABS_NAME_MAX];
 	char description[8192];
 	audiobookshelf_track_t track;
@@ -138,7 +140,13 @@ bool audiobookshelf_episode_badges(const abs_auth_snapshot_t *auth, const char *
 	abs_episode_row_t *rows, int count, http_op_t *op, bool online);
 
 int audiobookshelf_podcast_shows(const abs_auth_snapshot_t *auth, const char *library,
-	const char *search, int page, audiobookshelf_item_t *out, int cap, bool *more);
+	const char *search, int page, int order, audiobookshelf_item_t *out, int cap, bool *more);
+void audiobookshelf_episode_show_title(const abs_auth_snapshot_t *auth, const char *show, http_op_t *op,
+	char title[ABS_NAME_MAX]);
+void audiobookshelf_podcast_unheard(const abs_auth_snapshot_t *auth, const char *owner,
+	audiobookshelf_item_t *shows, int count, http_op_t *op);
+int audiobookshelf_recent_heard(const abs_auth_snapshot_t *auth, const char *owner,
+	const char *library, int page, abs_episode_row_t *out, int cap, bool *more, http_op_t *op);
 int audiobookshelf_latest_episodes(const abs_auth_snapshot_t *auth, const char *library,
 	int page, abs_episode_row_t *out, int cap, bool *more);
 // Caller owns *out, including for an empty valid show. A negative count is an error.

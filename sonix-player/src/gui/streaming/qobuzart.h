@@ -50,6 +50,7 @@ void qobuzart_set_root(const char *sd_root);
 // Requests the cover at `url`, square, `size` pixels, for `slot`. Returns
 // immediately. Any earlier request on this slot is abandoned.
 void qobuzart_request(const void *owner, int slot, const char *url, int size);
+void qobuzart_request_local(const void *owner, int slot, const char *path, int size);
 
 // Forgets the slot: anything in flight is abandoned and anything ready is
 // freed. Does nothing when the slots are owned by someone else.

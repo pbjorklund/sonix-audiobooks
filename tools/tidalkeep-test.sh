@@ -15,8 +15,9 @@ gcc -Wall -Wextra -Werror -Wno-unused-parameter -DHOST_BUILD=1 \
 	"$player/src/system/streaming/streamturn.c" \
 	"$player/src/system/decode/growfile.c" \
 	"$player/src/system/library/mp4flac.c" \
+	"$player/src/system/library/jpeginfo.c" \
 	"$player/src/system/core/utils.c" \
-	-lpthread -o "$work/tidalkeep-test"
+	-Wl,--wrap=fopen -lpthread -o "$work/tidalkeep-test"
 mkdir -p "$work/cache"
 "$work/tidalkeep-test" "$work/cache"
 

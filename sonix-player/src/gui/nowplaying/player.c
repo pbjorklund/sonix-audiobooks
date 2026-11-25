@@ -29,6 +29,8 @@
 #include "src/system/device/power.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/gearboy/gearboy.h"
+#include "src/system/audio/usbdac.h"
+#include "src/system/audio/metronome.h"
 #include "src/system/streaming/radio.h"
 #include "src/system/audio/audio.h"
 #include "src/system/audio/readahead.h"
@@ -50,6 +52,7 @@
 #include "src/system/streaming/podcastsubs.h"
 #include "src/system/streaming/podcaststate.h"
 #include "src/system/streaming/abs_episode_stream.h"
+#include "src/system/streaming/abs_cover.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/qobuzsync.h"
 #include "src/system/streaming/tidalcache.h"
@@ -99,7 +102,6 @@ static lv_timer_t *progress_slider_timer;
 // Runs only while a sleep timer is counting, which is the only time there is
 // anything to ask. Paused otherwise, so an option nobody switched on does not
 // wake the main loop once a second all night.
-static lv_timer_t *sleep_timer;
 
 // Where playback was when the poll last asked, and when that was. The tick is
 // lv_tick_get()'s, which is the same clock the timer is driven by.
@@ -673,35 +675,24 @@ static void audiobook_seek_by(double delta, const device_state_t *state) {
 // Called both optimistically (right after a button press, before the audio
 // thread has caught up) and from update_progress() every poll, which is what
 // keeps the UI from going stale if the track stops on its own.
-// Which sleep timer, if any, owns what is playing.
-//
-// Books and podcasts have their own because they are listened to differently: a
-// stretch that is right for falling asleep to music is not the one somebody
-// chose for a chapter, and a podcast timer set at bedtime should not be counting
-// down over an album the next morning. Everything else the transport plays --
-// the card, Tidal, Qobuz -- is one thing and gets one timer.
-//
-// Three sources are none of them, and for the same reason: they do not go
-// through the player's transport at all. The radio, the Game Boy and the
-// Bluetooth receiver push their sound out through the external path, and there
-// is no pause to give them -- stopping a station is a disconnection, stopping
-// the emulator is stopping the game, and stopping the receiver is silence in a
-// room where somebody else's phone is still playing. Only the radio ever
-// reports playing here; the other two are written down so that it stays true if
-// they ever start to.
-static sleeptimer_kind_t sleeptimer_kind_playing(void) {
-	if (radio_is_active() || gearboy_running() || btreceiver_is_active()) {
-		return SLEEPTIMER_COUNT;
+enum { SLEEP_STOPPED, SLEEP_PLAYER, SLEEP_RADIO, SLEEP_BT, SLEEP_AIRPLAY, SLEEP_USB, SLEEP_GAME, SLEEP_METRONOME };
+
+static int sleep_source(audio_status_t status) {
+	if (radio_is_active()) return radio_is_playing() ? SLEEP_RADIO : SLEEP_STOPPED;
+	if (gearboy_running()) return gearboy_paused() ? SLEEP_STOPPED : SLEEP_GAME;
+	if (btreceiver_is_active()) return btreceiver_is_streaming() ? SLEEP_BT : SLEEP_STOPPED;
+	if (usbdac_is_active()) {
+		usbdac_state_t usb;
+		usbdac_get_state(&usb);
+		return usb.streaming ? SLEEP_USB : SLEEP_STOPPED;
 	}
-	if (audiobook_is_playing()) {
-		return SLEEPTIMER_AUDIOBOOK;
+	if (airplay_get_enabled()) {
+		airplay_state_t air;
+		airplay_get_state(&air);
+		if (air.playing) return SLEEP_AIRPLAY;
 	}
-	char path[512];
-	audio_get_current_file(path, sizeof(path));
-	if (podcastcache_is_episode(path)) {
-		return SLEEPTIMER_PODCAST;
-	}
-	return SLEEPTIMER_MUSIC;
+	if (metronome_running()) return SLEEP_METRONOME;
+	return status == AUDIO_STATUS_PLAYING ? SLEEP_PLAYER : SLEEP_STOPPED;
 }
 
 static void apply_playback_status(audio_status_t status) {
@@ -746,19 +737,8 @@ static void apply_playback_status(audio_status_t status) {
 	// wait for its own five-second poll.
 	topbar_refresh_playback();
 
-	// Every route into and out of playing comes through here -- the button, the
-	// side keys, the end of a track, a remote, the poll putting the screen back
-	// in step with the engine -- so it is the one place the sleep timers can be
-	// told without being told twice. It is also the one place that knows what
-	// is playing well enough to say which of the three it belongs to.
-	sleeptimer_note_playing(playing ? sleeptimer_kind_playing() : SLEEPTIMER_COUNT);
-	if (sleep_timer) {
-		if (sleeptimer_any_running()) {
-			lv_timer_resume(sleep_timer);
-		} else {
-			lv_timer_pause(sleep_timer);
-		}
-	}
+	// Capture short pause/play transitions even when both fall between ticks.
+	if (sleeptimer_armed()) sleeptimer_note_playing(sleep_source(status));
 }
 
 // "3/24": which track of the queue is playing.
@@ -3330,9 +3310,19 @@ static void refresh_cover(const char *filepath) {
 	if (!cover_img)
 		return;
 
+	abs_episode_manifest_t episode;
+	char art[sizeof(cover_shown_path)];
+	bool abs_episode = abs_episode_playback_identity(filepath, &episode);
+	if (abs_episode) {
+		// Never let a stream slot borrow a picture from .local or keep the
+		// previous track's picture while its own show art is resolved.
+		if ((!abs_episode_stream_owns(filepath) && abs_episode_local_cover(filepath, art, sizeof(art))) ||
+			abs_cover_cached(episode.server, episode.show, art, sizeof(art))) filepath = art;
+		else filepath = NULL;
+	}
 	snprintf(cover_shown_path, sizeof(cover_shown_path), "%s", filepath ? filepath : "");
 
-	if (cover_shown_id != 0 && current_cover.pixels && filepath && filepath[0]) {
+	if (!abs_episode && cover_shown_id != 0 && current_cover.pixels && filepath && filepath[0]) {
 		cover_id_state = COVER_ID_NEW_TRACK;
 		coverloader_request_player_id(filepath);
 		lv_timer_resume(progress_slider_timer);
@@ -3342,6 +3332,7 @@ static void refresh_cover(const char *filepath) {
 
 	cover_id_state = COVER_ID_IDLE;
 	cover_incoming_id = 0;
+	if (abs_episode) cover_shown_id = 0;
 	reload_cover(filepath);
 }
 
@@ -4121,7 +4112,7 @@ static void handle_track_finished(void) {
 		device_state_t state;
 		device_state_get(&state);
 		double duration = episode.duration > 0 ? episode.duration : state.progress_total_secs;
-		bool full = !abs_episode_stream_owns(path) || abs_episode_stream_complete(path);
+		bool full = !abs_episode_stream_owns(path) || abs_episode_stream_complete(path) || abs_episode_playback_switched(path);
 		if (full && duration > 0) abs_episode_playback_note(path, duration, duration, true, true);
 		else {
 			abs_episode_playback_note(path, state.progress_current_secs, duration, true, false);
@@ -4241,7 +4232,7 @@ static void update_progress(void) {
 	smooth_timer_sync();
 
 	set_progress_label(state.progress_current_secs, current_total_length);
-	wave_refresh(cover_shown_path, state.progress_current_secs);
+	wave_refresh(state.live ? cover_shown_path : state.current_file, state.progress_current_secs);
 	if (state.status == AUDIO_STATUS_PLAYING && !state.live) {
 		device_state_read_ahead(state.progress_current_secs, state.progress_total_secs);
 	}
@@ -4704,31 +4695,35 @@ void player_output_unplugged(const char *what) {
 // A pause and not a stop, and for the same reason as the one above: the point
 // of falling asleep to something is finding it where it was in the morning.
 static void sleep_timer_cb(lv_timer_t *timer) {
-	(void)timer;
-	bool expired = false;
-	for (int i = 0; i < SLEEPTIMER_COUNT; i++) {
-		expired = sleeptimer_expired((sleeptimer_kind_t)i) || expired;
-	}
-	if (!expired || audio_get_status() != AUDIO_STATUS_PLAYING) {
-		return;
+	int source = sleeptimer_armed() ? sleep_source(audio_get_status()) : SLEEP_STOPPED;
+	sleeptimer_note_playing(source);
+	bool expired = sleeptimer_expired();
+	int gain = sleeptimer_gain_q10();
+	audio_set_sleep_gain(gain);
+	lv_timer_set_period(timer, !source ? 1000 : gain < 1024 ? 50 : 100);
+	if (!expired) return;
+
+	// Receivers with no local pause release their input rather than letting
+	// the sender run silently. Playing again requires reconnecting that input.
+	switch (source) {
+	case SLEEP_RADIO: radio_stop(); return;
+	case SLEEP_BT: btreceiver_stop(); return;
+	case SLEEP_AIRPLAY: airplay_set_enabled(false); return;
+	case SLEEP_USB: usbdac_stop(); return;
+	case SLEEP_GAME: gearboy_set_paused(true); return;
+	case SLEEP_METRONOME: metronome_stop(); return;
+	case SLEEP_PLAYER: break;
+	default: return;
 	}
 
-	// A book being put down has two things to settle that a track does not: the
-	// rewind that the next play would otherwise add -- it is for a sentence
-	// somebody interrupted, not for one the player stopped on purpose -- and
-	// the position, written through rather than left to the ten second throttle.
-	if (audiobook_is_playing()) {
-		device_state_t state;
-		device_state_get(&state);
-		audiobook_suppress_rewind_once();
-		audio_pause();
-		apply_playback_status(AUDIO_STATUS_PAUSED);
-		audiobook_note_position(state.progress_current_secs, 0, true);
-		return;
-	}
-
+	bool book = audiobook_is_playing();
+	if (book) audiobook_suppress_rewind_once();
 	audio_pause();
 	apply_playback_status(AUDIO_STATUS_PAUSED);
+	device_state_t state;
+	device_state_get(&state);
+	if (book) audiobook_note_position(state.progress_current_secs, state.progress_total_secs, true);
+	else abs_episode_playback_note(state.current_file, state.progress_current_secs, state.progress_total_secs, true, false);
 }
 
 // The artist line again, after "Use track artist" has been switched. Not a
@@ -5346,13 +5341,8 @@ void player_init(gui_config_t *cfg) {
 	// playing, slow when stopped), in the dark too.
 	power_slow_in_standby(progress_slider_timer, POLL_PERIOD_PLAYING_MS);
 
-	// The sleep timer's own tick. Slowed in standby and not stopped, because
-	// the screen being dark is the normal case for it -- and slowing it costs
-	// nothing in accuracy: the countdown is against the clock, so a late tick
-	// stops the music late by however late it was, not by a tick.
-	sleep_timer = lv_timer_create(sleep_timer_cb, 1000, NULL);
-	lv_timer_pause(sleep_timer); // apply_playback_status starts it when there is a stretch to count
-	power_slow_in_standby(sleep_timer, 5000);
+	// Keep ticking with the display off so a short fade still has steps.
+	lv_timer_create(sleep_timer_cb, 100, NULL);
 
 	lv_obj_t *below_slider_group = lv_obj_create(player_menu);
 	below_slider_obj = below_slider_group;

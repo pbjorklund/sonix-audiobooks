@@ -24,7 +24,6 @@
 #include "src/system/library/audiobookdb.h"
 #include "src/system/playback/audiobook.h"
 #include "src/system/playback/device_state.h"
-#include "src/system/playback/sleeptimer.h"
 
 lv_obj_t *audiobooks_screen;
 lv_obj_t *audiobooksettings_screen;
@@ -1210,7 +1209,6 @@ static lv_obj_t *make_pill(lv_obj_t *parent, const char *text, int value, lv_eve
 static lv_obj_t *stop_chapter_switch;
 static lv_obj_t *duration_total_pill;
 static lv_obj_t *duration_chapter_pill;
-static settingsrow_duration_t sleep_row;
 static toggle_pills_t rewind_card;
 static lv_obj_t *rewind_pill[REWIND_CHOICES];
 static const int REWIND_VALUES[REWIND_CHOICES] = {3, 5, 7, 10};
@@ -1230,11 +1228,6 @@ static void refresh_settings_page(void) {
 		lv_obj_remove_state(stop_chapter_switch, LV_STATE_CHECKED);
 	}
 
-	// The control centre switches this timer too, so the switch and the
-	// wheels are read again rather than trusted from the last visit.
-	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_AUDIOBOOK));
-	settingsrow_duration_expanded(&sleep_row, sleeptimer_enabled(SLEEPTIMER_AUDIOBOOK));
-	settingsrow_duration_repaint(&sleep_row);
 
 	bool rewind_on = audiobook_rewind_enabled();
 	if (rewind_on) {
@@ -1263,16 +1256,6 @@ static void stop_chapter_cb(lv_event_t *e) {
 	audiobook_set_stop_at_chapter_end(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
 
-static void sleep_toggle_cb(lv_event_t *e) {
-	(void)e;
-	sleeptimer_set_enabled(SLEEPTIMER_AUDIOBOOK, lv_obj_has_state(sleep_row.toggle, LV_STATE_CHECKED));
-	refresh_settings_page();
-}
-
-static void sleep_wheel_cb(lv_event_t *e) {
-	(void)e;
-	sleeptimer_set_minutes(SLEEPTIMER_AUDIOBOOK, settingsrow_duration_minutes(&sleep_row));
-}
 
 static void rewind_toggle_cb(lv_event_t *e) {
 	audiobook_set_rewind_enabled(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
@@ -1308,8 +1291,6 @@ static void build_settings_page(gui_config_t *cfg) {
 	// The same wheels as the music page. "End of chapter" is not among the
 	// choices here -- it is not a length, and the row above is the switch for
 	// it.
-	settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
-	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_AUDIOBOOK));
 
 	build_toggle_pills(container, "audiobook_rewind_after_pause", rewind_toggle_cb, &rewind_card);
 	static const char *const REWIND_LABELS[REWIND_CHOICES] = {"audiobook_3_sec", "audiobook_5_sec", "audiobook_7_sec", "audiobook_10_sec"};

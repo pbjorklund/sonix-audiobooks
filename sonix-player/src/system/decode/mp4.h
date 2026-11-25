@@ -40,6 +40,11 @@ typedef struct {
 // Opens the file and reads its structure. NULL when it is not an MP4 at all,
 // when it has no audio track, or when that track is neither AAC nor ALAC.
 mp4_file_t *mp4_open(const char *path);
+// The caller owns the growing reader and keeps it alive until mp4_close().
+struct growfile;
+mp4_file_t *mp4_open_growing(const char *path, struct growfile *reader);
+// Is a complete movie header already available before the media payload?
+bool mp4_front_metadata_ready(const char *path, uint64_t available);
 void mp4_close(mp4_file_t *m);
 
 // Which decoder this file needs.

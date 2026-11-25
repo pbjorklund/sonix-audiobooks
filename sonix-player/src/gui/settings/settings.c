@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "lvgl/lvgl.h"
 
@@ -27,9 +28,74 @@
 #include "src/system/core/lang.h"
 #include "src/system/device/power.h"
 #include "src/system/device/screenshot.h"
+#include "src/system/playback/sleeptimer.h"
 #include "src/system/device/system.h"
 
 lv_obj_t *settings_screen;
+
+static lv_obj_t *sleep_screen, *sleep_enabled_switch, *sleep_schedule_switch;
+static lv_obj_t *sleep_presets[3];
+static settingsrow_duration_t sleep_start, sleep_end;
+static const int sleep_lengths[] = {15, 30, 60};
+
+lv_obj_t *settings_sleep_screen(void) { return sleep_screen; }
+
+static void sleep_settings_refresh(lv_event_t *e) {
+	(void)e;
+	lv_obj_set_state(sleep_enabled_switch, LV_STATE_CHECKED, sleeptimer_enabled());
+	bool scheduled = sleeptimer_scheduled();
+	lv_obj_set_state(sleep_schedule_switch, LV_STATE_CHECKED, scheduled);
+	lv_obj_set_hidden(sleep_start.card, !scheduled);
+	lv_obj_set_hidden(sleep_end.card, !scheduled);
+	settingsrow_duration_set_minutes(&sleep_start, sleeptimer_start_minute());
+	settingsrow_duration_set_minutes(&sleep_end, sleeptimer_end_minute());
+	settingsrow_duration_repaint(&sleep_start);
+	settingsrow_duration_repaint(&sleep_end);
+	for (int i = 0; i < 3; i++) settingsrow_pill_active(sleep_presets[i], sleep_lengths[i] == sleeptimer_minutes());
+}
+
+static void sleep_enabled_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_enabled(lv_obj_has_state(sleep_enabled_switch, LV_STATE_CHECKED));
+}
+
+static void sleep_schedule_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_scheduled(lv_obj_has_state(sleep_schedule_switch, LV_STATE_CHECKED));
+	sleep_settings_refresh(NULL);
+}
+
+static void sleep_length_cb(lv_event_t *e) {
+	sleeptimer_set_minutes((int)(intptr_t)lv_event_get_user_data(e));
+	sleep_settings_refresh(NULL);
+}
+
+static void sleep_window_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_window(settingsrow_duration_minutes(&sleep_start), settingsrow_duration_minutes(&sleep_end));
+}
+
+static void build_sleep_page(gui_config_t *cfg) {
+	sleep_screen = lv_obj_create(NULL);
+	lv_obj_t *list = settingsrow_page(sleep_screen, cfg, "sleep_timer");
+	settingsrow_toggle(list, "sleep_always", &sleep_enabled_switch, sleep_enabled_cb);
+	lv_obj_t *pills;
+	settingsrow_pills(list, "sleep_duration", &pills);
+	const char *labels[] = {"15", "30", "60"};
+	for (int i = 0; i < 3; i++) sleep_presets[i] = settingsrow_pill_text(pills, labels[i], sleep_lengths[i], sleep_length_cb);
+	settingsrow_toggle(list, "sleep_schedule", &sleep_schedule_switch, sleep_schedule_cb);
+	settingsrow_clock_wheels(list, "sleep_start", sleep_window_cb, &sleep_start);
+	settingsrow_clock_wheels(list, "sleep_end", sleep_window_cb, &sleep_end);
+	lv_obj_t *note = lv_label_create(list);
+	lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(note, lv_pct(100));
+	lv_obj_add_style(note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(note, &font_ui_20, 0);
+	lv_label_set_text(note, tr("sleep_schedule_note"));
+	lv_obj_add_event_cb(sleep_screen, sleep_settings_refresh, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(sleep_screen, sleep_settings_refresh, LV_EVENT_REFRESH, NULL);
+	switcher_attach_back_gesture(sleep_screen);
+}
 
 static void clock_clicked_cb(lv_event_t *e) {
 	(void)e;
@@ -542,6 +608,7 @@ void settings_init(gui_config_t *cfg) {
 	build_screen_page(cfg);
 	build_other_page(cfg);
 	build_keyboard_page(cfg);
+	build_sleep_page(cfg);
 
 	// In groups, like Music: how it looks, how it is driven, the device.
 	settingsrow_heading(container, "settings_section_personal");
@@ -557,6 +624,7 @@ void settings_init(gui_config_t *cfg) {
 	settingsrow_heading(container, "settings_section_device");
 	settingsrow_add(container, "date_and_time", NULL, clock_clicked_cb, NULL);
 	settingsrow_add(container, "power", NULL, switch_screen_cb, powersettings_screen);
+	settingsrow_add(container, "sleep_timer", NULL, switch_screen_cb, sleep_screen);
 	settingsrow_add(container, "system", NULL, switch_screen_cb, systempage_screen);
 	// Hidden until the build number in System > Info is tapped five times.
 	// Built regardless, so unlocking is a visibility change rather than a

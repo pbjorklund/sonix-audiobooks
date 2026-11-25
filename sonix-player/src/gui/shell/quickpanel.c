@@ -10,6 +10,7 @@
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/settings/musicsettings.h"
+#include "src/gui/settings/settings.h"
 #include "src/gui/audio/peqpage.h"
 #include "src/gui/library/audiobooks.h"
 #include "src/gui/nowplaying/player.h"
@@ -93,9 +94,7 @@ static lv_obj_t *lineout_btn;
 static lv_obj_t *sonixlink_btn;
 static lv_obj_t *peq_btn;
 static lv_obj_t *dlna_btn;
-static lv_obj_t *sleep_music_btn;
-static lv_obj_t *sleep_audiobook_btn;
-static lv_obj_t *sleep_podcast_btn;
+static lv_obj_t *sleep_btn;
 static lv_obj_t *wifi_transfer_btn;
 static lv_obj_t *gapless_btn;
 
@@ -127,9 +126,7 @@ static const char *const button_key[QP_BTN_COUNT] = {
 	[QP_BTN_SONIXLINK] = "sonixlink",
 	[QP_BTN_PEQ] = "peq",
 	[QP_BTN_DLNA] = "dlna",
-	[QP_BTN_SLEEP_MUSIC] = "sleep_music",
-	[QP_BTN_SLEEP_AUDIOBOOK] = "sleep_audiobook",
-	[QP_BTN_SLEEP_PODCAST] = "sleep_podcast",
+	[QP_BTN_SLEEP] = "sleep_timer",
 	[QP_BTN_WIFI_TRANSFER] = "wifi_transfer",
 	[QP_BTN_GAPLESS] = "gapless",
 };
@@ -146,9 +143,7 @@ static const char *const button_tag[QP_BTN_COUNT] = {
 	[QP_BTN_SONIXLINK] = "sonixlink",
 	[QP_BTN_PEQ] = "peq",
 	[QP_BTN_DLNA] = "dlna",
-	[QP_BTN_SLEEP_MUSIC] = "quickpanel_sleep_music",
-	[QP_BTN_SLEEP_AUDIOBOOK] = "quickpanel_sleep_audiobook",
-	[QP_BTN_SLEEP_PODCAST] = "quickpanel_sleep_podcast",
+	[QP_BTN_SLEEP] = "sleep_timer",
 	[QP_BTN_WIFI_TRANSFER] = "wifitransfer_title",
 	[QP_BTN_GAPLESS] = "musicsettings_gapless_playback",
 };
@@ -967,7 +962,7 @@ static void star_cb(lv_event_t *e) {
 // list. A truncated or hand-mangled setting therefore costs the names it
 // mangled and nothing else. "-" is kept as an empty place, which is how the
 // grid's gaps survive a restart.
-static uint8_t parse_list(const char *saved, uint8_t *out, uint8_t cap, bool *placed) {
+static uint8_t parse_list(const char *saved, uint8_t *out, uint8_t cap, bool *placed, bool keep_slots) {
 	uint8_t n = 0;
 	const char *p = saved ? saved : "";
 
@@ -984,11 +979,25 @@ static uint8_t parse_list(const char *saved, uint8_t *out, uint8_t cap, bool *pl
 			len--;
 		}
 		if (len == strlen(QP_SLOT_EMPTY_KEY) && strncmp(QP_SLOT_EMPTY_KEY, start, len) == 0) {
-			out[n++] = QP_BTN_NONE;
+			if (keep_slots) out[n++] = QP_BTN_NONE;
 			continue;
 		}
+		const char *key = start;
+		const char *const retired[] = {"sleep_music", "sleep_audiobook", "sleep_podcast"};
+		bool legacy_sleep = false;
+		for (int i = 0; i < 3; i++) {
+			if (len == strlen(retired[i]) && !strncmp(start, retired[i], len)) legacy_sleep = true;
+		}
+		if (legacy_sleep) {
+			if (placed[QP_BTN_SLEEP]) {
+				if (keep_slots) out[n++] = QP_BTN_NONE;
+				continue;
+			}
+			key = button_key[QP_BTN_SLEEP];
+			len = strlen(key);
+		}
 		for (int i = 0; i < QP_BTN_COUNT && len; i++) {
-			if (placed[i] || strlen(button_key[i]) != len || strncmp(button_key[i], start, len) != 0) {
+			if (placed[i] || strlen(button_key[i]) != len || strncmp(button_key[i], key, len) != 0) {
 				continue;
 			}
 			placed[i] = true;
@@ -1006,6 +1015,7 @@ static uint8_t parse_list(const char *saved, uint8_t *out, uint8_t cap, bool *pl
 //   3  a grid of eight places that can be empty
 //   4  a grid of sixteen places, written without the empty ones at its end and
 //      split over two keys each (see QP_LIST_SPLIT)
+//   5  one shared sleep timer instead of the three source-specific buttons
 //
 // A file older than the current version is brought forward on the way in: at 1
 // crossfade leaves the panel and SonixLink takes the place it had, and below 4
@@ -1016,7 +1026,7 @@ static uint8_t parse_list(const char *saved, uint8_t *out, uint8_t cap, bool *pl
 // Nothing is written here. The move is worked out again at every start until
 // the page is used, and then saved with the rest -- a boot that changes nothing
 // has no business writing to the card.
-#define QP_LAYOUT_VERSION 4
+#define QP_LAYOUT_VERSION 5
 
 static void order_load(void) {
 	if (order_loaded) {
@@ -1032,14 +1042,14 @@ static void order_load(void) {
 	// Long enough for a saved grid of empty places plus every button the file
 	// never mentioned, which is the worst a hand-edited file can produce.
 	uint8_t line[QP_SLOT_COUNT + QP_BTN_COUNT];
-	uint8_t line_n = parse_list(config_get("quickpanel", "order", ""), line, QP_LIST_SPLIT, placed);
+	uint8_t line_n = parse_list(config_get("quickpanel", "order", ""), line, QP_LIST_SPLIT, placed, true);
 	if (saved_version >= 4) {
 		line_n += parse_list(config_get("quickpanel", "order_more", ""), line + line_n,
-							 (uint8_t)(QP_SLOT_COUNT - line_n), placed);
+							 (uint8_t)(QP_SLOT_COUNT - line_n), placed, true);
 	}
-	hidden_n = parse_list(config_get("quickpanel", "hidden", ""), hidden, QP_BTN_COUNT, placed);
+	hidden_n = parse_list(config_get("quickpanel", "hidden", ""), hidden, QP_BTN_COUNT, placed, false);
 	hidden_n += parse_list(config_get("quickpanel", "hidden_more", ""), hidden + hidden_n,
-						   (uint8_t)(QP_BTN_COUNT - hidden_n), placed);
+						   (uint8_t)(QP_BTN_COUNT - hidden_n), placed, false);
 
 	// Anything the file did not mention: a fresh install, or a button that did
 	// not exist when it was written. It goes into the panel, because a control
@@ -1049,13 +1059,9 @@ static void order_load(void) {
 		if (placed[i]) {
 			continue;
 		}
-		// Crossfade, which the migration below is taking out on purpose, and the
-		// buttons that arrive into a panel already holding eight: DLNA, the three
-		// sleep timers, Wi-Fi transfer and gapless. Appending them would change a
-		// panel nobody asked to change, so they wait among the unused ones, where
-		// the settings page shows them.
-		bool waits = i == QP_BTN_DLNA || i == QP_BTN_SLEEP_MUSIC || i == QP_BTN_SLEEP_AUDIOBOOK ||
-					 i == QP_BTN_SLEEP_PODCAST || i == QP_BTN_WIFI_TRANSFER || i == QP_BTN_GAPLESS;
+		// Keep Crossfade (before its layout migration), DLNA, Wi-Fi transfer and
+		// gapless among the unused controls unless explicitly placed.
+		bool waits = i == QP_BTN_DLNA || i == QP_BTN_WIFI_TRANSFER || i == QP_BTN_GAPLESS;
 		if ((saved_version < 2 && i == QP_BTN_FADE) || waits) {
 			hidden[hidden_n++] = (uint8_t)i;
 		} else {
@@ -1100,6 +1106,20 @@ static void order_load(void) {
 	for (int i = grid; i < line_n; i++) {
 		if (line[i] < QP_BTN_COUNT) {
 			hidden[hidden_n++] = line[i];
+		}
+	}
+	// Offer the new control in an unused slot rather than hide it with the
+	// retired buttons. Do not reorder existing controls or move them out.
+	if (saved_version < 5) {
+		for (int i = 0; i < hidden_n; i++) {
+			if (hidden[i] != QP_BTN_SLEEP) continue;
+			for (int j = 0; j < QP_SLOT_COUNT; j++) {
+				if (slots[j] != QP_BTN_NONE) continue;
+				slots[j] = QP_BTN_SLEEP;
+				memmove(hidden + i, hidden + i + 1, (size_t)(--hidden_n - i));
+				break;
+			}
+			break;
 		}
 	}
 }
@@ -1164,12 +1184,8 @@ static lv_obj_t *button_widget(quickpanel_button_t which) {
 		return peq_btn;
 	case QP_BTN_DLNA:
 		return dlna_btn;
-	case QP_BTN_SLEEP_MUSIC:
-		return sleep_music_btn;
-	case QP_BTN_SLEEP_AUDIOBOOK:
-		return sleep_audiobook_btn;
-	case QP_BTN_SLEEP_PODCAST:
-		return sleep_podcast_btn;
+	case QP_BTN_SLEEP:
+		return sleep_btn;
 	case QP_BTN_WIFI_TRANSFER:
 		return wifi_transfer_btn;
 	case QP_BTN_GAPLESS:
@@ -1378,12 +1394,8 @@ const lv_image_dsc_t *quickpanel_button_icon(quickpanel_button_t button) {
 		return &icon_peq_quick;
 	case QP_BTN_DLNA:
 		return &icon_dlna_quick;
-	case QP_BTN_SLEEP_MUSIC:
+	case QP_BTN_SLEEP:
 		return &icon_sleep_music_quick;
-	case QP_BTN_SLEEP_AUDIOBOOK:
-		return &icon_sleep_audiobook_quick;
-	case QP_BTN_SLEEP_PODCAST:
-		return &icon_sleep_podcast_quick;
 	case QP_BTN_WIFI_TRANSFER:
 		return &icon_wifi_transfer_quick;
 	case QP_BTN_GAPLESS:
@@ -1457,7 +1469,6 @@ static void circle_button_set_on(lv_obj_t *btn, bool on) {
 
 // Whether that timer will actually stop the music: the switch on AND a length
 // chosen. See the note over the handlers.
-static bool sleep_timer_armed(sleeptimer_kind_t kind);
 
 // Repaints every round control from the state it switches, so the panel shows
 // the truth even when the setting was changed somewhere else.
@@ -1471,9 +1482,7 @@ static void refresh_audio_buttons(void) {
 	circle_button_set_on(sonixlink_btn, sonixlink_get_enabled());
 	circle_button_set_on(dlna_btn, dlna_get_enabled());
 	circle_button_set_on(peq_btn, peq_get_enabled());
-	circle_button_set_on(sleep_music_btn, sleep_timer_armed(SLEEPTIMER_MUSIC));
-	circle_button_set_on(sleep_audiobook_btn, sleep_timer_armed(SLEEPTIMER_AUDIOBOOK));
-	circle_button_set_on(sleep_podcast_btn, sleep_timer_armed(SLEEPTIMER_PODCAST));
+	circle_button_set_on(sleep_btn, sleeptimer_enabled());
 	circle_button_set_on(wifi_transfer_btn, wifitransfer_get_enabled());
 
 	// Bit-perfect holds the effects off (musicsettings.c): their buttons are
@@ -1717,65 +1726,21 @@ static void sonixlink_clicked_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 // The sleep timers
 //
-// Three switches for three timers, and what they are for is the switching OFF:
-// "it is later than I thought, do not stop" is a thing somebody thinks with the
-// player already in their hand, without wanting to walk into the settings page
-// of whichever of the three is counting.
-//
-// Lit means it will actually stop the music, which is the switch AND a length:
-// the switch on with the wheels at 00:00 arms nothing (see sleeptimer.h), and a
-// button lit for that would be a button that lies. Pressing one with no length
-// chosen says so rather than lighting up and doing nothing.
-// ---------------------------------------------------------------------------
+static void open_page(lv_obj_t *screen);
 
-static bool sleep_timer_armed(sleeptimer_kind_t kind) {
-	return sleeptimer_enabled(kind) && sleeptimer_minutes(kind) > 0;
-}
-
-static void sleep_timer_clicked(sleeptimer_kind_t kind) {
+static void sleep_clicked_cb(lv_event_t *e) {
+	(void)e;
 	if (long_press_consumed) {
 		long_press_consumed = false;
 		return;
 	}
-
-	if (sleeptimer_enabled(kind)) {
-		sleeptimer_set_enabled(kind, false);
-	} else if (sleeptimer_minutes(kind) > 0) {
-		sleeptimer_set_enabled(kind, true);
-	} else {
-		gui_notify_popup("quickpanel_sleep_no_length");
-		return;
-	}
+	sleeptimer_set_enabled(!sleeptimer_enabled());
 	toggled();
 }
 
-static void sleep_music_clicked_cb(lv_event_t *e) {
-	(void)e;
-	sleep_timer_clicked(SLEEPTIMER_MUSIC);
-}
-
-static void sleep_audiobook_clicked_cb(lv_event_t *e) {
-	(void)e;
-	sleep_timer_clicked(SLEEPTIMER_AUDIOBOOK);
-}
-
-static void sleep_podcast_clicked_cb(lv_event_t *e) {
-	(void)e;
-	sleep_timer_clicked(SLEEPTIMER_PODCAST);
-}
-
-static void open_page(lv_obj_t *screen);
-
-// A hold opens the page that sets the length: the playback options for music,
-// the audiobook options, the podcast settings. Looked up at the press rather
-// than when the buttons are made, since not every one of those pages exists
-// by then.
 static void sleep_page_cb(lv_event_t *e) {
-	sleeptimer_kind_t kind = (sleeptimer_kind_t)(intptr_t)lv_event_get_user_data(e);
-	lv_obj_t *screen = kind == SLEEPTIMER_MUSIC		 ? musicsettings_playback_screen()
-					   : kind == SLEEPTIMER_AUDIOBOOK ? audiobooksettings_screen
-													  : podcastpage_settings_screen();
-	open_page(screen);
+	(void)e;
+	open_page(settings_sleep_screen());
 }
 
 // DLNA, the third of the same family: a phone pushes music at the player over
@@ -2111,21 +2076,9 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_add_event_cb(dlna_btn, dlna_clicked_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_add_event_cb(dlna_btn, open_page_cb, LV_EVENT_LONG_PRESSED, dlna_screen);
 
-	// Each of the three opens, on a long press, the page of its own kind of
-	// listening, where its length is chosen.
-	sleep_music_btn = make_circle_button(row, &icon_sleep_music_quick);
-	lv_obj_add_event_cb(sleep_music_btn, sleep_music_clicked_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_add_event_cb(sleep_music_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)SLEEPTIMER_MUSIC);
-
-	sleep_audiobook_btn = make_circle_button(row, &icon_sleep_audiobook_quick);
-	lv_obj_add_event_cb(sleep_audiobook_btn, sleep_audiobook_clicked_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_add_event_cb(sleep_audiobook_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED,
-						(void *)(intptr_t)SLEEPTIMER_AUDIOBOOK);
-
-	sleep_podcast_btn = make_circle_button(row, &icon_sleep_podcast_quick);
-	lv_obj_add_event_cb(sleep_podcast_btn, sleep_podcast_clicked_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_add_event_cb(sleep_podcast_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED,
-						(void *)(intptr_t)SLEEPTIMER_PODCAST);
+	sleep_btn = make_circle_button(row, &icon_sleep_music_quick);
+	lv_obj_add_event_cb(sleep_btn, sleep_clicked_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_add_event_cb(sleep_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED, NULL);
 
 	// A tap opens the page with the server starting; a hold opens it as it is.
 	wifi_transfer_btn = make_circle_button(row, &icon_wifi_transfer_quick);

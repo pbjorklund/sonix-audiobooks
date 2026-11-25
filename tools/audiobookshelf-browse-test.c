@@ -712,15 +712,27 @@ static void podcast_catalogue_tests(void) {
 	bool more = false;
 	snprintf(spy.body, sizeof(spy.body), "{\"total\":3,\"results\":[{\"id\":\"show-1\",\"mediaType\":\"podcast\","
 		"\"media\":{\"metadata\":{\"title\":\"Example Show\",\"author\":\"Host\"},\"numEpisodes\":41}}]}");
-	expect_int("podcast shows", audiobookshelf_podcast_shows(&auth, "lib", NULL, 1, results, 1, &more), 1);
+	expect_int("podcast shows", audiobookshelf_podcast_shows(&auth, "lib", NULL, 1, 0, results, 1, &more), 1);
 	expect_str("minified show page", captured_path(),
 		"/api/libraries/lib/items?limit=1&page=1&sort=media.metadata.title&minified=1");
 	expect_str("podcast author", results[0].author, "Host");
 	expect_int("episode count", results[0].tracks, 41);
 	assert(more);
+	assert(audiobookshelf_podcast_shows(&auth, "lib", NULL, 0, 1, results, 1, &more) == 1);
+	expect_str("newest shows", captured_path(), "/api/libraries/lib/items?limit=1&page=0&sort=addedAt&minified=1&desc=1");
+	assert(audiobookshelf_podcast_shows(&auth, "lib", NULL, 0, -1, results, 1, &more) == 1);
+	expect_str("oldest shows", captured_path(), "/api/libraries/lib/items?limit=1&page=0&sort=addedAt&minified=1&desc=0");
+	snprintf(spy.body, sizeof(spy.body), "{\"id\":\"owner\",\"mediaProgress\":["
+		"{\"episodeId\":\"a\",\"libraryItemId\":\"show-1\",\"isFinished\":true},"
+		"{\"episodeId\":\"b\",\"libraryItemId\":\"show-1\",\"isFinished\":false},"
+		"{\"episodeId\":\"c\",\"libraryItemId\":\"other-show\",\"isFinished\":true}]}");
+	audiobookshelf_podcast_unheard(&auth, "other-owner", results, 1, NULL);
+	expect_int("other account cannot supply a count", results[0].unheard, -1);
+	audiobookshelf_podcast_unheard(&auth, "owner", results, 1, NULL);
+	expect_int("show unheard count", results[0].unheard, 40);
 	snprintf(spy.body, sizeof(spy.body), "{\"podcast\":[{\"libraryItem\":{\"id\":\"show-1\"}},"
 		"{\"libraryItem\":{\"id\":\"show-2\"}}],\"book\":[{\"libraryItem\":{\"id\":\"book-1\"}}]}");
-	expect_int("podcast search", audiobookshelf_podcast_shows(&auth, "lib", "show & host", 0, results, 1, &more), 1);
+	expect_int("podcast search", audiobookshelf_podcast_shows(&auth, "lib", "show & host", 0, 0, results, 1, &more), 1);
 	expect_str("search route", captured_path(), "/api/libraries/lib/search?q=show%20%26%20host&limit=2");
 	expect_str("podcast search result", results[0].id, "show-1");
 	assert(more);

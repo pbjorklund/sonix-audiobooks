@@ -110,6 +110,8 @@ void speed_set_factor(speed_t *s, double factor) {
 
 double speed_factor(const speed_t *s) { return s ? s->factor : 1.0; }
 
+unsigned speed_pending_input(const speed_t *s) { return s ? (unsigned)s->input_frames : 0; }
+
 void speed_reset(speed_t *s) {
 	if (!s) {
 		return;

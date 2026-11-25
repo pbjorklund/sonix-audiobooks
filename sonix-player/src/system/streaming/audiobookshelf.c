@@ -4,6 +4,7 @@
 #include "abs_show_reader.h"
 #include "abs_episode_card.h"
 #include "abs_episode_playback.h"
+#include "abs_cover.h"
 #include <fcntl.h>
 
 #include <ctype.h>
@@ -541,6 +542,8 @@ static bool episode_with_op(const abs_auth_snapshot_t *auth, const char *show_id
 		int metadata = json_get(&doc, audio, "metadata");
 		json_obj_str(&doc, root, "title", out->title, sizeof(out->title));
 		json_obj_str(&doc, root, "description", out->description, sizeof(out->description));
+		out->published_ms = json_obj_llong(&doc, root, "publishedAt", 0);
+		if (out->published_ms < 0) out->published_ms = 0;
 		json_obj_str(&doc, audio, "mimeType", out->track.mime, sizeof(out->track.mime));
 		json_obj_str(&doc, metadata, "filename", out->track.filename, sizeof(out->track.filename));
 		out->file_updated_ms = json_obj_llong(&doc, audio, "updatedAt", 0);
@@ -1495,7 +1498,7 @@ static bool podcast_fetch_json(const abs_auth_snapshot_t *auth, const char *path
 }
 
 int audiobookshelf_podcast_shows(const abs_auth_snapshot_t *auth, const char *library,
-	const char *search, int page, audiobookshelf_item_t *out, int cap, bool *more) {
+	const char *search, int page, int order, audiobookshelf_item_t *out, int cap, bool *more) {
 	if (!abs_segment(library) || !out || !more || page < 0 || cap < 1 || cap > ABS_SEARCH_DISPLAY_LIMIT ||
 		(search && strnlen(search, ABS_NAME_MAX) >= ABS_NAME_MAX)) return -1;
 	*more = false;
@@ -1507,8 +1510,9 @@ int audiobookshelf_podcast_shows(const abs_auth_snapshot_t *auth, const char *li
 		http_url_encode(search, encoded, sizeof(encoded));
 		snprintf(path, sizeof(path), "/api/libraries/%s/search?q=%s&limit=%d", id, encoded, cap + 1);
 	} else {
-		snprintf(path, sizeof(path), "/api/libraries/%s/items?limit=%d&page=%d&sort=media.metadata.title&minified=1",
-			id, cap, page);
+		snprintf(path, sizeof(path), "/api/libraries/%s/items?limit=%d&page=%d&sort=%s&minified=1%s",
+			id, cap, page, order == 1 || order == -1 ? "addedAt" : "media.metadata.title",
+			order > 0 ? "&desc=1" : order < 0 ? "&desc=0" : "");
 	}
 	char *body = NULL;
 	json_doc_t doc;
@@ -1532,12 +1536,123 @@ int audiobookshelf_podcast_shows(const abs_auth_snapshot_t *auth, const char *li
 		read_item(&doc, object, item);
 		int media = json_get(&doc, object, "media");
 		json_obj_str(&doc, json_get(&doc, media, "metadata"), "author", item->author, sizeof(item->author));
-		item->tracks = (int)json_obj_long(&doc, media, "numEpisodes", 0);
+		item->tracks = (int)json_obj_long(&doc, media, "numEpisodes", -1);
+		item->unheard = -1;
 	}
 	if (!searching) *more = ((long long)page + 1) * cap < json_obj_llong(&doc, root, "total", 0);
 	json_free(&doc);
 	free(body);
 	return written;
+}
+
+void audiobookshelf_podcast_unheard(const abs_auth_snapshot_t *auth, const char *owner,
+	audiobookshelf_item_t *shows, int count, http_op_t *op) {
+	if (!auth || !owner || !owner[0] || !shows || count <= 0) return;
+	char *body = NULL;
+	json_doc_t doc;
+	if (api_request_with(auth->server, auth->token, "/api/me", NULL, &body, 10, NULL, op) &&
+		!http_last_truncated() && body && json_parse(body, &doc)) {
+		char verified[ABS_ID_MAX];
+		int root = json_root(&doc), progress = json_get(&doc, root, "mediaProgress");
+		if (abs_json_segment(&doc, root, "id", verified) && !strcmp(verified, owner) &&
+			progress >= 0 && doc.toks[progress].type == JSON_ARRAY) {
+			for (int i = 0; i < count; i++) shows[i].unheard = shows[i].tracks;
+			for (int at = progress + 1; at < doc.count && doc.toks[at].start < doc.toks[progress].end; at++) {
+				if (doc.toks[at].parent != progress || doc.toks[at].type != JSON_OBJECT) continue;
+				char show[ABS_ID_MAX], episode[ABS_ID_MAX];
+				if (!json_obj_bool(&doc, at, "isFinished", false) || !abs_json_segment(&doc, at, "episodeId", episode) ||
+					!abs_json_segment(&doc, at, "libraryItemId", show)) continue;
+				for (int i = 0; i < count; i++) if (shows[i].unheard > 0 && !strcmp(shows[i].id, show)) {
+					shows[i].unheard--;
+					break;
+				}
+			}
+		}
+		json_free(&doc);
+	}
+	free(body);
+}
+
+static int episode_recent_order(const void *a, const void *b) {
+	const abs_episode_row_t *x = a, *y = b;
+	if (x->published_ms != y->published_ms) return x->published_ms > y->published_ms ? -1 : 1;
+	if (x->added_ms != y->added_ms) return x->added_ms > y->added_ms ? -1 : 1;
+	int show = strcmp(x->show_id, y->show_id);
+	return show ? show : strcmp(x->episode_id, y->episode_id);
+}
+
+// ABS recent-episodes excludes finished items server-side. Build the heard
+// view from the current user's completed episode identities instead.
+int audiobookshelf_recent_heard(const abs_auth_snapshot_t *auth, const char *owner,
+	const char *library, int page, abs_episode_row_t *out, int cap, bool *more, http_op_t *op) {
+	if (!auth || !owner || !owner[0] || !library || !out || !more || page < 0 ||
+		cap < 1 || cap > ABS_PAGE_LIMIT || page >= 4096 / cap) return -1;
+	*more = false;
+	char *body = NULL;
+	json_doc_t doc;
+	if (!api_request_with(auth->server, auth->token, "/api/me", NULL, &body, 10, NULL, op) ||
+		http_last_truncated() || !body || !json_parse(body, &doc)) { free(body); return -1; }
+	char verified[ABS_ID_MAX];
+	int root = json_root(&doc), progress = json_get(&doc, root, "mediaProgress");
+	int kept = 0, keep = (page + 1) * cap;
+	int seen = 0;
+	struct { char id[ABS_ID_MAX]; bool belongs; } shows[ABS_PAGE_LIMIT];
+	abs_episode_row_t *rows = calloc((size_t)keep, sizeof(*rows));
+	abs_episode_t *episode = calloc(1, sizeof(*episode));
+	bool ok = rows && episode && abs_json_segment(&doc, root, "id", verified) && !strcmp(owner, verified) &&
+		progress >= 0 && doc.toks[progress].type == JSON_ARRAY;
+	for (int at = progress + 1; ok && at < doc.count && doc.toks[at].start < doc.toks[progress].end; at++) {
+		if (http_op_cancelled(op)) { ok = false; break; }
+		if (doc.toks[at].parent != progress || doc.toks[at].type != JSON_OBJECT ||
+			!json_obj_bool(&doc, at, "isFinished", false)) continue;
+		abs_episode_row_t row = {.finished = true};
+		if (!abs_json_segment(&doc, at, "episodeId", row.episode_id) ||
+			!abs_json_segment(&doc, at, "libraryItemId", row.show_id)) continue;
+		int match = 0;
+		while (match < seen && strcmp(shows[match].id, row.show_id)) match++;
+		bool belongs = match < seen && shows[match].belongs;
+		if (match == seen) {
+			char encoded[ABS_ID_MAX * 3], path[sizeof(encoded) + 16];
+			http_url_encode(row.show_id, encoded, sizeof(encoded));
+			snprintf(path, sizeof(path), "/api/items/%s", encoded);
+			char *show_body = NULL;
+			json_doc_t show_doc;
+			if (api_request_with(auth->server, auth->token, path, NULL, &show_body, 10, NULL, op) &&
+				!http_last_truncated() && show_body && json_parse(show_body, &show_doc)) {
+				char id[ABS_ID_MAX], type[24], parent[ABS_ID_MAX];
+				int item = json_root(&show_doc);
+				belongs = abs_json_segment(&show_doc, item, "id", id) && !strcmp(id, row.show_id) &&
+					abs_json_segment(&show_doc, item, "libraryId", parent) && !strcmp(parent, library) &&
+					json_obj_str(&show_doc, item, "mediaType", type, sizeof(type)) && !strcmp(type, "podcast");
+				json_free(&show_doc);
+			}
+			free(show_body);
+			if (seen < ABS_PAGE_LIMIT) {
+				strcpy(shows[seen].id, row.show_id);
+				shows[seen++].belongs = belongs;
+			}
+		}
+		if (!belongs || !audiobookshelf_episode(auth, row.show_id, row.episode_id, episode, op)) continue;
+		row.published_ms = episode->published_ms;
+		row.duration = episode->track.duration;
+		strcpy(row.title, episode->title);
+		int slot = kept;
+		if (kept < keep) kept++;
+		else {
+			*more = true;
+			if (episode_recent_order(&row, &rows[kept - 1]) >= 0) continue;
+			slot--;
+		}
+		while (slot > 0 && episode_recent_order(&row, &rows[slot - 1]) < 0) { rows[slot] = rows[slot - 1]; slot--; }
+		rows[slot] = row;
+	}
+	int offset = page * cap, count = kept > offset ? kept - offset : 0;
+	if (ok && count > 0) memcpy(out, rows + offset, (size_t)count * sizeof(*out));
+	free(episode);
+	free(rows);
+	json_free(&doc);
+	free(body);
+	return ok ? count : -1;
 }
 
 int audiobookshelf_latest_episodes(const abs_auth_snapshot_t *auth, const char *library,
@@ -4250,7 +4365,26 @@ static bool episode_manifest_matches(const abs_download_job_t *job, const abs_do
 		!strcmp(m.audio, file->final_name) && m.bytes == file->final_size;
 }
 
-static bool finalize_episode(const abs_download_job_t *job, const abs_download_file_t *files, int count,
+void audiobookshelf_episode_show_title(const abs_auth_snapshot_t *auth, const char *show, http_op_t *op,
+	char title[ABS_NAME_MAX]) {
+	title[0] = '\0';
+	if (!auth || !auth->token[0] || !abs_segment(show)) return;
+	char encoded[ABS_ID_MAX * 3], url[ABS_URL_MAX], headers[ABS_TOKEN_MAX + 64];
+	http_url_encode(show, encoded, sizeof(encoded));
+	if ((size_t)snprintf(url, sizeof(url), "%s/api/items/%s", auth->server, encoded) >= sizeof(url)) return;
+	snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\nAccept: application/json\r\n", auth->token);
+	http_stream_t stream;
+	if (http_stream_open_ex_op(&stream, url, headers, 10, op, NULL)) {
+		show_stream_t input = {.stream = &stream, .op = op,
+			.left = stream.content_length > 0 ? stream.content_length : -1};
+		abs_show_read_title(read_show_bytes, &input, show, title);
+		http_stream_close(&stream);
+	}
+	memset(headers, 0, sizeof(headers));
+}
+
+static bool finalize_episode(const abs_download_op_ctx_t *ctx, const abs_download_job_t *job,
+	const abs_download_file_t *files, int count,
 	const char **stage_out, char *error, size_t error_size) {
 	char folder[SONIX_LINKED_PATH_MAX];
 	if (count != 1 || strcmp(job->destination, queue_media.destination) ||
@@ -4276,6 +4410,10 @@ static bool finalize_episode(const abs_download_job_t *job, const abs_download_f
 	snprintf(m.audio, sizeof(m.audio), "%.31s", files[0].final_name);
 	snprintf(m.title, sizeof(m.title), "%s", queue_media.episode.title);
 	for (char *p = m.title; *p; p++) if (*p == '\r' || *p == '\n') *p = ' ';
+	m.published_ms = queue_media.episode.published_ms;
+	audiobookshelf_episode_show_title(&queue_media.auth, m.show, ctx->op, m.show_title);
+	(void)abs_cover_download_episode(&queue_media.auth, m.show, folder, ctx->cancel, ctx->op);
+	if (abs_download_op_cancelled(ctx->cancel) || http_op_cancelled(ctx->op)) return false;
 	if (!abs_episode_manifest_commit(folder, &m)) {
 		abs_queue_fail(stage_out, error, error_size, "manifest", "Could not publish the downloaded episode on the card.");
 		return false;
@@ -4298,7 +4436,8 @@ static bool abs_queue_finalize_full(const abs_download_op_ctx_t *ctx, const abs_
 		*stage_out = "auth";
 		return false;
 	}
-	if (!strcmp(job->kind, ABS_DL_KIND_EPISODE)) return finalize_episode(job, files, file_count, stage_out, error, error_size);
+	if (!strcmp(job->kind, ABS_DL_KIND_EPISODE))
+		return finalize_episode(ctx, job, files, file_count, stage_out, error, error_size);
 	if (strcmp(job->kind, ABS_DL_KIND_BOOK) != 0) return false;
 	audiobookshelf_book_t *book = &queue_media.book;
 	if (!queue_media.destination[0] || strcmp(queue_media.destination, job->destination) != 0 ||

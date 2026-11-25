@@ -56,10 +56,10 @@ read -r -a CODEC_LIBS <<< "$(pkg-config --libs opusfile wavpack)"
 FLAGS+=("${CODEC_CFLAGS[@]}")
 LINK=(-Wl,--gc-sections -lm -lpthread -ldl "${CODEC_LIBS[@]}")
 SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
-	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c
+	src/system/streaming/audiobookshelf.c src/system/streaming/abs_profiles.c src/system/streaming/abs_cover.c
 	src/system/streaming/abs_download.c src/system/streaming/abs_episode_card.c src/system/streaming/streamturn.c
 	src/system/streaming/abs_history.c src/system/streaming/abs_episode_progress.c
-	src/system/streaming/abs_episode_playback.c
+	src/system/streaming/abs_episode_playback.c src/system/streaming/abs_episode_stream.c
 	src/system/library/audiobookdb.c src/system/library/library.c
 	# The test drives the REAL audiobookscan (the §8.3 scan-completion import
 	# runs through the §8.5 line-592 notification), so the scanner's own stack

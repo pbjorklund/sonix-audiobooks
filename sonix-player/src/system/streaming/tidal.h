@@ -123,7 +123,12 @@ typedef struct {
 	char released[16]; // year only: that is all a row shows
 	int track_count;
 	bool hires;
+	bool saved_on_account;
+	bool local_folder;
 } tidal_album_t;
+
+int tidal_saved_albums(tidal_album_t *out, int max);
+bool tidal_saved_album_set(const char *id, bool saved);
 
 typedef struct {
 	long id;
@@ -204,6 +209,7 @@ int tidal_search_artists(const char *query, int offset, tidal_artist_t *out, int
 // does not fit in one response, and neither does a prolific artist. `offset`
 // says which entry to start from, as for searches.
 int tidal_album_tracks(const char *album_id, int offset, tidal_track_t *out, int max);
+int tidal_album_tracks_known(const tidal_album_t *album, int offset, tidal_track_t *out, int max);
 int tidal_artist_albums(long artist_id, int offset, tidal_album_t *out, int max);
 int tidal_playlist_tracks(const char *playlist_id, int offset, tidal_track_t *out, int max);
 

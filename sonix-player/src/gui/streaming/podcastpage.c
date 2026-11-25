@@ -9,7 +9,6 @@
 #include <unistd.h>
 
 #include "src/gui/fonts/fonts.h"
-#include "src/system/playback/sleeptimer.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/nowplaying/player.h"
@@ -3316,8 +3315,9 @@ static bool show_card_now(void) {
 }
 
 static void run_home_view(job_kind_t kind) {
-	if (kind == JOB_FOLLOWED && show_followed_now()) {
-		return;
+	if (kind == JOB_FOLLOWED) {
+		backfill_start();
+		if (show_followed_now()) return;
 	}
 	if (kind == JOB_CARD) {
 		show_card_now();
@@ -3481,7 +3481,6 @@ static void refresh_page_state(void) {
 		run_home_view(JOB_CARD);
 		return;
 	}
-	backfill_start();
 
 	if (!have_current_list) {
 		// First entry: start from the followed list, which asks nothing of the
@@ -3698,7 +3697,6 @@ static void build_controls_page(gui_config_t *cfg) {
 }
 
 static lv_obj_t *stop_episode_switch;
-static settingsrow_duration_t sleep_row;
 static lv_obj_t *order_pill[2];
 static lv_obj_t *margin_pill[3];
 static const int MARGIN_VALUES[3] = {30, 60, 120};
@@ -3711,11 +3709,6 @@ static void refresh_settings_rows(void) {
 			lv_obj_remove_state(stop_episode_switch, LV_STATE_CHECKED);
 		}
 	}
-	// The control centre switches this timer too, so the switch and the
-	// wheels are read again rather than trusted from the last visit.
-	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_PODCAST));
-	settingsrow_duration_expanded(&sleep_row, sleeptimer_enabled(SLEEPTIMER_PODCAST));
-	settingsrow_duration_repaint(&sleep_row);
 	bool oldest = podcastcard_oldest_first();
 	settingsrow_pill_active(order_pill[0], !oldest);
 	settingsrow_pill_active(order_pill[1], oldest);
@@ -3760,16 +3753,6 @@ static void stop_episode_cb(lv_event_t *e) {
 	podcast_set_stop_at_episode_end(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
 
-static void sleep_toggle_cb(lv_event_t *e) {
-	(void)e;
-	sleeptimer_set_enabled(SLEEPTIMER_PODCAST, lv_obj_has_state(sleep_row.toggle, LV_STATE_CHECKED));
-	refresh_settings_rows();
-}
-
-static void sleep_wheel_cb(lv_event_t *e) {
-	(void)e;
-	sleeptimer_set_minutes(SLEEPTIMER_PODCAST, settingsrow_duration_minutes(&sleep_row));
-}
 
 static void build_settings_page(gui_config_t *cfg) {
 	build_controls_page(cfg);
@@ -3779,10 +3762,6 @@ static void build_settings_page(gui_config_t *cfg) {
 
 	settingsrow_add(container, "change_controls", NULL, switch_screen_cb, controls_screen);
 	settingsrow_toggle(container, "podcast_stop_at_end_of_episode", &stop_episode_switch, stop_episode_cb);
-	// Its own, and not the music one: a stretch set for falling asleep to a
-	// podcast should not be counting down over an album the next morning.
-	settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
-	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_PODCAST));
 
 	// The subscriptions, in and out of other apps.
 	settingsrow_add(container, "podcast_opml_import", NULL, import_opml_row_cb, NULL);

@@ -8,7 +8,7 @@ Read [the development guide](docs/DEVELOPMENT.md) before building firmware, usin
 
 - `origin` is `pbjorklund/sonix-audiobooks`; `upstream` is `yetisoldier/sonix-audiobooks`. Push only when authorized. Preserve uncommitted work when updating the checkout.
 - Edit the player in `sonix-player/` and R1 resources in `sonix-packer/assets/R1/`. Add focused unit tests for new code, run the relevant host checks, and run `make -C sonix-player target` for the MIPS build and glibc 2.22 ABI check.
-- Package on the official Sonix R1 runtime to preserve the Bluetooth libraries. Include changed R1 resources, especially language files. Verify both OTA checksum chains and compare the unpacked player and changed resources against the build inputs. Record the firmware SHA-256. Build, SD staging, flashing, and publishing are separate actions.
+- Package on the official Sonix R1 runtime to preserve the Bluetooth libraries. Include changed R1 resources, especially language files. Verify both OTA checksum chains and compare the unpacked player and changed resources against the build inputs. Record the firmware SHA-256. After tested device-facing changes, package and install on the connected original R1 by default. Leave ADB enabled for ongoing development. This does not authorize pushing or publishing.
 - Keep firmware, build output, device logs, and userdata backups out of Git. Write local test firmware and its `SHA256SUMS` to `build/firmware/`.
 
 ## Credentials and device checks

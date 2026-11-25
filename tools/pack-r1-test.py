@@ -13,6 +13,13 @@ spec.loader.exec_module(packer)
 
 
 class OtaTests(unittest.TestCase):
+    def test_fork_channel_and_version_replace_base(self):
+        base = {"device-name": "HiBy R1", "ota-repo": "yetisoldier/sonix-audiobooks", "build_version": "0.6.2"}
+        self.assertEqual(packer.r1_build_info(base, "1.4.0"), {
+            "device-name": "HiBy R1", "ota-repo": "pbjorklund/sonix-audiobooks", "build_version": "1.4.0", "OS_version": "1.4.0"
+        })
+        self.assertEqual(base["build_version"], "0.6.2")
+
     def test_round_trip_and_corrupt_chunk(self):
         with tempfile.TemporaryDirectory() as work:
             ota = Path(work)

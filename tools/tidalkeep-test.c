@@ -35,6 +35,16 @@ static bool corrupt_once;
 static bool short_audio;
 static bool extras_fixture;
 static int saved_lyrics;
+static bool bad_cover;
+static int cover_fetches;
+static _Thread_local bool count_tag_reads;
+static _Thread_local int tag_reads;
+
+FILE *__real_fopen(const char *path, const char *mode);
+FILE *__wrap_fopen(const char *path, const char *mode) {
+	if (count_tag_reads && mode[0] == 'r' && strstr(path, ".link.tags")) tag_reads++;
+	return __real_fopen(path, mode);
+}
 
 static void make_file(long id, const char *ext) {
 	char path[600];
@@ -49,7 +59,19 @@ static void make_file(long id, const char *ext) {
 // The simulated download: succeeds by writing the file, or fails as often as
 // fail_next says.
 static int fetched_quality;
+static pthread_mutex_t fetch_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t fetch_gate = PTHREAD_COND_INITIALIZER;
+static bool hold_fetch;
+static bool fetch_waiting;
+
 static bool fake_fetch(const tidal_track_t *track, int quality, char *path, size_t size, bool *complete_transfer) {
+	pthread_mutex_lock(&fetch_lock);
+	if (hold_fetch) {
+		fetch_waiting = true;
+		pthread_cond_signal(&fetch_gate);
+		while (hold_fetch) pthread_cond_wait(&fetch_gate, &fetch_lock);
+	}
+	pthread_mutex_unlock(&fetch_lock);
 	fetched_quality = quality;
 	*complete_transfer = false;
 	assert(fetched_count < (int)(sizeof(fetched) / sizeof(fetched[0])));
@@ -182,10 +204,27 @@ int main(int argc, char **argv) {
 
 	// --- the queue: three tracks, serial, kept ------------------------------
 	tidalkeep_state_t state;
+	pthread_mutex_lock(&fetch_lock);
+	hold_fetch = true;
+	pthread_mutex_unlock(&fetch_lock);
 	enqueue_track(101, 1);
+	pthread_mutex_lock(&fetch_lock);
+	struct timespec deadline;
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += 5;
+	while (!fetch_waiting) assert(pthread_cond_timedwait(&fetch_gate, &fetch_lock, &deadline) == 0);
 	enqueue_track(102, 2);
 	enqueue_track(103, 3);
+	assert(tidalkeep_activity(101, NULL) == TIDALKEEP_ACTIVE);
+	assert(tidalkeep_activity(102, NULL) == TIDALKEEP_QUEUED);
+	assert(tidalkeep_activity(0, "al-10") == TIDALKEEP_ACTIVE);
+	assert(tidalkeep_activity(0, "al-99") == TIDALKEEP_IDLE);
+	hold_fetch = false;
+	pthread_cond_signal(&fetch_gate);
+	pthread_mutex_unlock(&fetch_lock);
 	drain(&state);
+	assert(tidalkeep_activity(101, NULL) == TIDALKEEP_IDLE);
+	assert(tidalkeep_activity(0, "al-10") == TIDALKEEP_IDLE);
 	assert(state.done == 3 && state.failed == 0 && state.pending == 0);
 	assert(tidalcache_is_kept(101) && tidalcache_is_kept(102) && tidalcache_is_kept(103));
 	assert(on_card(".flac", 101) && on_card(".flac.tags", 101) && file_exists(".keep", 101));
@@ -194,13 +233,13 @@ int main(int argc, char **argv) {
 	// --- dedupe: done and queued ids do not re-enter -------------------------
 	fetched_count = 0;
 	tidal_track_t kept = track(102, 2);
-	assert(tidalkeep_enqueue(&kept) == TIDALKEEP_ADDED);
+	assert(tidalkeep_enqueue(&kept) == TIDALKEEP_SKIPPED);
 	tidal_track_t pending = track(104, 4);
 	assert(tidalkeep_enqueue(&pending) == TIDALKEEP_ADDED);
 	assert(tidalkeep_enqueue(&pending) == TIDALKEEP_SKIPPED);
 	enqueue_track(105, 5);
 	drain(&state);
-	assert(state.done == 6); // one extras refresh, plus 104 and 105
+	assert(state.done == 5);
 	assert(fetched_count == 2); // exactly two fetches: 104 and 105
 
 	// --- a failed fetch is retried, then kept --------------------------------
@@ -208,7 +247,7 @@ int main(int argc, char **argv) {
 	fetched_count = 0;
 	enqueue_track(106, 6);
 	drain(&state);
-	assert(state.done == 7 && state.failed == 0);
+	assert(state.done == 6 && state.failed == 0);
 	assert(fetched_count == 3); // two failures then the success
 	assert(tidalcache_is_kept(106));
 
@@ -223,7 +262,7 @@ int main(int argc, char **argv) {
 	// --- retry_failed puts it back and it succeeds this time -----------------
 	tidalkeep_retry_failed();
 	drain(&state);
-	assert(state.failed == 0 && state.done == 8);
+	assert(state.failed == 0 && state.done == 7);
 	assert(tidalcache_is_kept(107));
 
 	// --- the keep marker survives every cache clearing ------------------------
@@ -340,12 +379,12 @@ int main(int argc, char **argv) {
 	files_created = 0;
 	fetched_count = 0;
 	kept = track(101, 2);
-	assert(tidalkeep_enqueue(&kept) == TIDALKEEP_ADDED);
+	assert(tidalkeep_enqueue(&kept) == TIDALKEEP_SKIPPED);
 	drain(&state);
 	assert(fetched_count == 0 && files_created == 0); // no fetch for a kept track
 	enqueue_track(103, 3); // an explicitly removed track can be downloaded again
 	drain(&state);
-	assert(fetched_count == 1 && state.done == 10 && tidalcache_is_kept(103));
+	assert(fetched_count == 1 && state.done == 8 && tidalcache_is_kept(103));
 
 	// Decoder length and TIDAL duration are independent checks.
 	corrupt_once = true;
@@ -368,6 +407,28 @@ int main(int argc, char **argv) {
 	tidalkeep_set_quality(TIDAL_QUALITY_LOW);
 	drain(&state);
 	assert(fetched_quality == TIDAL_QUALITY_HIGH && tidalkeep_quality() == TIDAL_QUALITY_LOW);
+	tidal_track_t change = track(121, 1);
+	char before[512], after[512];
+	assert(tidalcache_find(change.id, before, sizeof(before)));
+	assert(tidalcache_kept_quality(change.id) == TIDAL_QUALITY_HIGH);
+	assert(tidalkeep_enqueue_quality(&change, TIDAL_QUALITY_LOW, false) == TIDALKEEP_SKIPPED);
+	assert(tidalkeep_enqueue_quality(&change, TIDAL_QUALITY_HIGH, true) == TIDALKEEP_SKIPPED);
+	fetched_count = 0;
+	fail_next = 99;
+	assert(tidalkeep_enqueue_quality(&change, TIDAL_QUALITY_LOW, true) == TIDALKEEP_ADDED);
+	drain(&state);
+	assert(state.failed == 1 && fetched_count == 5);
+	assert(tidalcache_find(change.id, after, sizeof(after)) && !strcmp(before, after));
+	assert(tidalcache_kept_quality(change.id) == TIDAL_QUALITY_HIGH);
+	fail_next = 0;
+	tidalkeep_retry_failed();
+	drain(&state);
+	assert(state.failed == 0 && tidalcache_kept_quality(change.id) == TIDAL_QUALITY_LOW);
+	assert(tidalcache_find(change.id, after, sizeof(after)) && strcmp(before, after));
+	assert(access(before, F_OK) != 0);
+	assert(tidalkeep_enqueue_quality(&change, TIDAL_QUALITY_HIRES, true) == TIDALKEEP_ADDED);
+	drain(&state);
+	assert(tidalcache_kept_quality(change.id) == TIDAL_QUALITY_HIRES);
 	puts("tidalkeep-test: queue, retry, kept albums, removal, eviction and transfer progress passed");
 	(void)dir_entries;
 	return 0;
@@ -385,10 +446,80 @@ static void test_reuse(void) {
 	FILE *f = fopen(audio, "w");
 	assert(f && fputs("audio fixture", f) >= 0 && fclose(f) == 0);
 	tidal_track_t t = {.id = 120, .track_number = 1, .duration = 1, .artist = "Example", .title = "Song", .album = "New Name", .album_id = "12345"};
+	tidal_album_t hint = {.id_text = "12345", .title = "New Name", .artist = "Example", .released = "2021"};
+	assert(tidalcache_has_album_folder(&hint));
+	assert(!tidalcache_is_kept(t.id)); // Discovery did not open or register the track.
+	char duplicate[600];
+	snprintf(duplicate, sizeof(duplicate), "%s/Music/Tidal/Example/Duplicate [12345] [2021]", root);
+	assert(mkdir(duplicate, 0755) == 0);
+	assert(!tidalcache_has_album_folder(&hint) && !tidalcache_reuse(&t));
+	assert(rmdir(duplicate) == 0);
+	char ambiguous[700];
+	snprintf(ambiguous, sizeof(ambiguous), "%s/01 - Example - Song.m4a", album);
+	f = fopen(ambiguous, "w");
+	assert(f && fputs("duplicate", f) >= 0 && fclose(f) == 0);
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0);
+	assert(unlink(ambiguous) == 0);
+	char live[700];
+	snprintf(live, sizeof(live), "%s/01 - Example - Song (Live).flac", album);
+	assert(rename(audio, live) == 0);
+	strcpy(audio, live);
+	snprintf(ambiguous, sizeof(ambiguous), "%s/01 - Example - Song (Live).m4a", album);
+	f = fopen(ambiguous, "w");
+	assert(f && fputs("duplicate", f) >= 0 && fclose(f) == 0);
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0 && !tidalcache_reuse(&t));
+	assert(unlink(ambiguous) == 0);
+	t.track_number = 2;
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0);
+	t.track_number = 1;
+	char sidecar[710];
+	snprintf(sidecar, sizeof(sidecar), "%s.tags", audio);
+	f = fopen(sidecar, "w");
+	assert(f && fputs("tidal_id=99999\n", f) >= 0 && fclose(f) == 0);
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0 && !tidalcache_reuse(&t));
+	assert(unlink(sidecar) == 0);
+	char unlabelled[600];
+	snprintf(unlabelled, sizeof(unlabelled), "%s/Music/Tidal/Example/New Name", root);
+	assert(rename(album, unlabelled) == 0);
+	assert(tidalcache_has_album_folder(&hint));
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0 && !tidalcache_reuse(&t));
+	assert(rename(unlabelled, album) == 0);
+	// Exercise both callers against an actual typo, not just the Live suffix.
+	char typo[700], near[700];
+	snprintf(typo, sizeof(typo), "%s/01 - Example - Midnight Reflctions.flac", album);
+	snprintf(near, sizeof(near), "%s/01 - Example - Midnigt Reflection.flac", album);
+	assert(rename(audio, typo) == 0);
+	strcpy(t.title, "Midnight Reflections");
+	f = fopen(near, "w");
+	assert(f && fputs("second candidate", f) >= 0 && fclose(f) == 0);
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0 && !tidalcache_reuse(&t));
+	assert(unlink(near) == 0);
+	strcpy(t.artist, "Exampl");
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0 && !tidalcache_reuse(&t));
+	strcpy(t.artist, "Example");
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 1);
+	assert(tidalcache_remove_track(t.id) && access(typo, R_OK) == 0);
 	assert(tidalcache_reuse(&t));
+	assert(tidalcache_find(t.id, found, sizeof(found)) && !strcmp(found, typo));
+	assert(tidalcache_remove_track(t.id) && rename(typo, audio) == 0);
+	strcpy(t.title, "Song");
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 1);
+	assert(tidalcache_link_album_tracks(&hint, &t, 1) == 0);
+	assert(tidalcache_remove_track(t.id) && access(audio, R_OK) == 0);
+	strcpy(hint.id_text, "54321");
+	assert(!tidalcache_has_album_folder(&hint));
+	assert(tidalcache_reuse(&t));
+	assert(!tidalcache_reuse(&t));
 	assert(tidalcache_find(t.id, found, sizeof(found)) && strcmp(found, audio) == 0);
 	tidal_track_t kept;
+	count_tag_reads = true;
+	tag_reads = 0;
 	assert(tidalcache_kept_track(t.id, &kept) && strcmp(kept.album_id, "12345") == 0);
+	assert(tag_reads == 1);
+	tag_reads = 0;
+	assert(tidalcache_kept_filtered(&kept, 1, 0, "12345", "Example") == 1 && kept.id == t.id);
+	assert(tag_reads == 1);
+	count_tag_reads = false;
 	tidal_album_t groups[2];
 	assert(tidalcache_kept_groups(groups, 2, 0, false, "Example") == 1);
 	assert(strcmp(groups[0].title, "New Name") == 0 && groups[0].track_count == 1);
@@ -399,6 +530,31 @@ static void test_reuse(void) {
 	char cover[700];
 	snprintf(cover, sizeof(cover), "%s/cover.jpg", album);
 	assert(access(cover, F_OK) == 0 && saved_lyrics == 1);
+	assert(tidalcache_kept_groups(groups, 2, 0, false, "Example") == 1);
+	assert(strcmp(groups[0].cover, cover) == 0);
+	assert(tidalcache_kept_track(t.id, &kept) && !strcmp(kept.cover, cover));
+	assert(tidalcache_kept_filtered(&kept, 1, 0, "12345", "Example") == 1 && !strcmp(kept.cover, cover));
+	assert(cover_fetches == 1);
+	tidalcache_refresh_extras(&t);
+	assert(cover_fetches == 1 && saved_lyrics == 1); // Imported cover and existing lyrics stay intact.
+	assert(remove(cover) == 0);
+	tidalcache_refresh_extras(&t);
+	assert(cover_fetches == 2 && saved_lyrics == 1 && access(cover, F_OK) == 0);
+	char owned[512], owned_cover[560];
+	assert(tidalcache_find(101, owned, sizeof(owned)));
+	snprintf(owned_cover, sizeof(owned_cover), "%.*s/cover.jpg", (int)(strrchr(owned, '/') - owned), owned);
+	f = fopen(owned_cover, "w");
+	assert(f && fputs("old", f) >= 0 && fclose(f) == 0);
+	tidal_track_t owned_extras = {.id = 101, .cover = "https://example.invalid/cover"};
+	bad_cover = true;
+	tidalcache_refresh_extras(&owned_extras);
+	f = fopen(owned_cover, "rb");
+	assert(f && fgetc(f) == 'o' && fclose(f) == 0);
+	bad_cover = false;
+	tidalcache_refresh_extras(&owned_extras);
+	f = fopen(owned_cover, "rb");
+	assert(f && fgetc(f) == 0xff && fclose(f) == 0);
+	assert(access(owned, R_OK) == 0 && saved_lyrics == 1);
 	extras_fixture = false;
 	assert(tidalcache_remove_track(t.id) && access(audio, F_OK) == 0);
 	strcpy(t.album, "Old Name");
@@ -426,7 +582,12 @@ lrclib_result_t lrclib_search(const char *title, const char *artist, const char 
 }
 void lrclib_free(lrclib_record_t *records, int count) { (void)records; (void)count; }
 bool lrclib_save(const char *path, const char *text) {
-	assert(strstr(path, "01 - Example - Song.flac") && strcmp(text, "[00:00.00]Correct") == 0);
+	assert((strstr(path, "01 - Example - Song.flac") || strstr(path, "01 - Example - Song (Live).flac")) &&
+		strcmp(text, "[00:00.00]Correct") == 0);
+	char lrc[700];
+	assert(snprintf(lrc, sizeof(lrc), "%.*s.lrc", (int)(strrchr(path, '.') - path), path) < (int)sizeof(lrc));
+	FILE *f = fopen(lrc, "wx");
+	assert(f && fputs(text, f) >= 0 && fclose(f) == 0);
 	saved_lyrics++;
 	return true;
 }
@@ -436,10 +597,12 @@ bool http_get(const char *url, char **body, size_t *len, size_t cap, int secs) {
 	(void)cap; (void)secs;
 	if (!extras_fixture) return false;
 	assert(strcmp(url, "https://example.invalid/cover") == 0);
-	*len = 4;
+	static const unsigned char image[] = {0xff,0xd8,0xff,0xc0,0,7,8,0,1,0,1,0xff,0xd9};
+	cover_fetches++;
+	*len = bad_cover ? 4 : sizeof(image);
 	*body = malloc(*len);
 	assert(*body);
-	memcpy(*body, "\xff\xd8\xff\xd9", *len);
+	memcpy(*body, image, *len);
 	return true;
 }
 const char *http_last_error(void) { return "stub"; }

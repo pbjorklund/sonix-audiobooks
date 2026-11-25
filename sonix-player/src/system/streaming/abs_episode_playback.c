@@ -9,6 +9,7 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char source[SONIX_LINKED_PATH_MAX];
+static char local_source[SONIX_LINKED_PATH_MAX];
 static abs_episode_manifest_t identity;
 static bool active;
 static unsigned generation;
@@ -40,13 +41,17 @@ void abs_episode_playback_register(const char *path, const abs_episode_manifest_
 	pthread_mutex_lock(&lock);
 	if (path && id && strlen(path) < sizeof(source)) {
 		strcpy(source, path);
+		local_source[0] = '\0';
 		identity = *id;
 		generation = audiobookdb_history_generation();
 		saved = -1.;
 		saved_finished = false;
 		saved_mono = 0;
 		active = true;
-	} else active = false;
+	} else {
+		active = false;
+		local_source[0] = '\0';
+	}
 	pthread_mutex_unlock(&lock);
 }
 
@@ -61,6 +66,46 @@ void abs_episode_playback_deactivate(void) {
 	pthread_mutex_lock(&lock);
 	active = false;
 	pthread_mutex_unlock(&lock);
+}
+
+bool abs_episode_playback_local(const char *source_path, char *local, size_t cap) {
+	abs_episode_manifest_t from, to;
+	if (!source_path || !local || !cap) return false;
+	local[0] = '\0';
+	pthread_mutex_lock(&lock);
+	bool ok = !strcmp(source, source_path) && generation == audiobookdb_history_generation();
+	if (ok) from = identity;
+	pthread_mutex_unlock(&lock);
+	if (!ok || !from.audio[0] || !abs_episode_download_path(from.server, from.owner, from.show, from.episode,
+		&to, local, cap)) return false;
+	if (strcmp(from.file, to.file) || strcmp(from.audio, to.audio) || (from.bytes > 0 && from.bytes != to.bytes)) {
+		local[0] = '\0';
+		return false;
+	}
+	return true;
+}
+
+void abs_episode_playback_did_switch(const char *source_path, const char *local) {
+	pthread_mutex_lock(&lock);
+	if (!strcmp(source, source_path) && generation == audiobookdb_history_generation())
+		snprintf(local_source, sizeof(local_source), "%s", local);
+	pthread_mutex_unlock(&lock);
+}
+
+bool abs_episode_playback_switched(const char *source_path) {
+	pthread_mutex_lock(&lock);
+	bool yes = local_source[0] && !strcmp(source, source_path) && generation == audiobookdb_history_generation();
+	pthread_mutex_unlock(&lock);
+	return yes;
+}
+
+bool abs_episode_playback_local_in_use(const char *source_path, char *local, size_t cap) {
+	pthread_mutex_lock(&lock);
+	bool yes = local_source[0] && !strcmp(source, source_path) && generation == audiobookdb_history_generation() &&
+		strlen(local_source) < cap;
+	if (yes) strcpy(local, local_source);
+	pthread_mutex_unlock(&lock);
+	return yes;
 }
 
 double abs_episode_playback_resume(const char *path) {

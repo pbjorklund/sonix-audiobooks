@@ -800,13 +800,13 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 					 "%s %s HTTP/1.0\r\n"
 					 "Host: %s\r\n"
 					 "User-Agent: " HTTP_USER_AGENT "\r\n"
-					 "Accept: */*\r\n"
+					 "Accept: %s\r\n"
 					 "Accept-Encoding: identity\r\n"
 					 "Connection: close\r\n"
 					 "%s"
 					 "%s"
 					 "\r\n",
-					 method, u->path, host_header, body_headers, extra_headers ? extra_headers : "");
+					 method, u->path, host_header, req->accept ? req->accept : "*/*", body_headers, extra_headers ? extra_headers : "");
 	// Compare the length against the buffer, not just against zero: snprintf
 	// truncates but returns what it would have written, so an over-long
 	// request would put bytes from past the end of the stack on the wire. It

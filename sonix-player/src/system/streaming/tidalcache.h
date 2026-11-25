@@ -177,8 +177,22 @@ void tidalcache_clear(void);
 
 // Publishes completed audio and metadata under Music/Tidal. Idempotent.
 bool tidalcache_keep(const tidal_track_t *track, const char *path, bool complete_transfer);
+enum {
+	TIDALCACHE_QUALITY_NONE = -3,
+	TIDALCACHE_QUALITY_PROTECTED = -2, // linked imports or legacy cache-only downloads
+	TIDALCACHE_QUALITY_UNKNOWN = -1,  // Sonix-owned download made before quality was recorded
+};
+int tidalcache_kept_quality(long track_id);
+bool tidalcache_keep_quality(const tidal_track_t *track, const char *path, bool complete_transfer,
+	int quality, const char *replace_path);
+bool tidalcache_has_album_folder(const tidal_album_t *album);
+// Link identifiable existing files without opening audio or taking ownership.
+int tidalcache_link_album_tracks(const tidal_album_t *album, const tidal_track_t *tracks, int count);
 bool tidalcache_reuse(const tidal_track_t *track);
 void tidalcache_download_extras(const tidal_track_t *track);
+// Refresh artwork for Sonix-owned downloads without replacing existing lyrics
+// or artwork next to imported audio.
+void tidalcache_refresh_extras(const tidal_track_t *track);
 
 // Moves previously kept cache files into Music/Tidal without redownloading.
 void tidalcache_publish_legacy(void);

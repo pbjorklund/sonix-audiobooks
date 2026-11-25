@@ -2,6 +2,16 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 1.3.1.3 (2026-11-25)
+
+First release on the fork's update channel for the original HiBy R1.
+
+- **Offline Downloads:** Browse Audiobookshelf and TIDAL downloads from the SD card. Downloaded Audiobookshelf podcasts start from the saved local position, and progress sync runs separately. TIDAL's explicit Refresh can still go online.
+- **TIDAL download quality:** Downloading again at a different quality asks before replacing existing copies. A failed replacement keeps the old copy playable. Linked imports are left alone.
+- **TIDAL library:** Play downloads offline, save albums for later, and link matching files already on the card without taking ownership of them.
+- **Audiobookshelf podcasts:** Browse shows and episodes, filter by listening state, and play the oldest or newest unfinished episode. Downloaded episodes keep artwork and playback progress.
+- **Sleep timer:** Start it from Control Center or use a daily schedule in Settings.
+
 ## Sonix Audiobooks 0.6.2 - 2026-11-23
 
 - **Book detail cover:** The book cover now renders at the top of the detail page (it was previously placed below the fold and could render as a blank card until a later redraw). Fixed the cover decode completing without a repaint.

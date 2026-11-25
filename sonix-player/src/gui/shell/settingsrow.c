@@ -980,10 +980,10 @@ static void wheel_unit(lv_obj_t *parent, const char *text) {
 	lv_obj_set_style_text_font(label, &font_ui_22, 0);
 }
 
-void settingsrow_toggle_duration(lv_obj_t *parent, const char *title, lv_event_cb_t toggle_cb,
-								 lv_event_cb_t change_cb, settingsrow_duration_t *out) {
+void settingsrow_clock_wheels(lv_obj_t *parent, const char *title, lv_event_cb_t change_cb,
+								 settingsrow_duration_t *out) {
 	memset(out, 0, sizeof(*out));
-	out->card = settingsrow_toggle_pills(parent, title, toggle_cb, &out->toggle, &out->wheels);
+	out->card = settingsrow_pills(parent, title, &out->wheels);
 
 	lv_obj_set_flex_align(out->wheels, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_gap(out->wheels, 10, 0);
@@ -994,27 +994,13 @@ void settingsrow_toggle_duration(lv_obj_t *parent, const char *title, lv_event_c
 	static char hours_options[24 * 4];
 	static char minutes_options[60 * 4];
 	if (!hours_options[0]) {
-		fill_wheel_numbers(hours_options, sizeof(hours_options), 23, "%d");
+		fill_wheel_numbers(hours_options, sizeof(hours_options), 23, "%02d");
 		fill_wheel_numbers(minutes_options, sizeof(minutes_options), 59, "%02d");
 	}
 
 	out->hours = make_duration_roller(out->wheels, hours_options, 76, change_cb);
-	wheel_unit(out->wheels, "h");
+	wheel_unit(out->wheels, ":");
 	out->minutes = make_duration_roller(out->wheels, minutes_options, 86, change_cb);
-	wheel_unit(out->wheels, "min");
-}
-
-void settingsrow_duration_expanded(settingsrow_duration_t *d, bool on) {
-	if (!d || !d->toggle) {
-		return;
-	}
-	if (on) {
-		lv_obj_add_state(d->toggle, LV_STATE_CHECKED);
-		lv_obj_set_hidden(d->wheels, false);
-	} else {
-		lv_obj_remove_state(d->toggle, LV_STATE_CHECKED);
-		lv_obj_set_hidden(d->wheels, true);
-	}
 }
 
 int settingsrow_duration_minutes(const settingsrow_duration_t *d) {

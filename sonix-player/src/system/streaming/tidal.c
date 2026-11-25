@@ -69,6 +69,9 @@
 // at a fake server and exercise the whole flow without a subscription, the way
 // Qobuz does (see tools/fake_qobuz.py).
 #define TIDAL_API_DEFAULT "https://api.tidal.com/v1"
+#define TIDAL_COLLECTION_DEFAULT "https://openapi.tidal.com/v2"
+#define SAVED_ITEMS_PATH "/userCollectionSaveForLaters/me/relationships/items"
+#define TIDAL_JSONAPI "application/vnd.api+json"
 #define TIDAL_AUTH_DEFAULT "https://auth.tidal.com/v1/oauth2"
 
 // Where the images live. Not an API endpoint but a static-file CDN, whose URLs
@@ -89,6 +92,7 @@
 #define TOKEN_MARGIN_SECS 60
 
 static char api_url[256];
+static char collection_url[256];
 static char auth_url[256];
 static char client_id[64];
 static char client_secret[128];
@@ -296,6 +300,7 @@ static void load_session(void) {
 
 void tidal_init(void) {
 	snprintf(api_url, sizeof(api_url), "%s", config_get("tidal", "base_url", TIDAL_API_DEFAULT));
+	snprintf(collection_url, sizeof(collection_url), "%s", config_get("tidal", "collection_url", TIDAL_COLLECTION_DEFAULT));
 	snprintf(auth_url, sizeof(auth_url), "%s", config_get("tidal", "auth_url", TIDAL_AUTH_DEFAULT));
 
 	// Spaces become %20 here, once. Writing them as '+' in the form would be
@@ -544,7 +549,7 @@ static bool token_is_fresh(void) {
 // place: twenty functions must not each remember to check expiry, and the case
 // that matters is not "the token expired by the local clock" but "Tidal says
 // no" -- this device's clock can be anything after a flat battery.
-static bool api_call(const char *url, char **body, json_doc_t *doc) {
+static bool api_read(const char *url, char **body, json_doc_t *doc, bool collection) {
 	clear_error();
 
 	if (!tidal_configured()) {
@@ -575,6 +580,7 @@ static bool api_call(const char *url, char **body, json_doc_t *doc) {
 		// like a network error, forever, until the account was signed out by hand.
 		http_req_t req = {
 			.extra_headers = headers,
+			.accept = collection ? TIDAL_JSONAPI : NULL,
 			.want_error_body = true,
 			.allow_empty_body = true,
 		};
@@ -622,10 +628,12 @@ static bool api_call(const char *url, char **body, json_doc_t *doc) {
 	return false;
 }
 
-// A write: POST or DELETE with a form body, where success is read from the
-// status code rather than the content (a successful DELETE answers 204 with no
-// body).
-static bool api_write(const char *method, const char *url, const char *form) {
+static bool api_call(const char *url, char **body, json_doc_t *doc) {
+	return api_read(url, body, doc, false);
+}
+
+// Success is read from the status code; some writes return no body.
+static bool api_write_type(const char *method, const char *url, const char *form, const char *type) {
 	clear_error();
 
 	if (!tidal_logged_in()) {
@@ -647,6 +655,8 @@ static bool api_write(const char *method, const char *url, const char *form) {
 			.method = method,
 			.extra_headers = headers,
 			.body = form,
+			.content_type = type,
+			.accept = type,
 			.want_error_body = true,
 			.allow_empty_body = true,
 		};
@@ -669,6 +679,28 @@ static bool api_write(const char *method, const char *url, const char *form) {
 		}
 
 		bool ok = status >= 200 && status < 300;
+		if (type && !strcmp(method, "POST") && (status == 200 || status == 409)) {
+			json_doc_t doc;
+			if (body && json_parse(body, &doc)) {
+				int root = json_root(&doc);
+				char code[64];
+				if (status == 409) {
+					int errors = json_get(&doc, root, "errors");
+					ok = json_len(&doc, errors) == 1 && json_obj_str(&doc, json_at(&doc, errors, 0), "code", code, sizeof(code)) &&
+						!strcmp(code, "DUPLICATE_ITEMS_IN_COLLECTION");
+				} else {
+					int skipped = json_get(&doc, json_get(&doc, root, "meta"), "skipped");
+					if (json_len(&doc, skipped) > 0 && (!json_obj_str(&doc, json_at(&doc, skipped, 0), "reason", code, sizeof(code)) ||
+						strcmp(code, "ALREADY_PRESENT"))) {
+						json_free(&doc);
+						free(body);
+						set_error("%s", tr("no_results"));
+						return false;
+					}
+				}
+				json_free(&doc);
+			}
+		}
 		if (!ok) {
 			json_doc_t doc;
 			if (body && body[0] && json_parse(body, &doc)) {
@@ -686,6 +718,10 @@ static bool api_write(const char *method, const char *url, const char *form) {
 		return ok;
 	}
 	return false;
+}
+
+static bool api_write(const char *method, const char *url, const char *form) {
+	return api_write_type(method, url, form, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,7 +1222,7 @@ int tidal_search_artists(const char *query, int offset, tidal_artist_t *out, int
 // catalogue contents
 // ---------------------------------------------------------------------------
 
-int tidal_album_tracks(const char *album_id, int offset, tidal_track_t *out, int max) {
+static int album_tracks(const char *album_id, const tidal_album_t *hint, int offset, tidal_track_t *out, int max) {
 	if (!album_id || !*album_id || max <= 0 || offset < 0) {
 		return 0;
 	}
@@ -1205,7 +1241,8 @@ int tidal_album_tracks(const char *album_id, int offset, tidal_track_t *out, int
 
 	char *body = NULL;
 	json_doc_t doc;
-	if (api_call(url, &body, &doc)) {
+	if (hint) album = *hint;
+	else if (api_call(url, &body, &doc)) {
 		read_album(&doc, json_root(&doc), &album);
 		api_done(body, &doc);
 	}
@@ -1233,6 +1270,14 @@ int tidal_album_tracks(const char *album_id, int offset, tidal_track_t *out, int
 
 	api_done(body, &doc);
 	return count;
+}
+
+int tidal_album_tracks(const char *album_id, int offset, tidal_track_t *out, int max) {
+	return album_tracks(album_id, NULL, offset, out, max);
+}
+
+int tidal_album_tracks_known(const tidal_album_t *album, int offset, tidal_track_t *out, int max) {
+	return album ? album_tracks(album->id_text, album, offset, out, max) : 0;
 }
 
 int tidal_artist_albums(long artist_id, int offset, tidal_album_t *out, int max) {
@@ -1634,6 +1679,97 @@ bool tidal_dash_segment_url(const tidal_stream_t *stream, int number, char *out,
 
 	int n = snprintf(out, size, "%.*s%d%s", (int)(at - tmpl), tmpl, number, at + 8);
 	return n > 0 && (size_t)n < size;
+}
+
+// Saved for later is a v2 JSON:API relationship, not the v1 favourites list.
+static bool saved_album_id(const char *id) {
+	return id && *id && strlen(id) < TIDAL_ID_MAX && strspn(id, "0123456789") == strlen(id);
+}
+
+static int included_resource(const json_doc_t *doc, int included, const char *type, const char *id) {
+	for (int i = 0, count = json_len(doc, included); i < count; i++) {
+		int item = json_at(doc, included, i);
+		char kind[32], value[TIDAL_ID_MAX];
+		if (json_obj_str(doc, item, "type", kind, sizeof(kind)) && !strcmp(type, kind) &&
+			json_obj_str(doc, item, "id", value, sizeof(value)) && !strcmp(id, value)) return item;
+	}
+	return -1;
+}
+
+static int saved_related(const json_doc_t *doc, int included, int album, const char *relationship, const char *type) {
+	int rel = json_get(doc, json_get(doc, album, "relationships"), relationship);
+	int link = json_at(doc, json_get(doc, rel, "data"), 0);
+	char id[TIDAL_ID_MAX];
+	return json_obj_str(doc, link, "id", id, sizeof(id)) ? included_resource(doc, included, type, id) : -1;
+}
+
+int tidal_saved_albums(tidal_album_t *out, int max) {
+	if (!out || max <= 0) return -1;
+	const char query[] = "?include=items,items.albums:artists,items.albums:coverArt";
+	const char cursor_param[] = "page[cursor]=";
+	char url[1200];
+	char cursor[512] = "";
+	int count = 0;
+	for (int page = 0; page < 64; page++) {
+		snprintf(url, sizeof(url), "%s" SAVED_ITEMS_PATH "%s%s%s", collection_url, query, cursor[0] ? "&page%5Bcursor%5D=" : "", cursor);
+		char *body = NULL;
+		json_doc_t doc;
+		if (!api_read(url, &body, &doc, true)) return -1;
+		int root = json_root(&doc), data = json_get(&doc, root, "data"), included = json_get(&doc, root, "included");
+		if (data < 0 || doc.toks[data].type != JSON_ARRAY) {
+			api_done(body, &doc);
+			break;
+		}
+		for (int i = 0, len = json_len(&doc, data); i < len && count < max; i++) {
+			int link = json_at(&doc, data, i);
+			char type[32], id[TIDAL_ID_MAX];
+			if (!json_obj_str(&doc, link, "type", type, sizeof(type)) || strcmp(type, "albums") ||
+				!json_obj_str(&doc, link, "id", id, sizeof(id)) || !saved_album_id(id)) continue;
+			int item = included_resource(&doc, included, "albums", id);
+			int attrs = json_get(&doc, item, "attributes");
+			tidal_album_t *album = &out[count++];
+			*album = (tidal_album_t){.saved_on_account = true};
+			snprintf(album->id_text, sizeof(album->id_text), "%s", id);
+			if (!json_obj_str(&doc, attrs, "title", album->title, sizeof(album->title)) || !album->title[0])
+				snprintf(album->title, sizeof(album->title), "%s", id);
+			album->track_count = (int)json_obj_long(&doc, attrs, "numberOfItems", 0);
+			char released[32];
+			if (json_obj_str(&doc, attrs, "releaseDate", released, sizeof(released)))
+				snprintf(album->released, sizeof(album->released), "%.4s", released);
+			int artist = saved_related(&doc, included, item, "artists", "artists");
+			json_obj_str(&doc, json_get(&doc, artist, "attributes"), "name", album->artist, sizeof(album->artist));
+			int art = saved_related(&doc, included, item, "coverArt", "artworks");
+			int files = json_get(&doc, json_get(&doc, art, "attributes"), "files");
+			json_obj_str(&doc, json_at(&doc, files, 0), "href", album->cover, sizeof(album->cover));
+		}
+		char next[1200];
+		bool more = json_obj_str(&doc, json_get(&doc, root, "links"), "next", next, sizeof(next)) && next[0];
+		api_done(body, &doc);
+		if (!more || count == max) return count;
+		// Only reuse the opaque cursor, never a server-provided host or path.
+		char *value = strstr(next, cursor_param);
+		if (value) value += sizeof(cursor_param) - 1;
+		else if ((value = strstr(next, "page%5Bcursor%5D=")) || (value = strstr(next, "page%5bcursor%5d=")))
+			value += sizeof("page%5Bcursor%5D=") - 1;
+		if (!value) break;
+		size_t len = strcspn(value, "&#");
+		if (!len || len >= sizeof(cursor) || (strlen(cursor) == len && !strncmp(cursor, value, len))) break;
+		if (strspn(value, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~%+=/") < len) break;
+		snprintf(cursor, sizeof(cursor), "%.*s", (int)len, value);
+	}
+	set_error("%s", tr("tidal_unreadable_tidal_reply"));
+	return -1;
+}
+
+bool tidal_saved_album_set(const char *id, bool saved) {
+	if (!saved_album_id(id)) {
+		set_error("%s", tr("tidal_unreadable_tidal_reply"));
+		return false;
+	}
+	char url[512], body[128];
+	snprintf(url, sizeof(url), "%s" SAVED_ITEMS_PATH, collection_url);
+	snprintf(body, sizeof(body), "{\"data\":[{\"type\":\"albums\",\"id\":\"%s\"}]}", id);
+	return api_write_type(saved ? "POST" : "DELETE", url, body, TIDAL_JSONAPI);
 }
 
 // ---------------------------------------------------------------------------

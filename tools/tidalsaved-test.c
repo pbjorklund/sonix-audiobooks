@@ -14,6 +14,7 @@ int main(int argc, char **argv) {
 	assert(!tidalsaved_has(root, a.id_text));
 	assert(tidalsaved_list(root, 0, out, 2) == 0);
 	assert(!tidalsaved_set(NULL, &a, true));
+	assert(tidalsaved_list(NULL, 0, out, 2) == -1);
 	assert(tidalsaved_set(root, &a, true));
 	assert(tidalsaved_set(root, &a, true));
 	assert(tidalsaved_has(root, a.id_text));
@@ -37,5 +38,10 @@ int main(int argc, char **argv) {
 	assert(memcmp(ids, actual, sizeof(ids)) == 0);
 	assert(tidalsaved_playlist_set(root, "p1", "Updated", ids + 1, 2));
 	assert(tidalsaved_playlist_tracks(root, "p1", 1, actual, 4) == 1 && actual[0] == 3);
-	puts("tidalsaved-test: persisted albums and offline playlist order passed");
+	char db[768];
+	assert((size_t)snprintf(db, sizeof(db), "%s/.local/tidal-saved.db", root) < sizeof(db));
+	FILE *bad = fopen(db, "wb");
+	assert(bad && fputs("not a database", bad) >= 0 && fclose(bad) == 0);
+	assert(tidalsaved_list(root, 0, out, 2) == -1);
+	puts("tidalsaved-test: persisted albums, storage errors and offline playlist order passed");
 }

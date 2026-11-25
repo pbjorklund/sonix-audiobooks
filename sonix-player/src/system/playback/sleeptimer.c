@@ -1,48 +1,17 @@
+#define _POSIX_C_SOURCE 200809L
 #include "sleeptimer.h"
 
 #include <stdio.h>
 #include <time.h>
-
 #include "src/system/core/config.h"
 
-// A whole day, which is the most the two wheels can be set to and well past
-// anything anybody means by a sleep timer. The clamp is here so a hand-edited
-// config cannot arm something that never expires.
-#define SLEEP_MAX_MINUTES (23 * 60 + 59)
+#define SECTION "sleep_timer"
+#define FADE_MS 3000
 
-// Where each one is written down. The audiobook pair are the keys the audiobook
-// timer has always used, so an existing config keeps its switch and its length.
-// A length of nought there means no time chosen: "at the end of the chapter" is
-// a switch of its own on the audiobook page, not a timer length.
-static const struct {
-	const char *section;
-	const char *key_on;
-	const char *key_minutes;
-	const char *name;
-} PROFILES[SLEEPTIMER_COUNT] = {
-	[SLEEPTIMER_MUSIC] = {"player", "sleep_timer", "sleep_minutes", "music"},
-	[SLEEPTIMER_AUDIOBOOK] = {"audiobook", "sleep_timer", "sleep_minutes", "audiobook"},
-	[SLEEPTIMER_PODCAST] = {"podcast", "sleep_timer", "sleep_minutes", "podcast"},
-};
-
-typedef struct {
-	bool enabled;
-	int minutes;
-	bool counting;
-	long long remaining_ms;
-	long long last_ms;
-} timer_state_t;
-
-static timer_state_t timers[SLEEPTIMER_COUNT];
-
-// Which kind is playing, kept apart from the countdowns: "something is playing"
-// and "a stretch is running" are not the same thing, and folding them into one
-// flag is how switching the option off and on again while the music played
-// armed nothing at all -- the first call cleared the flag the second one needed
-// to read.
-static sleeptimer_kind_t playing_kind = SLEEPTIMER_COUNT;
-
-static bool in_range(sleeptimer_kind_t kind) { return kind >= 0 && kind < SLEEPTIMER_COUNT; }
+static bool enabled, scheduled, counting;
+static int minutes, start_minute, end_minute, playing_source;
+static long long deadline;
+static int gain_q10 = 1024;
 
 static long long now_ms(void) {
 	struct timespec ts;
@@ -50,125 +19,102 @@ static long long now_ms(void) {
 	return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int clamp_minutes(int minutes) {
-	if (minutes < 0) {
-		return 0;
-	}
-	return minutes > SLEEP_MAX_MINUTES ? SLEEP_MAX_MINUTES : minutes;
+static bool valid_duration(long value) { return value == 15 || value == 30 || value == 60; }
+static bool valid_minute(long value) { return value >= 0 && value < 1440; }
+
+static void reset(void) {
+	counting = false;
+	gain_q10 = 1024;
 }
 
 void sleeptimer_init(void) {
-	for (int i = 0; i < SLEEPTIMER_COUNT; i++) {
-		timers[i].enabled = config_get_int(PROFILES[i].section, PROFILES[i].key_on, 0) != 0;
-		timers[i].minutes = clamp_minutes((int)config_get_int(PROFILES[i].section, PROFILES[i].key_minutes, 0));
-		timers[i].counting = false;
-		timers[i].remaining_ms = 0;
-	}
-	playing_kind = SLEEPTIMER_COUNT;
+	// Only migrate the Audiobookshelf preference if no global preference exists.
+	// Keep it as the selected duration, but don't unexpectedly arm other audio.
+	long duration = config_get_int(SECTION, "minutes", config_get_int("audiobookshelf", "sleep_minutes", 30));
+	minutes = valid_duration(duration) ? (int)duration : 30;
+	enabled = config_get_int(SECTION, "enabled", 0) != 0;
+	scheduled = config_get_int(SECTION, "scheduled", 0) != 0;
+	long start = config_get_int(SECTION, "start", 22 * 60);
+	long end = config_get_int(SECTION, "end", 7 * 60);
+	start_minute = valid_minute(start) ? (int)start : 22 * 60;
+	end_minute = valid_minute(end) ? (int)end : 7 * 60;
+	playing_source = 0;
+	reset();
 }
 
-bool sleeptimer_enabled(sleeptimer_kind_t kind) { return in_range(kind) && timers[kind].enabled; }
+bool sleeptimer_enabled(void) { return enabled; }
+int sleeptimer_minutes(void) { return minutes; }
+bool sleeptimer_scheduled(void) { return scheduled; }
+int sleeptimer_start_minute(void) { return start_minute; }
+int sleeptimer_end_minute(void) { return end_minute; }
 
-int sleeptimer_minutes(sleeptimer_kind_t kind) { return in_range(kind) ? timers[kind].minutes : 0; }
-
-// Armed means there is a stretch to count: switched on and longer than nothing.
-static bool armed(sleeptimer_kind_t kind) { return timers[kind].enabled && timers[kind].minutes > 0; }
-
-// Starts a full stretch, or stops counting, from the state as it stands. Every
-// change goes through here, so there is one place that decides and one place
-// where `remaining_ms` is ever set.
-static void restart(sleeptimer_kind_t kind) {
-	timer_state_t *t = &timers[kind];
-	t->counting = playing_kind == kind && armed(kind);
-	t->remaining_ms = t->counting ? (long long)t->minutes * 60000 : 0;
-	t->last_ms = now_ms();
+bool sleeptimer_armed(void) {
+	if (enabled) return true;
+	if (!scheduled) return false;
+	time_t now = time(NULL);
+	struct tm local;
+	if (now == (time_t)-1 || !localtime_r(&now, &local)) return false;
+	int minute = local.tm_hour * 60 + local.tm_min;
+	return start_minute < end_minute ? minute >= start_minute && minute < end_minute
+		: minute >= start_minute || minute < end_minute;
 }
 
-void sleeptimer_set_enabled(sleeptimer_kind_t kind, bool on) {
-	if (!in_range(kind) || on == timers[kind].enabled) {
-		return;
-	}
-	timers[kind].enabled = on;
-	config_set_int(PROFILES[kind].section, PROFILES[kind].key_on, on ? 1 : 0);
+void sleeptimer_set_enabled(bool value) {
+	if (enabled == value) return;
+	enabled = value;
+	config_set_int(SECTION, "enabled", value);
 	config_save();
-	// Switching it off in the middle of a stretch disarms it now, and switching
-	// it on while something is already playing starts one: otherwise the setting
-	// would only take effect at the next pause.
-	restart(kind);
 }
 
-void sleeptimer_set_minutes(sleeptimer_kind_t kind, int minutes) {
-	if (!in_range(kind)) {
-		return;
-	}
-	minutes = clamp_minutes(minutes);
-	if (minutes == timers[kind].minutes) {
-		return;
-	}
-	timers[kind].minutes = minutes;
-	config_set_int(PROFILES[kind].section, PROFILES[kind].key_minutes, minutes);
+void sleeptimer_set_minutes(int value) {
+	if (!valid_duration(value) || minutes == value) return;
+	minutes = value;
+	config_set_int(SECTION, "minutes", value);
 	config_save();
-	// Moving the wheel is choosing a new stretch, not editing the one running:
-	// whoever just set thirty minutes means thirty minutes from now.
-	restart(kind);
+	reset();
 }
 
-void sleeptimer_note_playing(sleeptimer_kind_t kind) {
-	if (!in_range(kind)) {
-		kind = SLEEPTIMER_COUNT; // nothing any of them counts
-	}
-	if (kind == playing_kind) {
-		return;
-	}
-	playing_kind = kind;
-	// All of them, not only the one named: whatever stopped playing has a
-	// countdown to put away, and going from an album to a podcast is both at
-	// once.
-	for (int i = 0; i < SLEEPTIMER_COUNT; i++) {
-		restart((sleeptimer_kind_t)i);
-		if (timers[i].counting) {
-			fprintf(stderr, "sleeptimer: %s, %d min\n", PROFILES[i].name, timers[i].minutes);
-		}
-	}
+void sleeptimer_set_scheduled(bool value) {
+	if (scheduled == value) return;
+	scheduled = value;
+	config_set_int(SECTION, "scheduled", value);
+	config_save();
 }
 
-bool sleeptimer_running(sleeptimer_kind_t kind) { return in_range(kind) && timers[kind].counting; }
-
-bool sleeptimer_any_running(void) {
-	for (int i = 0; i < SLEEPTIMER_COUNT; i++) {
-		if (timers[i].counting) {
-			return true;
-		}
-	}
-	return false;
+void sleeptimer_set_window(int start, int end) {
+	if (!valid_minute(start) || !valid_minute(end) || (start == start_minute && end == end_minute)) return;
+	start_minute = start;
+	end_minute = end;
+	config_set_int(SECTION, "start", start);
+	config_set_int(SECTION, "end", end);
+	config_save();
 }
 
-bool sleeptimer_expired(sleeptimer_kind_t kind) {
-	if (!sleeptimer_running(kind)) {
+void sleeptimer_note_playing(int source) {
+	if (source == playing_source) return;
+	playing_source = source;
+	reset();
+}
+
+bool sleeptimer_expired(void) {
+	if (!playing_source || !sleeptimer_armed()) {
+		reset();
 		return false;
 	}
-	timer_state_t *t = &timers[kind];
-
 	long long now = now_ms();
-	long long elapsed = now - t->last_ms;
-	t->last_ms = now;
-	if (elapsed < 0) {
-		elapsed = 0; // the clock is monotonic, but do not trust a negative step
+	if (!counting) {
+		deadline = now + (long long)minutes * 60000;
+		counting = true;
+		fprintf(stderr, "sleeptimer: %d min\n", minutes);
 	}
-
-	if (elapsed >= t->remaining_ms) {
-		t->counting = false;
-		t->remaining_ms = 0;
-		fprintf(stderr, "sleeptimer: %s, time is up; stopping\n", PROFILES[kind].name);
+	if (gain_q10 == 0) return false;
+	long long elapsed = now - deadline;
+	if (elapsed >= FADE_MS) {
+		gain_q10 = 0;
 		return true;
 	}
-	t->remaining_ms -= elapsed;
+	if (elapsed > 0) gain_q10 = (int)(((FADE_MS - elapsed) * 1024 + FADE_MS - 1) / FADE_MS);
 	return false;
 }
 
-int sleeptimer_remaining(sleeptimer_kind_t kind) {
-	if (!sleeptimer_running(kind)) {
-		return 0;
-	}
-	return (int)((timers[kind].remaining_ms + 999) / 1000);
-}
+int sleeptimer_gain_q10(void) { return gain_q10; }

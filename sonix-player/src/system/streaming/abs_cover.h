@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include "abs_profiles.h" // abs_auth_snapshot_t
+#include "src/system/net/http.h" // http_op_t
 
 // ---------------------------------------------------------------------------
 // The authenticated Audiobookshelf cover cache (spec §9.1 cover endpoint and
@@ -100,5 +101,15 @@ bool abs_cover_fetch(const abs_auth_snapshot_t *auth, const char *item_id,
 // Small width-only variant, cached separately from the larger detail image.
 bool abs_cover_fetch_shelf(const abs_auth_snapshot_t *auth, const char *item_id,
 					 char *path_out, size_t path_size);
+bool abs_cover_fetch_shelf_op(const abs_auth_snapshot_t *auth, const char *item_id,
+	http_op_t *op, char *path_out, size_t path_size);
+
+// Read-only lookup; not a network operation and does not require a login.
+bool abs_cover_cached(const char *server, const char *item, char *out, size_t cap);
+bool abs_cover_cached_shelf(const char *server, const char *item, char *out, size_t cap);
+
+// Store optional artwork next to verified episode audio in a card-checked folder.
+bool abs_cover_download_episode(const abs_auth_snapshot_t *auth, const char *show, const char *folder,
+	const volatile int *cancel, http_op_t *op);
 
 #endif /* ABS_COVER_H */

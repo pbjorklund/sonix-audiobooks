@@ -51,6 +51,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 static const char *work; // argv[1]
 #define STUB_SERVER "http://stub.invalid"
@@ -199,6 +200,16 @@ int http_stream_read(http_stream_t *st, void *buf, int len) {
 	}
 	stream_body.pos += want;
 	return (int)want;
+}
+
+bool http_stream_open_ex_op(http_stream_t *st, const char *url, const char *headers,
+	int timeout, http_op_t *op, int *status) {
+	(void)status;
+	return !http_op_cancelled(op) && http_stream_open_ex(st, url, headers, timeout);
+}
+
+int http_stream_read_op(http_stream_t *st, void *buf, int len, http_op_t *op) {
+	return http_op_cancelled(op) ? -1 : http_stream_read(st, buf, len);
 }
 
 void http_stream_close(http_stream_t *st) {
@@ -844,6 +855,24 @@ static void cover_basic_tests(void) {
 	for (size_t i = 0; i < sizeof(expected); i++) expected[i] = (char)(0x41 + (unsigned char)i);
 	expect_int("cover bytes complete", (long)file_size(path), 8192);
 	expect_true("cover bytes round-trip", file_bytes_equal(path, expected, 8192));
+	char cached[512], folder[1024], downloaded[1050];
+	int opens = stream_spy.opens;
+	expect_true("offline cover lookup", abs_cover_cached(STUB_SERVER "/", "it-cover", cached, sizeof(cached)));
+	expect_str("offline cover path", cached, path);
+	expect_true("offline cover does not cross servers", !abs_cover_cached("http://another.test", "it-cover", cached, sizeof(cached)));
+	expect_true("missing cover clears previous path", cached[0] == '\0');
+	expect_int("offline lookup performed no requests", stream_spy.opens, opens);
+	snprintf(folder, sizeof(folder), "%s/episode", work);
+	assert(mkdir(folder, 0700) == 0);
+	snprintf(downloaded, sizeof(downloaded), "%s/.abs-show.jpg", folder);
+	expect_true("episode cover sidecar saved", abs_cover_download_episode(&snap, "it-cover", folder, NULL, NULL));
+	expect_true("episode cover bytes round-trip", file_bytes_equal(downloaded, expected, 8192));
+	assert(unlink(downloaded) == 0);
+	stream_body.die_mid_body = true;
+	stream_body.length = 64 * 1024;
+	expect_true("interrupted episode cover not published", !abs_cover_download_episode(&snap, "it-cover", folder, NULL, NULL));
+	expect_true("interrupted cover temporary file removed", rmdir(folder) == 0);
+	stream_program(8192, 0x41);
 	{
 		char dir[600];
 		snprintf(dir, sizeof(dir), "%s/.local/abs-cover-cache", work);
@@ -881,6 +910,9 @@ static void shelf_cover_tests(void) {
 	long long opens = stream_spy.opens;
 	assert(abs_cover_fetch_shelf(&snap, "it-shelf", hit, sizeof(hit)));
 	assert(!strcmp(shelf, hit) && stream_spy.opens == opens);
+	expect_true("read-only shelf lookup", abs_cover_cached_shelf(snap.server, "it-shelf", hit, sizeof(hit)));
+	expect_str("read-only shelf lookup selects small cover", hit, shelf);
+	expect_int("read-only shelf lookup performed no requests", stream_spy.opens, opens);
 	cover_image_t image;
 	assert(cover_load_image_file(shelf, 126, 126, COVER_FIT_CONTAIN, &image));
 	assert(image.dsc.header.w == 32 && image.dsc.header.h == 48);

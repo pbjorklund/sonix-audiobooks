@@ -23,6 +23,7 @@ typedef struct {
 	tidal_track_t track;
 	int attempts;
 	int quality;
+	int replace_quality;
 } tidalkeep_item_t;
 
 int tidalkeep_quality(void) {
@@ -46,6 +47,7 @@ static tidalkeep_item_t failed[TIDALKEEP_MAX];
 static int failed_len;
 static int done_count;
 static long current_id;
+static char current_album[TIDAL_ID_MAX];
 static bool started;
 
 static tidalkeep_done_cb_t done_cb;
@@ -88,8 +90,16 @@ static bool is_queued(long id) {
 	return false;
 }
 
-tidalkeep_enqueue_result_t tidalkeep_enqueue(const tidal_track_t *track) {
-	if (!track || track->id <= 0 || !track->streamable) {
+bool tidalkeep_quality_differs(int kept_quality, int requested_quality) {
+	return kept_quality >= TIDALCACHE_QUALITY_UNKNOWN && kept_quality != requested_quality;
+}
+
+tidalkeep_enqueue_result_t tidalkeep_enqueue_quality(const tidal_track_t *track, int quality, bool replace) {
+	if (!track || track->id <= 0 || !track->streamable || quality < TIDAL_QUALITY_LOW || quality > TIDAL_QUALITY_HIRES) {
+		return TIDALKEEP_SKIPPED;
+	}
+	int kept_quality = tidalcache_kept_quality(track->id);
+	if (kept_quality != TIDALCACHE_QUALITY_NONE && (!replace || !tidalkeep_quality_differs(kept_quality, quality))) {
 		return TIDALKEEP_SKIPPED;
 	}
 	pthread_mutex_lock(&lock);
@@ -118,10 +128,14 @@ tidalkeep_enqueue_result_t tidalkeep_enqueue(const tidal_track_t *track) {
 			break;
 		}
 	}
-	queue[queue_len++] = (tidalkeep_item_t){.track = *track, .quality = tidalkeep_quality()};
+	queue[queue_len++] = (tidalkeep_item_t){.track = *track, .quality = quality, .replace_quality = kept_quality};
 	pthread_cond_signal(&wake);
 	pthread_mutex_unlock(&lock);
 	return TIDALKEEP_ADDED;
+}
+
+tidalkeep_enqueue_result_t tidalkeep_enqueue(const tidal_track_t *track) {
+	return tidalkeep_enqueue_quality(track, tidalkeep_quality(), false);
 }
 
 tidalkeep_state_t tidalkeep_state(void) {
@@ -133,6 +147,26 @@ tidalkeep_state_t tidalkeep_state(void) {
 		.current = current_id,
 		.active = queue_len > 0 || current_id != 0,
 	};
+	pthread_mutex_unlock(&lock);
+	return state;
+}
+
+tidalkeep_activity_t tidalkeep_activity(long track_id, const char *album_id) {
+	bool by_album = !track_id && album_id && *album_id;
+	if (track_id <= 0 && !by_album) return TIDALKEEP_IDLE;
+	pthread_mutex_lock(&lock);
+	tidalkeep_activity_t state = TIDALKEEP_IDLE;
+	if (current_id && (by_album ? strcmp(current_album, album_id) == 0 : current_id == track_id)) {
+		state = TIDALKEEP_ACTIVE;
+	} else {
+		for (int i = 0; i < queue_len; i++) {
+			const tidal_track_t *track = &queue[i].track;
+			if (by_album ? strcmp(track->album_id, album_id) == 0 : track->id == track_id) {
+				state = TIDALKEEP_QUEUED;
+				break;
+			}
+		}
+	}
 	pthread_mutex_unlock(&lock);
 	return state;
 }
@@ -164,17 +198,27 @@ static void *worker_main(void *unused) {
 		memmove(&queue[0], &queue[1], sizeof(queue[0]) * (size_t)(queue_len - 1));
 		queue_len--;
 		current_id = item.track.id;
+		snprintf(current_album, sizeof(current_album), "%s", item.track.album_id);
 		pthread_mutex_unlock(&lock);
 
 		// Streaming keeps priority: the queue waits for any playback download
 		// to finish before taking the network and the card for itself.
 		tidalcache_wait_idle();
 
-		char path[512] = "";
-		bool ok = tidalcache_is_kept(item.track.id) || tidalcache_reuse(&item.track);
+		char path[512] = "", old[512] = "";
+		bool replace = item.replace_quality != TIDALCACHE_QUALITY_NONE;
+		bool ok;
+		if (replace) {
+			// Skip an obsolete request rather than replacing a different copy.
+			ok = tidalcache_kept_quality(item.track.id) != item.replace_quality ||
+				!tidalcache_find(item.track.id, old, sizeof(old));
+		} else {
+			ok = tidalcache_is_kept(item.track.id) || tidalcache_reuse(&item.track);
+		}
 		bool complete_transfer = false;
 		if (!ok && fetch(&item.track, item.quality, path, sizeof(path), &complete_transfer)) {
-			ok = path[0] && tidalcache_keep(&item.track, path, complete_transfer);
+			ok = path[0] && tidalcache_keep_quality(&item.track, path, complete_transfer, item.quality,
+				replace ? old : NULL);
 		}
 		if (ok) {
 			tidalcache_download_extras(&item.track);

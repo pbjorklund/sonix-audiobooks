@@ -127,6 +127,8 @@ bool audio_get_bit_perfect(void);
 // this is the ramp-out/ramp-in version of the effect. `seconds` is clamped to
 // 1..12.
 void audio_set_fade(bool enabled, int seconds);
+// Temporary PCM attenuation; 1024 restores full gain without changing volume.
+void audio_set_sleep_gain(int gain_q10);
 
 void audio_resume();
 
@@ -247,6 +249,8 @@ bool audio_external_begin_latency(int sample_rate, int channels, int bits, int b
 // opening its own.
 bool audio_external_begin_yielding(int sample_rate, int channels, int bits, int buffer_ms);
 int audio_external_write(const void *frames, int count);
+// DSD frames are not PCM and cannot be attenuated.
+int audio_external_write_passthrough(const void *frames, int count);
 void audio_external_end(void);
 
 #endif // AUDIO_H

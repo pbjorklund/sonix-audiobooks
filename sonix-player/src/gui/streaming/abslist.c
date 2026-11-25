@@ -35,6 +35,10 @@
 struct abs_list {
 	lv_obj_t *canvas;
 	lv_obj_t *rows[ABS_LIST_ROW_POOL];
+	lv_obj_t *titles[ABS_LIST_ROW_POOL];
+	lv_obj_t *subtitles[ABS_LIST_ROW_POOL];
+	lv_obj_t *images[ABS_LIST_ROW_POOL];
+	lv_obj_t *actions[ABS_LIST_ROW_POOL];
 	int row_index[ABS_LIST_ROW_POOL]; // the data row each pool row is showing
 	int count;
 	int row_height;
@@ -42,7 +46,8 @@ struct abs_list {
 	bool noted;
 	bool two_line;
 	abs_list_bind_cb bind;
-	abs_list_click_cb click;
+	abs_list_click_cb click, action;
+	void (*decorate)(void *user, int index, int slot, lv_obj_t *image, lv_obj_t *action);
 	void *user;
 };
 
@@ -62,7 +67,10 @@ static int abs_list_canvas_height(const abs_list_t *list) {
 // refills the pool from `first`: rows past the end of the data hide, every
 // other row is re-bound in place at its slot.
 static void abs_list_rebind(abs_list_t *list) {
-	int scroll_y = lv_obj_get_scroll_y(lv_obj_get_parent(list->canvas));
+	lv_obj_t *parent = lv_obj_get_parent(list->canvas);
+	int scroll_y = lv_obj_get_scroll_y(parent);
+	int canvas_y = lv_obj_get_y(list->canvas);
+	if (canvas_y > 0) scroll_y -= canvas_y;
 	int top = scroll_y > 0 ? scroll_y / list->pitch : 0;
 	// One row above the viewport top stays bound, so coverage never lags the
 	// scroll by more than the row that is already leaving.
@@ -75,6 +83,7 @@ static void abs_list_rebind(abs_list_t *list) {
 		lv_obj_t *row = list->rows[i];
 		if (list->noted || i >= window) {
 			lv_obj_set_hidden(row, true);
+			if (list->decorate) list->decorate(list->user, -1, i, list->images[i], list->actions[i]);
 			continue;
 		}
 		int index = first + i;
@@ -82,18 +91,14 @@ static void abs_list_rebind(abs_list_t *list) {
 		lv_obj_set_y(row, index * list->pitch);
 		lv_obj_set_hidden(row, false);
 		if (list->bind) {
-			char title[ABS_LIST_BIND_BUF], subtitle[ABS_LIST_BIND_BUF];
+			char title[ABS_LIST_BIND_BUF] = "", subtitle[ABS_LIST_BIND_BUF] = "";
 			list->bind(list->user, index, title, sizeof(title), subtitle, sizeof(subtitle));
-			lv_label_set_text(lv_obj_get_child(row, 0), title);
-			lv_obj_t *subtitle_label = lv_obj_get_child(row, 1);
-			if (subtitle[0]) {
-				lv_label_set_text(subtitle_label, subtitle);
-				lv_obj_set_hidden(subtitle_label, false);
-			} else {
-				lv_label_set_text(subtitle_label, "");
-				lv_obj_set_hidden(subtitle_label, true);
-			}
+			lv_obj_t *title_label = list->titles[i], *subtitle_label = list->subtitles[i];
+			if (strcmp(lv_label_get_text(title_label), title)) lv_label_set_text(title_label, title);
+			if (strcmp(lv_label_get_text(subtitle_label), subtitle)) lv_label_set_text(subtitle_label, subtitle);
+			lv_obj_set_hidden(subtitle_label, !subtitle[0]);
 		}
+		if (list->decorate) list->decorate(list->user, index, i, list->images[i], list->actions[i]);
 	}
 	// The note shares the canvas and the scroll: on top of the rows when
 	// shown, out of the way (and hidden) when not.
@@ -127,7 +132,17 @@ static void row_clicked_cb(lv_event_t *e) {
 // One pooled row: the streaming pages' card row, title over a dim subtitle.
 // Two-line shape for 112-high item cards; single centred line for the
 // settingsrow-height group rows.
-static lv_obj_t *make_row(abs_list_t *list) {
+static void action_clicked_cb(lv_event_t *e) {
+	abs_list_t *list = lv_event_get_user_data(e);
+	lv_obj_t *action = lv_event_get_current_target(e);
+	for (int i = 0; i < ABS_LIST_ROW_POOL; i++) {
+		if (list->actions[i] != action || lv_obj_is_hidden(list->rows[i])) continue;
+		if (list->action) list->action(list->user, list->row_index[i], action);
+		return;
+	}
+}
+
+static lv_obj_t *make_row(abs_list_t *list, int slot) {
 	lv_obj_t *row = lv_btn_create(list->canvas);
 	lv_obj_set_size(row, lv_pct(100), list->row_height);
 	lv_obj_add_style(row, &theme_style_card, 0);
@@ -144,7 +159,29 @@ static lv_obj_t *make_row(abs_list_t *list) {
 	lv_obj_set_hidden(row, true);
 	lv_obj_add_event_cb(row, row_clicked_cb, LV_EVENT_CLICKED, list);
 
-	lv_obj_t *title = lv_label_create(row);
+	lv_obj_t *text = row;
+	if (list->decorate) {
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+		lv_obj_set_style_pad_hor(row, 12, 0);
+		lv_obj_set_style_pad_column(row, 12, 0);
+		lv_obj_t *image = list->images[slot] = lv_image_create(row);
+		lv_obj_set_size(image, 64, 64);
+		lv_image_set_inner_align(image, LV_IMAGE_ALIGN_CENTER);
+		lv_obj_add_style(image, &theme_style_icon, 0);
+		lv_obj_set_event_bubble(image, true);
+		lv_obj_set_clickable(image, false);
+		text = lv_obj_create(row);
+		lv_obj_remove_style_all(text);
+		lv_obj_set_clickable(text, false);
+		lv_obj_set_scrollable(text, false);
+		lv_obj_set_flex_grow(text, 1);
+		lv_obj_set_height(text, lv_pct(100));
+		lv_obj_set_flex_flow(text, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_flex_align(text, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+		lv_obj_set_event_bubble(text, true);
+	}
+	lv_obj_t *title = list->titles[slot] = lv_label_create(text);
 	lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(title, lv_pct(100));
 	lv_obj_add_style(title, &theme_style_text, 0);
@@ -170,7 +207,7 @@ static lv_obj_t *make_row(abs_list_t *list) {
 	}
 	lv_obj_set_event_bubble(title, true);
 
-	lv_obj_t *subtitle = lv_label_create(row);
+	lv_obj_t *subtitle = list->subtitles[slot] = lv_label_create(text);
 	lv_label_set_long_mode(subtitle, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(subtitle, lv_pct(100));
 	lv_obj_add_style(subtitle, &theme_style_text_dim, 0);
@@ -183,6 +220,17 @@ static lv_obj_t *make_row(abs_list_t *list) {
 	}
 	lv_obj_set_event_bubble(subtitle, true);
 	lv_obj_set_hidden(subtitle, true);
+	if (list->decorate) {
+		lv_obj_t *action = list->actions[slot] = lv_btn_create(row);
+		lv_obj_remove_style_all(action);
+		lv_obj_set_size(action, 52, 60);
+		lv_obj_set_event_bubble(action, false);
+		lv_obj_add_event_cb(action, action_clicked_cb, LV_EVENT_CLICKED, list);
+		lv_obj_t *icon = lv_image_create(action);
+		lv_obj_add_style(icon, &theme_style_icon, 0);
+		lv_obj_center(icon);
+		lv_obj_set_hidden(action, true);
+	}
 	return row;
 }
 
@@ -205,6 +253,8 @@ abs_list_t *abs_list_create(const abs_list_config_t *cfg) {
 	list->bind = cfg->bind;
 	list->click = cfg->click;
 	list->user = cfg->user;
+	list->decorate = cfg->decorate;
+	list->action = cfg->action;
 
 	list->canvas = lv_obj_create(cfg->parent);
 	// A plain spacer, not a themed card: every default style goes first so the
@@ -216,7 +266,7 @@ abs_list_t *abs_list_create(const abs_list_config_t *cfg) {
 	lv_obj_set_scrollable(list->canvas, false);
 	lv_obj_set_event_bubble(list->canvas, true);
 
-	for (int i = 0; i < ABS_LIST_ROW_POOL; i++) list->rows[i] = make_row(list);
+	for (int i = 0; i < ABS_LIST_ROW_POOL; i++) list->rows[i] = make_row(list, i);
 	lv_obj_t *note = lv_label_create(list->canvas);
 	lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
 	lv_obj_set_width(note, lv_pct(100));
@@ -250,6 +300,10 @@ void abs_list_set_count(abs_list_t *list, int count) {
 	list->count = count;
 	lv_obj_set_height(list->canvas, abs_list_canvas_height(list));
 	if (!list->noted) abs_list_rebind(list);
+}
+
+void abs_list_refresh(abs_list_t *list) {
+	if (list) abs_list_rebind(list);
 }
 
 void abs_list_note(abs_list_t *list, const char *text) {

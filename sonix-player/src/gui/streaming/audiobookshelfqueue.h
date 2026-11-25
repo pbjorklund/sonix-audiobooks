@@ -31,5 +31,6 @@ lv_obj_t *audiobookshelfqueue_screen(void);
 // row on the libraries view). The screen rebinds its rows from a fresh
 // snapshot on load.
 void audiobookshelfqueue_open(void);
+void audiobookshelfqueue_open_podcasts(void);
 
 #endif /* AUDIOBOOKSHELFQUEUE_H */

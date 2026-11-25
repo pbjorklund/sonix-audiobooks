@@ -123,33 +123,20 @@ lv_obj_t *settingsrow_pill_text(lv_obj_t *parent, const char *text, int value, l
 void settingsrow_pill_active(lv_obj_t *pill, bool active);
 
 // ---------------------------------------------------------------------------
-// A length of time, chosen on two wheels
-//
-// The same card as above with wheels in place of the pills: hours on the left,
-// minutes on the right. For a setting whose answer is not a short list -- the
-// sleep timers, where twenty minutes to fall asleep, an hour and a half for a
-// record and however long is left of a journey are all ordinary answers.
-//
-// The look is the clock's: quiet dimmed digits, the chosen row on a soft
-// rounded highlight in the accent colour, no saturated selection bar. Shared
-// here rather than copied into each of the three settings pages that use it.
+// A local time chosen on 24-hour and minute wheels.
 // ---------------------------------------------------------------------------
 
 typedef struct {
 	lv_obj_t *card;
-	lv_obj_t *toggle;
-	lv_obj_t *wheels; // hidden when the switch is off; the card shrinks with it
+	lv_obj_t *wheels;
 	lv_obj_t *hours;
 	lv_obj_t *minutes;
 } settingsrow_duration_t;
 
 // `change_cb` fires on either wheel; read the answer with the call below rather
 // than from the event.
-void settingsrow_toggle_duration(lv_obj_t *parent, const char *title, lv_event_cb_t toggle_cb,
-								 lv_event_cb_t change_cb, settingsrow_duration_t *out);
-
-// Shows or hides the wheels, and matches the switch to `on`.
-void settingsrow_duration_expanded(settingsrow_duration_t *d, bool on);
+void settingsrow_clock_wheels(lv_obj_t *parent, const char *title, lv_event_cb_t change_cb,
+								 settingsrow_duration_t *out);
 
 // The two wheels as one number of minutes, and back.
 int settingsrow_duration_minutes(const settingsrow_duration_t *d);

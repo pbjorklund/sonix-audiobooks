@@ -59,10 +59,12 @@ done
 	fail "§9.4: the shared description helper is missing"
 [[ -f "$PLAYER/src/system/streaming/abs_cover.h" && -f "$PLAYER/src/system/streaming/abs_cover.c" ]] ||
 	fail "§9.4: the authenticated cover unit is missing"
-# §9.4 ownership rows for wave 2: slot 108 exists for the detail and the slot
-# table grew to 109.
-grep -q "COVERLOADER_SLOTS 109" "$PLAYER/src/gui/nowplaying/coverloader.h" ||
-	fail "§9.4: the detail slot never raised COVERLOADER_SLOTS to 109"
+# The detail slot must fit in the table and stay outside the podcast rows.
+read -r cover_slots < <(awk '$2 == "COVERLOADER_SLOTS" {print $3}' "$PLAYER/src/gui/nowplaying/coverloader.h")
+read -r podcast_base < <(awk '$2 == "COVERLOADER_ABS_EPISODE_BASE" {print $3}' "$PLAYER/src/gui/nowplaying/coverloader.h")
+read -r podcast_slots < <(awk '$2 == "COVERLOADER_ABS_EPISODE_COUNT" {print $3}' "$PLAYER/src/gui/nowplaying/coverloader.h")
+(( podcast_base > 108 && podcast_slots > 0 && cover_slots >= podcast_base + podcast_slots )) ||
+	fail "§9.4: the detail and podcast cover slots overlap or exceed the table"
 grep -q "define COVERLOADER_ABS_DETAIL 108" "$PLAYER/src/gui/nowplaying/coverloader.h" ||
 	fail "§9.4: the detail slot number is missing from coverloader.h"
 # qobuzart stays unauthenticated, per §9.4: no ABS integration, no token/ABS

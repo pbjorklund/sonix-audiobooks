@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "src/system/core/json.h"
@@ -295,6 +296,48 @@ static bool show_doc(reader_t *r, rows_t *rows, const char *show) {
 	return !r->failed && peek(r) < 0 && !r->failed && rows->found && !strcmp(id, show) && !strcmp(type, "podcast");
 }
 
+static bool title_object(reader_t *r, int level, char title[ABS_NAME_MAX], char id[ABS_ID_MAX], char type[24]) {
+	space(r);
+	if (!take(r, '{')) return false;
+	space(r);
+	if (take(r, '}')) return true;
+	bool end = false;
+	do {
+		char name[32];
+		if (!key(r, name, sizeof(name))) return false;
+		if (!level && !strcmp(name, "id")) {
+			if (!identity(r, id, ABS_ID_MAX)) return false;
+		} else if (!level && !strcmp(name, "mediaType")) {
+			if (!identity(r, type, 24)) return false;
+		} else if ((!level && !strcmp(name, "media")) || (level == 1 && !strcmp(name, "metadata"))) {
+			if (!title_object(r, level + 1, title, id, type)) return false;
+		} else if (level == 2 && !strcmp(name, "title") && peek(r) == '"') {
+			char raw[1536];
+			size_t len;
+			if (!string(r, raw, sizeof(raw), &len)) return false;
+			json_tok_t tok = {.type = JSON_STRING, .end = (int)(len < sizeof(raw) ? len : sizeof(raw) - 1)};
+			json_doc_t doc = {.text = raw, .toks = &tok, .count = 1};
+			json_str(&doc, 0, title, ABS_NAME_MAX);
+		} else if (!skip(r, 1)) return false;
+		if (!close_or_comma(r, '}', &end)) return false;
+	} while (!end);
+	return true;
+}
+
+bool abs_show_read_title(int (*read)(void *, void *, int), void *user, const char *show, char title[ABS_NAME_MAX]) {
+	title[0] = '\0';
+	reader_t r = {.read = read, .user = user};
+	char id[ABS_ID_MAX] = "", type[24] = "";
+	if (!title_object(&r, 0, title, id, type) || !title[0] || strcmp(id, show) || strcmp(type, "podcast")) {
+		title[0] = '\0';
+		return false;
+	}
+	space(&r);
+	if (peek(&r) >= 0 || r.failed) { title[0] = '\0'; return false; }
+	for (char *p = title; *p; p++) if (*p == '\r' || *p == '\n') *p = ' ';
+	return true;
+}
+
 static int id_order(const void *a, const void *b) {
 	return strcmp(((const abs_episode_row_t *)a)->episode_id, ((const abs_episode_row_t *)b)->episode_id);
 }
@@ -304,6 +347,59 @@ static int date_order(const void *a, const void *b) {
 	if (x->published_ms != y->published_ms) return x->published_ms > y->published_ms ? -1 : 1;
 	if (x->added_ms != y->added_ms) return x->added_ms > y->added_ms ? -1 : 1;
 	return id_order(a, b);
+}
+
+static int title_order(const void *a, const void *b) {
+	int n = strcasecmp(((const abs_episode_row_t *)a)->title, ((const abs_episode_row_t *)b)->title);
+	return n ? n : id_order(a, b);
+}
+
+static int added_order(const void *a, const void *b) {
+	const abs_episode_row_t *x = a, *y = b;
+	if (x->added_ms != y->added_ms) return x->added_ms > y->added_ms ? -1 : 1;
+	return date_order(a, b);
+}
+
+void abs_episode_sort(abs_episode_row_t *rows, int count, abs_episode_sort_t sort) {
+	if (rows && count > 1) qsort(rows, (size_t)count, sizeof(*rows),
+		sort == ABS_EPISODE_TITLE ? title_order : sort == ABS_EPISODE_ADDED ? added_order : date_order);
+}
+
+static bool next_before(const abs_episode_row_t *a, const abs_episode_row_t *b, bool oldest) {
+	// Use the added date when a feed did not supply a release date.
+	long long x = a->published_ms > 0 ? a->published_ms : a->added_ms;
+	long long y = b->published_ms > 0 ? b->published_ms : b->added_ms;
+	if ((x == 0) != (y == 0)) return x != 0;
+	if (x != y) return oldest ? x < y : x > y;
+	if (a->added_ms != b->added_ms) return oldest ? a->added_ms < b->added_ms : a->added_ms > b->added_ms;
+	return id_order(a, b) < 0;
+}
+
+int abs_episode_next_pair(const abs_episode_row_t *rows, int count, bool oldest, int picks[2]) {
+	picks[0] = picks[1] = -1;
+	for (int i = 0; i < count; i++) {
+		if (rows[i].finished) continue;
+		if (picks[0] < 0 || next_before(&rows[i], &rows[picks[0]], oldest)) {
+			picks[1] = picks[0];
+			picks[0] = i;
+		} else if (picks[1] < 0 || next_before(&rows[i], &rows[picks[1]], oldest)) {
+			picks[1] = i;
+		}
+	}
+	return picks[1] >= 0 ? 2 : picks[0] >= 0;
+}
+
+int abs_episode_project(const abs_episode_row_t *rows, int count, bool reverse, unsigned states,
+	int skip, int *indices, int cap) {
+	int matched = 0;
+	for (int i = 0; i < count; i++) {
+		int row = reverse ? count - 1 - i : i;
+		unsigned state = rows[row].finished ? ABS_EP_FINISHED : rows[row].in_progress ? ABS_EP_STARTED : ABS_EP_UNPLAYED;
+		if (!(states & state)) continue;
+		if (matched >= skip && matched - skip < cap) indices[matched - skip] = row;
+		matched++;
+	}
+	return matched;
 }
 
 int abs_show_read(int (*read)(void *, void *, int), void *user,

@@ -1570,6 +1570,10 @@ bool abs_download_retry(long long job_id, char *error, size_t error_size) {
 }
 
 bool abs_download_clear_finished(char *error, size_t error_size) {
+	return abs_download_clear_finished_kind(NULL, error, error_size);
+}
+
+bool abs_download_clear_finished_kind(const char *kind, char *error, size_t error_size) {
 	if (error_size) {
 		error[0] = '\0';
 	}
@@ -1582,25 +1586,24 @@ bool abs_download_clear_finished(char *error, size_t error_size) {
 	abs_download_job_t finished[ABS_DL_JOB_CAP];
 	int finished_count = 0;
 	for (int i = 0; i < jobs_count && finished_count < ABS_DL_JOB_CAP; i++) {
-		if (jobs[i].state == ABS_DL_DONE || jobs[i].state == ABS_DL_FAILED ||
-			jobs[i].state == ABS_DL_CANCELLED) {
+		if ((!kind || !strcmp(jobs[i].kind, kind)) && (jobs[i].state == ABS_DL_DONE ||
+			jobs[i].state == ABS_DL_FAILED || jobs[i].state == ABS_DL_CANCELLED)) {
 			finished[finished_count++] = jobs[i];
 		}
 	}
-	db_exec("BEGIN");
-	sqlite3_stmt *del = prepare_locked(
-		"DELETE FROM DOWNLOAD_FILE WHERE job_id IN"
-		" (SELECT id FROM DOWNLOAD_JOB WHERE state IN ('DONE','FAILED','CANCELLED'))");
-	if (del) {
-		sqlite3_step(del);
+	ok = db_exec("BEGIN IMMEDIATE");
+	const char *statements[] = {
+		"DELETE FROM DOWNLOAD_FILE WHERE job_id IN (SELECT id FROM DOWNLOAD_JOB"
+		" WHERE state IN ('DONE','FAILED','CANCELLED') AND (?1 IS NULL OR kind=?1))",
+		"DELETE FROM DOWNLOAD_JOB WHERE state IN ('DONE','FAILED','CANCELLED') AND (?1 IS NULL OR kind=?1)",
+	};
+	for (int i = 0; ok && i < 2; i++) {
+		sqlite3_stmt *del = prepare_locked(statements[i]);
+		ok = del && (kind ? sqlite3_bind_text(del, 1, kind, -1, SQLITE_TRANSIENT) : sqlite3_bind_null(del, 1)) == SQLITE_OK &&
+			sqlite3_step(del) == SQLITE_DONE;
 		sqlite3_finalize(del);
 	}
-	del = prepare_locked("DELETE FROM DOWNLOAD_JOB WHERE state IN ('DONE','FAILED','CANCELLED')");
-	if (del) {
-		sqlite3_step(del);
-		sqlite3_finalize(del);
-	}
-	ok = db_exec("COMMIT");
+	ok = ok && db_exec("COMMIT");
 	if (!ok) {
 		db_exec("ROLLBACK");
 	} else {
@@ -1650,6 +1653,25 @@ bool abs_download_snapshot(abs_download_snapshot_t *out) {
 	}
 	pthread_mutex_unlock(&lock);
 	return ok;
+}
+
+abs_download_state_t abs_download_episode_state(const char *server, const char *owner,
+	const char *show, const char *episode) {
+	if (!server || !owner || !show || !episode || !owner[0] || !episode[0]) return ABS_DL_STATE_COUNT;
+	pthread_mutex_lock(&lock);
+	abs_download_state_t state = ABS_DL_STATE_COUNT;
+	if (armed && !storage_stale_locked()) {
+		for (int i = jobs_count - 1; i >= 0; i--) {
+			const abs_download_job_t *job = &jobs[i];
+			if (!strcmp(job->server, server) && !strcmp(job->owner_id, owner) &&
+				!strcmp(job->item_id, show) && !strcmp(job->episode_id, episode)) {
+				if (state == ABS_DL_STATE_COUNT || job->state < ABS_DL_DONE) state = job->state;
+				if (state < ABS_DL_DONE) break;
+			}
+		}
+	}
+	pthread_mutex_unlock(&lock);
+	return state;
 }
 
 bool abs_download_busy(void) {

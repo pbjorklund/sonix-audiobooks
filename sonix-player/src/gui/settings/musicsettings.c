@@ -25,7 +25,6 @@
 #include "src/system/audio/alsa-controls.h"
 #include "src/gui/shell/topbar.h"
 #include "src/system/playback/playlist.h"
-#include "src/system/playback/sleeptimer.h"
 #include "src/system/audio/audio.h"
 #include "src/system/bluetooth/bluetooth.h"
 #include "src/system/audio/eq.h"
@@ -1616,34 +1615,6 @@ static void endless_shuffle_cb(lv_event_t *e) {
 	config_save();
 }
 
-// The sleep timer for music, which is the card, Tidal and Qobuz: one transport,
-// one timer. Books and podcasts have their own, on their own pages, because the
-// stretch that suits one is not the one that suits another.
-static settingsrow_duration_t sleep_row;
-
-static void sleep_refresh(void) {
-	settingsrow_duration_expanded(&sleep_row, sleeptimer_enabled(SLEEPTIMER_MUSIC));
-	settingsrow_duration_repaint(&sleep_row);
-}
-
-static void sleep_toggle_cb(lv_event_t *e) {
-	(void)e;
-	sleeptimer_set_enabled(SLEEPTIMER_MUSIC, lv_obj_has_state(sleep_row.toggle, LV_STATE_CHECKED));
-	sleep_refresh();
-}
-
-static void sleep_wheel_cb(lv_event_t *e) {
-	(void)e;
-	sleeptimer_set_minutes(SLEEPTIMER_MUSIC, settingsrow_duration_minutes(&sleep_row));
-}
-
-// The control centre switches the same timer from outside this page, so the
-// switch and the wheels are read again every time the page comes up.
-static void playback_loaded_cb(lv_event_t *e) {
-	(void)e;
-	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_MUSIC));
-	sleep_refresh();
-}
 
 // Where "add to queue" puts a track: right after the one playing, or at the end
 // of the queue. playlist_enqueue() keeps the setting; this page only shows it.
@@ -1693,16 +1664,6 @@ static void build_playback_page(gui_config_t *cfg) {
 		lv_obj_add_state(endless_shuffle_switch, LV_STATE_CHECKED);
 	}
 
-	// The sleep timer, directly under it, with its two wheels revealed by the
-	// switch the way the screensaver's two pills are.
-	settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
-	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_MUSIC));
-	sleep_refresh();
-	theme_register_refresh(sleep_refresh);
-	lv_obj_add_event_cb(playback_screen, playback_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
-	// And again whenever the control centre switches something while the page
-	// is the one under it.
-	lv_obj_add_event_cb(playback_screen, playback_loaded_cb, LV_EVENT_REFRESH, NULL);
 
 	// One record into the next, instead of the queue simply running out.
 	settingsrow_toggle(container, "musicsettings_play_albums_back_to_back", &album_chain_switch, album_chain_cb);
