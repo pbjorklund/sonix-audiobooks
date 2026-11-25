@@ -2,7 +2,7 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
-## Sonix Audiobooks 1.3.1.3 (2026-11-25)
+## Sonix Audiobooks 1.3.1.4 (2026-11-25)
 
 First release on the fork's update channel for the original HiBy R1.
 

@@ -188,7 +188,7 @@ Xvfb -nolisten unix -listen tcp -ac -displayfd 3 -screen 0 600x900x24 \
 	>"$WORK/xvfb.stdout" 2>"$WORK/xvfb.log" 3>"$DISPLAY_FILE" &
 XVFB_PID=$!
 wait_for "Xvfb display assignment" 50 test -s "$DISPLAY_FILE"
-export DISPLAY="localhost:$(cat "$DISPLAY_FILE")"
+export DISPLAY="localhost:$(cat "$DISPLAY_FILE")" SDL_VIDEODRIVER=x11
 
 start_player first-run
 
@@ -196,9 +196,8 @@ start_player first-run
 # verify the resulting state, so an upstream layout change fails loudly instead
 # of reporting a false pass.
 click 355 420       # Home -> Audiobooks
-click 438 88        # options button
-click 240 740       # Scan Audiobooks
-click 330 475       # confirmation -> Scan
+screenshot scan-offer
+click 240 584       # empty-library Scan button
 
 wait_for "two scanned audiobooks" 300 catalog_ready
 wait_for "two multipart rows" 50 parts_ready
