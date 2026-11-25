@@ -21,7 +21,7 @@ gcc "${FLAGS[@]}" -Isrc/system/image/miniz -c "$WORK/miniz_tinfl.c" -o "$WORK/mi
 gcc "${FLAGS[@]}" "$ROOT/tools/metadata-probe.c" \
     src/system/library/description.c src/system/library/metadata.c src/system/library/oggtags.c src/system/library/cue.c \
     src/system/core/utils.c src/system/core/config.c \
-    src/system/decode/{decode,mp4,wavpackdec,apedec,sndfile,stb_vorbis}.c \
+    src/system/decode/{decode,growfile,mp4,wavpackdec,apedec,sndfile,stb_vorbis}.c \
     "$WORK/miniz_tinfl.o" \
     -Wl,--gc-sections "${LIBS[@]}" -lm -ldl -lpthread -o "$WORK/metadata-probe"
 gcc "${FLAGS[@]}" "$ROOT/tools/kernel-log-test.c" src/system/core/logging.c \

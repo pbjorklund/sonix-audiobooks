@@ -91,6 +91,9 @@ jobs:
         run: |
           tools/tidalkeep-test.sh
           python3 tools/pack-r1-test.py
+      - name: Run upstream metadata and kernel-log regressions
+        working-directory: ${{ github.workspace }}
+        run: bash tools/upstream-regression.sh
       - name: Run episode progress, history and show parsing tests
         working-directory: ${{ github.workspace }}
         run: tools/audiobookshelf-episode-test.sh
