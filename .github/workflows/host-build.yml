@@ -27,7 +27,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential git pkg-config libsdl2-dev libfreetype-dev \
-            libopusfile-dev libwavpack-dev libasound2-dev \
+            libopusfile-dev libwavpack-dev libasound2-dev libfdk-aac2 \
             ffmpeg sqlite3 xvfb xdotool scrot tesseract-ocr tesseract-ocr-eng
       - name: Compile the host simulator
         # The Makefile target is `host`; it builds sonix_player_host and clones
