@@ -432,7 +432,12 @@ assert center >= rate // 2 and len(samples) >= center + rate // 2, 'short PCM ca
 window = samples[center - rate // 2:center + rate // 2]
 for start in range(0, len(window), rate // 100):
     assert max(map(abs, window[start:start + rate // 100])) > 10, '10 ms dropout around handoff'
-assert max(abs(b-a) for a,b in zip(window, window[1:])) < 20, 'sample discontinuity around handoff'
+def peak_step(block):
+    return max(abs(b - a) for a, b in zip(block, block[1:]))
+# The ALSA file sink may capture full-scale decoder output or attenuated
+# samples. Compare the splice window to the same fixture immediately before it.
+reference = window[:rate // 4]
+assert peak_step(window) < 2 * peak_step(reference) + 4, 'sample discontinuity around handoff'
 PY
     python3 - "$WORK/progress.sessions.json" <<'PY'
 import json, sys

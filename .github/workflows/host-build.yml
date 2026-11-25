@@ -117,6 +117,16 @@ jobs:
         env:
           SONIX_SMOKE_SKIP_BUILD: 1
         run: tools/audiobookshelf-queueui-smoke.sh
+      - name: Upload podcast logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: podcast-smoke-logs
+          path: |
+            build/abs-podcast-smoke.*/first.log
+            build/abs-podcast-smoke.*/mock.log
+            build/abs-podcast-smoke.*/progress.requests
+          if-no-files-found: ignore
       - name: Upload audiobook smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7
