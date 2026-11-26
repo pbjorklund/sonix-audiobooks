@@ -444,6 +444,8 @@ typedef enum {
 
 // Cached snapshot only: no file/database/network I/O on the UI thread.
 audiobookshelf_sync_status_t audiobookshelf_sync_status(const char *file);
+// Best-effort pull for a linked local book before opening its decoder. Blocks.
+void audiobookshelf_book_refresh_position(const char *book, const char *file);
 // Notification only; never enables Wi-Fi or waits for an upload.
 void audiobookshelf_network_changed(void);
 

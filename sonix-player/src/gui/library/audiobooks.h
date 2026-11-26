@@ -17,6 +17,9 @@ extern lv_obj_t *audiobookscan_screen;
 
 void audiobooks_init(gui_config_t *cfg);
 
+// Resolves the local resume point after a best-effort online sync.
+void audiobooks_play_resume(const char *book, void (*on_started)(void));
+
 // Starts `book` (a file, or a folder book's folder) in `file` at `seconds`,
 // and writes that as where the book stands. The player is left as it is: the
 // caller decides whether it comes up.

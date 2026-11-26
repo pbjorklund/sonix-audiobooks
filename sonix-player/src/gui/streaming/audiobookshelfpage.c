@@ -883,20 +883,16 @@ static void detail_request_cb(void *user) {
 
 // The detail screen's three actions, all owned by this page: the identity
 // they need is in this file's statics, refreshed by the worker's completion.
-static void detail_action_play(void *user) {
-	(void)user;
-	if (busy || !selected_local_book[0]) return;
-	// Resume the linked copy at its saved checkpoint, wherever that is:
-	// audiobooks_play_at() writes the point through as where the book stands
-	// (the same shape item_click_cb used to run on the LVGL thread).
-	char resume_file[512];
-	double resume_seconds = 0;
-	if (!audiobook_resume_point(selected_local_book, resume_file, sizeof(resume_file), &resume_seconds))
-		return;
-	audiobooks_play_at(selected_local_book, resume_file, resume_seconds);
+static void detail_play_started(void) {
 	// Close the detail first so dismissing Now Playing returns to the book list.
 	back_btn_cb(NULL);
 	switch_screen(player_screen);
+}
+
+static void detail_action_play(void *user) {
+	(void)user;
+	if (busy || !selected_local_book[0]) return;
+	audiobooks_play_resume(selected_local_book, detail_play_started);
 }
 
 static void detail_action_link(void *user) {
@@ -2372,11 +2368,14 @@ static void *worker_main(void *user) {
 				int count = -1;
 				// Browsing retained media uses the card's profile/owner binding.
 				// Connectivity does not turn a local Downloads job into a remote one.
-				bool online = !job.pod_local_only && wifi_connected();
+				bool online = (!job.pod_local_only || job.kind == JOB_POD_PLAY) && wifi_connected();
 				char owner[ABS_ID_MAX] = "";
 				bool verified_owner = false;
 				if (current) {
-					if (online && audiobookshelf_episode_owner(&auth, &pod_show_op, owner)) {
+					if (job.pod_local_only && job.kind == JOB_POD_PLAY) {
+						// The binding was verified for this exact server, profile and token.
+						verified_owner = abs_episode_owner_cached(&auth, owner) && online;
+					} else if (online && audiobookshelf_episode_owner(&auth, &pod_show_op, owner)) {
 						verified_owner = true;
 						abs_episode_owner_remember(&auth, owner);
 					}
@@ -2460,9 +2459,12 @@ static void *worker_main(void *user) {
 					abs_episode_manifest_t *id = &done.pod_identity;
 					if (abs_episode_download_path(auth.server, owner, job.id, job.episode_id,
 						id, done.pod_local_path, sizeof(done.pod_local_path))) {
-						if (verified_owner) audiobookshelf_episode_reconcile(&auth, id, &pod_show_op);
+						if (verified_owner) {
+							if (job.pod_local_only) audiobookshelf_episode_refresh_position(&auth, id, &pod_show_op);
+							else audiobookshelf_episode_reconcile(&auth, id, &pod_show_op);
+						}
 						count = 1;
-					} else if (verified_owner) {
+					} else if (verified_owner && !job.pod_local_only) {
 						abs_episode_t *episode = calloc(1, sizeof(*episode));
 						bool resolved = episode && audiobookshelf_episode(&auth, job.id, job.episode_id, episode, &pod_show_op);
 						if (resolved && !abs_episode_extension(&episode->track)) {

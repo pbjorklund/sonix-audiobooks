@@ -535,10 +535,8 @@ if [[ ${SONIX_PODCAST_SMOKE_LABELS:-0} == 1 ]]; then
     click 250 178 1.2
     shot online-local-detail
     grep_label online-local-detail 'Play local copy' || fail 'download detail did not offer local playback'
-    click 250 385 1.2
-    wait_for 'download played from the card while connected' grep -Eq 'play requested .*Podcast/ABS/' "$WORK/first.log"
-    cmp "$WORK/before-download-browse.requests" "$WORK/progress.requests" || fail 'browsing or starting a downloaded episode contacted ABS'
-    printf 'Podcast Downloads: local show and episode detail, legacy fallback, and local playback without browse requests.\n'
+    cmp "$WORK/before-download-browse.requests" "$WORK/progress.requests" || fail 'browsing a downloaded episode contacted ABS'
+    printf 'Podcast Downloads: local show and episode detail, legacy fallback, and no browse requests.\n'
     exit 0
 fi
 if [[ ${SONIX_PODCAST_SMOKE_ART:-0} == 1 ]]; then
@@ -625,16 +623,11 @@ req = Request(url, method='PATCH', data=b'{"currentTime":12,"duration":36,"isFin
 with urlopen(req, timeout=3) as response:
     assert response.status in (200, 204)
 PY
-    # A Downloads action uses the last local checkpoint, not a fresh read
-    # from the server. The preceding reconnect/mark checks still cover sync.
     click 250 "$((385 + art_offset))" 1.2
-    wait_for 'local Play uses the reset checkpoint' grep -Eq "play requested '.*Podcast/ABS/[^']+'$" "$WORK/reconnect.log"
-    if grep -Eq 'play requested .*Podcast/ABS/.* from 12\.0 s' "$WORK/reconnect.log"; then
-        fail 'local Play adopted the server position'
-    fi
+    wait_for 'local Play uses the newer server checkpoint' grep -Eq 'play requested .*Podcast/ABS/.* from 12\.0 s' "$WORK/reconnect.log"
     click 240 732 .6
     checkpoint_before_removal=$(sqlite3 -cmd '.timeout 500' "$DB" 'select seconds from ABS_EPISODE_PROGRESS')
-    awk -v seconds="$checkpoint_before_removal" 'BEGIN { exit !(seconds > 0 && seconds < 12) }' ||
+    awk -v seconds="$checkpoint_before_removal" 'BEGIN { exit !(seconds >= 12) }' ||
         fail 'local playback did not save its own checkpoint'
     history_before_removal=$(sqlite3 -cmd '.timeout 500' "$DB" 'select count(*) from ABS_HISTORY')
     local_media=$(find "$CARD/Podcast/ABS" -type f -name "*.$FORMAT" -print -quit)

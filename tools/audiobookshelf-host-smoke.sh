@@ -84,6 +84,8 @@ progress_uploaded() {
 	[[ -s "$PROGRESS_FILE" ]] || return 1
 	if [[ "$LOCAL_PROGRESS" == 1 ]]; then
 		python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); t=float(p.get("currentTime", 0)); sys.exit(not (6.9 <= t <= 7.1 and p.get("isFinished") is False))' "$PROGRESS_FILE"
+	elif [[ "$EXISTING" != 1 && "$OFFLINE_RESTART" != 1 && "$CONFLICTS" != 1 ]]; then
+		python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); t=float(p.get("currentTime", 0)); sys.exit(not (5.5 <= t < 10 and p.get("isFinished") is False))' "$PROGRESS_FILE"
 	else
 		python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); t=float(p.get("currentTime", 0)); sys.exit(not (13.5 <= t <= 20 and p.get("isFinished") is False))' "$PROGRESS_FILE"
 	fi
@@ -409,9 +411,22 @@ click 43 88 2          # the library picker -> Streaming
 click 43 88 2          # Streaming -> Home
 click 356 406 1        # Home -> Audiobooks (upstream 1.3.0 home layout)
 click 125 232 1        # Audiobooks -> Library
+# Simulate another client moving to part one after the Download imported part two.
+if [[ "$OFFLINE_RESTART" != 1 && "$CONFLICTS" != 1 ]]; then
+	python3 - "$PROGRESS_FILE" <<'PY'
+import json, sys, time
+with open(sys.argv[1], 'w') as f:
+    json.dump({'currentTime': 5, 'isFinished': False, 'lastUpdate': int(time.time() * 1000)}, f)
+PY
+fi
+if [[ "$OFFLINE_RESTART" == 1 ]]; then touch "$WORK/progress.offline"; fi
 click 240 180 2        # resume the downloaded book
 scrot "$WORK/local-playback.png"
-wait_for "playback from imported part" 100 grep -q "play requested.*002 - Part Two.mp3.*from 3" "$WORK/player.log"
+if [[ "$OFFLINE_RESTART" == 1 || "$CONFLICTS" == 1 ]]; then
+	wait_for "playback from imported part" 100 grep -q "play requested.*002 - Part Two.mp3.*from 3" "$WORK/player.log"
+else
+	wait_for "playback from the other client's part and position" 100 grep -q "play requested.*001 - Part One.mp3.*from 5" "$WORK/player.log"
+fi
 sleep 2
 rm -f "$PROGRESS_FILE"       # ignore the immediate start checkpoint
 if [[ "$OFFLINE_RESTART" == 1 ]]; then touch "$WORK/progress.offline"; fi
@@ -430,7 +445,8 @@ PY
 if [[ "$OFFLINE_RESTART" == 1 ]]; then
 	wait_for "failed upload retained" 200 grep -q 'saved checkpoint retained' "$WORK/player.log"
 	[[ ! -s "$PROGRESS_FILE" ]] || fail "server accepted progress during outage"
-	test "$(sqlite3 "$DB" 'SELECT count(*) FROM ABS_HISTORY WHERE played > 0')" = 1 || fail "no durable paused session"
+	durable_paused_session() { [[ $(sqlite3 "$DB" 'SELECT count(*) FROM ABS_HISTORY WHERE played > 0') == 1 ]]; }
+	wait_for "durable paused session" 100 durable_paused_session
 	[[ ! -s "$WORK/progress.sessions.json" ]] || fail "server accepted history during outage"
 	sleep 2                # allow the idle UI poll to draw the retry status
 	scrot "$WORK/offline-pending.png"
@@ -527,4 +543,4 @@ PY
 	printf 'Audiobookshelf conflict smoke passed: paused multipart remote rewind, physical Play, local rewind, missing/future timestamps, and timestamp ties.\n'
 fi
 
-printf 'Audiobookshelf smoke test passed: download, part 2 resume at 3.0 seconds, and server progress upload.\n'
+printf 'Audiobookshelf smoke test passed: download, multipart resume, and server progress upload.\n'

@@ -1,5 +1,6 @@
 #include "audiobooks.h"
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,10 +21,14 @@
 #include "src/gui/shell/theme.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
+#include "src/system/core/utils.h"
 #include "src/system/device/power.h"
 #include "src/system/library/audiobookdb.h"
+#include "src/system/net/wifi.h"
 #include "src/system/playback/audiobook.h"
 #include "src/system/playback/device_state.h"
+#include "src/system/playback/playlist.h"
+#include "src/system/streaming/audiobookshelf.h"
 
 lv_obj_t *audiobooks_screen;
 lv_obj_t *audiobooksettings_screen;
@@ -678,23 +683,77 @@ static void play_from(const char *book, const char *file, double seconds) {
 	free(list);
 }
 
-static void play_book(const char *book) {
+typedef struct {
+	char book[512], file[512];
+	unsigned serial, card, queue;
+	lv_obj_t *screen;
+	void (*on_started)(void);
+} book_start_t;
+
+static unsigned book_start_serial;
+
+static void play_book_now(const char *book, void (*on_started)(void)) {
 	char file[512];
 	double resume = 0;
-	if (!audiobook_resume_point(book, file, sizeof(file), &resume)) {
+	if (!audiobook_resume_point(book, file, sizeof(file), &resume)) return;
+	play_from(book, file, resume);
+	audiobookdb_touch(book);
+	player_refresh_now_playing();
+	if (on_started) on_started();
+}
+
+static void book_start_done(void *user) {
+	book_start_t *request = user;
+	if (request->serial == book_start_serial && request->card == audiobookdb_history_generation() &&
+		request->queue == playlist_revision() && request->screen == lv_screen_active())
+		play_book_now(request->book, request->on_started);
+	free(request);
+}
+
+static void *book_start_worker(void *user) {
+	book_start_t *request = user;
+	thread_be_background("ABS book resume");
+	audiobookshelf_book_refresh_position(request->book, request->file);
+	if (!gui_post(book_start_done, request)) free(request);
+	return NULL;
+}
+
+void audiobooks_play_resume(const char *book, void (*on_started)(void)) {
+	if (!book || !book[0]) return;
+	unsigned serial = ++book_start_serial;
+#ifndef HOST_BUILD
+	wifi_status_t wifi;
+	wifi_get_status(&wifi);
+	if (wifi.state != WIFI_STATE_CONNECTED || !wifi.ip[0]) {
+		play_book_now(book, on_started);
 		return;
 	}
-	play_from(book, file, resume);
-
-	audiobookdb_touch(book); // the order by last listened moves it to the top
-	player_refresh_now_playing();
-	player_sheet_open(true);
+#endif
+	book_start_t *request = calloc(1, sizeof(*request));
+	if (request && audiobook_resume_point(book, request->file, sizeof(request->file), NULL)) {
+		snprintf(request->book, sizeof(request->book), "%s", book);
+		request->serial = serial;
+		request->card = audiobookdb_history_generation();
+		request->queue = playlist_revision();
+		request->screen = lv_screen_active();
+		request->on_started = on_started;
+		pthread_t worker;
+		if (!pthread_create(&worker, NULL, book_start_worker, request)) {
+			pthread_detach(worker);
+			return;
+		}
+	}
+	free(request);
+	play_book_now(book, on_started);
 }
+
+static void open_book_player(void) { player_sheet_open(true); }
 
 void audiobooks_play_at(const char *book, const char *file, double seconds) {
 	if (!book || !book[0] || !file || !file[0]) {
 		return;
 	}
+	book_start_serial++; // an explicit bookmark supersedes a pending resume
 	play_from(book, file, seconds);
 	// Written through: this is where the book now stands, whatever comes next.
 	audiobookdb_save_position(book, file, seconds);
@@ -721,7 +780,7 @@ static void book_clicked_cb(lv_event_t *e) {
 	}
 	char book[512];
 	snprintf(book, sizeof(book), "%s", found);
-	play_book(book);
+	audiobooks_play_resume(book, open_book_player);
 }
 
 static void books_sort_cb(lv_event_t *e) { sort_menu_show(lv_event_get_current_target(e), books_list, reload_books); }

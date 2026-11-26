@@ -604,7 +604,7 @@ static bool update_progress(const char *item_id, double current, double duration
 }
 
 static bool read_progress(const char *item_id, const char *server, abs_remote_progress_t *out,
-	int *status_out) {
+	int *status_out, const abs_auth_snapshot_t *playback_auth) {
 	memset(out, 0, sizeof(*out));
 	char id[ABS_ID_MAX * 3], path[ABS_ID_MAX * 3 + 32];
 	http_url_encode(item_id, id, sizeof(id));
@@ -615,7 +615,9 @@ static bool read_progress(const char *item_id, const char *server, abs_remote_pr
 	// §12.4: the diagnostics recorder classifies the failure from the exact
 	// status this GET ended with; callers without a diagnostics interest keep
 	// their old behavior apart from writing one stack int.
-	bool ok = api_request(path, &req, &body, status_out ? status_out : &status, server);
+	int *reply = status_out ? status_out : &status;
+	bool ok = playback_auth ? api_request_with(server, playback_auth->token, path, &req, &body, 3, reply, NULL) :
+		api_request(path, &req, &body, reply, server);
 	out->server_now_ms = http_last_server_time_ms();
 	if (!ok) {
 		int ended = status_out ? *status_out : status;
@@ -623,7 +625,7 @@ static bool read_progress(const char *item_id, const char *server, abs_remote_pr
 		return ended == 404; // §12.3 line 1181: no remote progress is not an error
 	}
 	json_doc_t doc;
-	if (!body || !json_parse(body, &doc)) { free(body); return false; }
+	if (!body || http_last_truncated() || !json_parse(body, &doc)) { free(body); return false; }
 	int root = json_root(&doc);
 	char returned_id[ABS_ID_MAX];
 	json_obj_str(&doc, root, "libraryItemId", returned_id, sizeof(returned_id));
@@ -880,12 +882,12 @@ static bool episode_progress_path(const abs_episode_manifest_t *id, char *out, s
 }
 
 static bool episode_progress_read(const abs_auth_snapshot_t *auth, const abs_episode_manifest_t *id,
-	abs_remote_progress_t *remote, double *duration, http_op_t *op) {
+	abs_remote_progress_t *remote, double *duration, http_op_t *op, int timeout) {
 	memset(remote, 0, sizeof(*remote));
 	char path[ABS_ID_MAX * 6 + 32], *body = NULL, show[ABS_ID_MAX], episode[ABS_ID_MAX];
 	if (!episode_progress_path(id, path, sizeof(path))) return false;
 	int status = 0;
-	bool ok = api_request_with(auth->server, auth->token, path, NULL, &body, 10, &status, op);
+	bool ok = api_request_with(auth->server, auth->token, path, NULL, &body, timeout, &status, op);
 	remote->server_now_ms = http_last_server_time_ms();
 	if (!ok) { free(body); return status == 404; }
 	json_doc_t doc;
@@ -919,6 +921,26 @@ static bool episode_progress_patch(const abs_auth_snapshot_t *auth, const abs_ep
 	return ok;
 }
 
+void audiobookshelf_episode_refresh_position(const abs_auth_snapshot_t *auth, const abs_episode_manifest_t *id,
+		http_op_t *op) {
+	if (!auth || !id || strcmp(auth->server, id->server) || !id->owner[0] || abs_episode_playback_active(id)) return;
+	abs_episode_checkpoint_t base = {.identity = *id, .duration = id->duration};
+	unsigned generation;
+	bool exists = audiobookdb_episode_get(id, &base, &generation);
+	abs_episode_checkpoint_t next = base;
+	abs_remote_progress_t remote;
+	if (!episode_progress_read(auth, id, &remote, &next.duration, op, 3) || !remote.exists ||
+		http_op_cancelled(op) || abs_episode_playback_active(id)) return;
+	if (exists && base.dirty && abs_sync_decide(base.seconds, base.finished, base.updated_ms, &remote,
+		history_now_ms()) != ABS_DECISION_DOWNLOAD) return;
+	if (exists && !base.dirty && base.updated_ms > 0 && remote.updated_ms > 0 &&
+		remote.updated_ms <= base.updated_ms) return;
+	next.seconds = remote.seconds;
+	next.finished = remote.finished;
+	next.updated_ms = remote.updated_ms > 0 ? remote.updated_ms : 0;
+	audiobookdb_episode_apply(generation, &base, &next);
+}
+
 bool audiobookshelf_episode_reconcile(const abs_auth_snapshot_t *auth, const abs_episode_manifest_t *id, http_op_t *op) {
 	if (!auth || !id || strcmp(auth->server, id->server) || !id->owner[0]) return false;
 	if (abs_episode_playback_active(id)) return false;
@@ -930,7 +952,7 @@ bool audiobookshelf_episode_reconcile(const abs_auth_snapshot_t *auth, const abs
 	abs_remote_progress_t remote;
 	abs_episode_checkpoint_t next = base;
 	for (int i = 0; i < 2; i++) {
-		if (!episode_progress_read(auth, id, &remote, &next.duration, op)) return false;
+		if (!episode_progress_read(auth, id, &remote, &next.duration, op, 10)) return false;
 		if (http_op_cancelled(op) || abs_episode_playback_active(id)) return false;
 		if (!remote.exists && (!exists || !base.dirty)) return true;
 		abs_decision_t decision = !exists || !base.dirty ? ABS_DECISION_DOWNLOAD :
@@ -950,12 +972,12 @@ bool audiobookshelf_episode_reconcile(const abs_auth_snapshot_t *auth, const abs
 	long long stamp = abs_sync_clock_valid(base.updated_ms, &remote, now) ? base.updated_ms : 0;
 	bool restarting = remote.exists && remote.finished && !base.finished && base.seconds > 0;
 	if (!episode_progress_patch(auth, &base, stamp, op) ||
-		!episode_progress_read(auth, id, &remote, &next.duration, op) || !remote.exists) return false;
+		!episode_progress_read(auth, id, &remote, &next.duration, op, 10) || !remote.exists) return false;
 	if (restarting && !remote.finished && remote.seconds == 0) {
 		if (http_op_cancelled(op) || generation != audiobookdb_history_generation() || abs_episode_playback_active(id) ||
 			!audiobookdb_episode_get(id, &latest, NULL) || latest.revision != base.revision ||
 			!episode_progress_patch(auth, &base, stamp, op) ||
-			!episode_progress_read(auth, id, &remote, &next.duration, op) || !remote.exists) return false;
+			!episode_progress_read(auth, id, &remote, &next.duration, op, 10) || !remote.exists) return false;
 	}
 	if (remote.finished != base.finished || (!base.finished && fabs(remote.seconds - base.seconds) > 0.01)) return false;
 	next.seconds = remote.seconds;
@@ -1057,7 +1079,7 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 	*class_out = "";
 	abs_remote_progress_t remote;
 	int status = 0;
-	if (!read_progress(item, server, &remote, &status)) {
+	if (!read_progress(item, server, &remote, &status, NULL)) {
 		*class_out = abs_diag_class(status);
 		return 0;
 	}
@@ -1118,7 +1140,7 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 			return 2;
 		}
 		// Re-read immediately before the write; ABS has no conditional PATCH.
-		if (check == 0 && !read_progress(item, server, &remote, &status)) {
+		if (check == 0 && !read_progress(item, server, &remote, &status, NULL)) {
 			*class_out = abs_diag_class(status);
 			return 0;
 		}
@@ -1133,7 +1155,7 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 	if (restarting) {
 		// ABS clears currentTime when un-finishing; restore it only after
 		// confirming that transition, not if another client moved meanwhile.
-		if (!read_progress(item, server, &remote, &status)) {
+		if (!read_progress(item, server, &remote, &status, NULL)) {
 			*class_out = abs_diag_class(status);
 			return 0;
 		}
@@ -1147,7 +1169,7 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 		}
 	}
 	// A successful status alone is not proof that the server kept our position.
-	if (!read_progress(item, server, &remote, &status)) {
+	if (!read_progress(item, server, &remote, &status, NULL)) {
 		*class_out = abs_diag_class(status);
 		return 0;
 	}
@@ -1158,6 +1180,45 @@ static int reconcile_progress(audiobookdb_abs_checkpoint_t *checkpoint, const pr
 	}
 	checkpoint->server_updated_ms = remote.updated_ms;
 	return 1;
+}
+
+void audiobookshelf_book_refresh_position(const char *book, const char *file) {
+	audiobookdb_abs_checkpoint_t base;
+	if (!audiobookdb_abs_get(book, &base) || abs_download_sync_blocked(file)) return;
+	progress_job_t job = {.seconds = base.seconds, .finished = base.finished};
+	snprintf(job.book, sizeof(job.book), "%s", book);
+	snprintf(job.file, sizeof(job.file), "%s", file);
+	char item[ABS_ID_MAX], bound[ABS_SERVER_MAX];
+	legacy_manifest_binding(bound, sizeof(bound));
+	double current, duration;
+	if (!local_progress(&job, item, sizeof(item), &current, &duration, bound, sizeof(bound), NULL, NULL) || !bound[0]) return;
+	abs_auth_snapshot_t auth = {0};
+	abs_remote_progress_t remote;
+	bool found = request_credentials_copy(bound, auth.server, sizeof(auth.server), auth.token, sizeof(auth.token)) &&
+		!strcmp(auth.server, bound) && read_progress(item, bound, &remote, NULL, &auth) && remote.exists;
+	if (found) {
+		abs_auth_snapshot_t latest = {0};
+		found = request_credentials_copy(bound, latest.server, sizeof(latest.server), latest.token, sizeof(latest.token)) &&
+			!strcmp(auth.server, latest.server) && !strcmp(auth.token, latest.token);
+		abs_profiles_snapshot_wipe(&latest);
+	}
+	abs_profiles_snapshot_wipe(&auth);
+	if (!found || (!base.synced && base.file[0] && abs_sync_decide(current, base.finished, base.updated_ms,
+		&remote, history_now_ms()) != ABS_DECISION_DOWNLOAD)) return;
+	if (base.synced && remote.updated_ms > 0 && remote.updated_ms < base.server_updated_ms) return;
+	job.seconds = remote.seconds;
+	job.finished = remote.finished;
+	char target[512], owner[512], mapped_server[ABS_SERVER_MAX], mapped_item[ABS_ID_MAX];
+	snprintf(mapped_server, sizeof(mapped_server), "%s", bound);
+	double seconds;
+	if (!local_progress(&job, mapped_item, sizeof(mapped_item), &current, &duration, mapped_server,
+		sizeof(mapped_server), target, &seconds) || !target[0] || strcmp(mapped_item, item) ||
+		strcmp(mapped_server, bound) || !audiobookdb_book_for_file(target, owner, sizeof(owner)) ||
+		strcmp(owner, book) || access(target, R_OK) || abs_download_sync_blocked(target)) return;
+	long long stamp = remote.updated_ms >= 1577836800000LL &&
+		remote.updated_ms <= remote.server_now_ms + 300000 ? remote.updated_ms : 0;
+	if (!strcmp(base.file, target) && fabs(base.seconds - seconds) <= 0.01 && base.finished == remote.finished) return;
+	audiobook_sync_import(&base, bound, target, seconds, remote.finished, stamp);
 }
 
 static void *progress_worker(void *unused) {
@@ -3694,7 +3755,7 @@ static bool abs_queue_fetch_identity(void *user, const abs_download_op_ctx_t *ct
 		strcpy(id.server, queue_media.server); strcpy(id.owner, owner);
 		strcpy(id.show, ep->show_id); strcpy(id.episode, ep->episode_id);
 		abs_remote_progress_t remote;
-		if (episode_progress_read(&queue_media.auth, &id, &remote, &id.duration, ctx->op) && remote.exists) {
+		if (episode_progress_read(&queue_media.auth, &id, &remote, &id.duration, ctx->op, 10) && remote.exists) {
 			plan->remote_progress = remote.seconds;
 			plan->remote_finished = remote.finished;
 			plan->remote_updated_ms = remote.updated_ms;

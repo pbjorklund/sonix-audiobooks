@@ -20,6 +20,8 @@ bool abs_episode_progress_next(sqlite3 *db, const char *server, const char *owne
 bool abs_episode_progress_attempt(sqlite3 *db, const abs_episode_checkpoint_t *base, long long now);
 
 bool audiobookshelf_episode_reconcile(const abs_auth_snapshot_t *auth, const abs_episode_manifest_t *identity, http_op_t *op);
+void audiobookshelf_episode_refresh_position(const abs_auth_snapshot_t *auth, const abs_episode_manifest_t *identity,
+	http_op_t *op);
 void audiobookshelf_episode_progress_wake(void);
 
 #endif
