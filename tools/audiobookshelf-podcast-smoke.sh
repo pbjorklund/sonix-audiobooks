@@ -44,6 +44,7 @@ mux=()
 if [[ $FORMAT == m4a && ${SONIX_PODCAST_SMOKE_FASTSTART:-0} == 1 ]]; then mux=(-movflags +faststart); fi
 ffmpeg -nostdin -loglevel error -f lavfi -i 'sine=frequency=440:duration=36' -c:a "$codec" -b:a 128k "${mux[@]}" "$MEDIA"
 if [[ ${SONIX_PODCAST_SMOKE_NEXT:-0} == 1 ]]; then touch "$WORK/media/two-podcast-episodes"; fi
+if [[ ${SONIX_PODCAST_SMOKE_NEXT:-0} == large ]]; then touch "$WORK/media/large-podcast-show"; fi
 if [[ ${SONIX_PODCAST_SMOKE_SHOW_FILTERS:-0} == 1 ]]; then touch "$WORK/media/show-progress-fixture"; fi
 if [[ ${SONIX_PODCAST_SMOKE_NO_DATE:-0} == 1 ]]; then touch "$WORK/media/podcast-no-date"; fi
 if [[ ${SONIX_PODCAST_SMOKE_DETAIL_QUEUE:-0} == 1 ]]; then touch "$WORK/media/hold-podcast-download"; fi
@@ -210,13 +211,19 @@ if [[ ${SONIX_PODCAST_SMOKE_SHOW_FILTERS:-0} == 1 ]]; then
     printf 'Podcast show filters: combining Started and Finished excludes Unplayed.\n'
     exit 0
 fi
-if [[ ${SONIX_PODCAST_SMOKE_NEXT:-0} == 1 ]]; then
+if [[ ${SONIX_PODCAST_SMOKE_NEXT:-0} == 1 || ${SONIX_PODCAST_SMOKE_NEXT:-0} == large ]]; then
+    show_started=$(date +%s%3N)
     click 250 393 1
     wait_for 'show episode list' request 'GET /api/items/pod-41?expanded=1 '
     sleep 1
     shot next-actions
+    grep_label next-actions 'Play next' || fail 'show did not expose Play next'
+    play_started=$(date +%s%3N)
     click_show_control Oldest
     wait_for 'oldest episode streaming' request 'GET /api/items/pod-41/file/258638762231958 '
+    wait_for 'oldest decoder opened' grep -q 'PCM open on' "$WORK/first.log"
+    printf 'Play next timing: show ready %d ms, tap to decoder %d ms.\n' "$((play_started - show_started))" "$(( $(date +%s%3N) - play_started ))"
+    [[ $(( $(date +%s%3N) - play_started )) -lt 8000 ]] || fail 'Play next took over eight seconds on loopback'
     wait_for 'played episode download' request 'GET /api/items/pod-41/file/258638762231958/download '
     wait_for 'same-episode local handoff' grep -q 'continued Audiobookshelf episode from verified local audio' "$WORK/first.log"
     both_saved() { [[ $(find "$CARD/Podcast/ABS" -name .abs-episode | wc -l) == 2 ]]; }
@@ -226,6 +233,12 @@ if [[ ${SONIX_PODCAST_SMOKE_NEXT:-0} == 1 ]]; then
     click_show_control Newest
     wait_for 'newest episode opened from the card' awk '/play requested.*Podcast\/ABS\// {seen=1} END {exit !seen}' "$WORK/first.log"
     [[ $(grep -c 'GET /api/items/pod-41/file/.*download ' "$WORK/progress.requests") == 2 ]] || fail 'local replay requested another download'
+    [[ $(grep -c 'GET /api/items/pod-41?expanded=1 ' "$WORK/progress.requests") == 1 ]] || fail 'Play next refetched the full show'
+    if [[ ${SONIX_PODCAST_SMOKE_NEXT:-0} == large ]]; then
+        if grep -Eq 'GET /api/podcasts/pod-41/episode/pod41-ep-(00[3-9]|0[1-9][0-9]|[1-8][0-9][0-9]) ' "$WORK/progress.requests"; then
+            fail 'Play next fetched details for a finished episode'
+        fi
+    fi
     printf 'Play next: oldest streamed and switched to local, both cached, newest played locally.\n'
     exit 0
 fi

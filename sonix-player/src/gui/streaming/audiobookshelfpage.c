@@ -245,7 +245,7 @@ typedef struct {
 	char pod_list_server[ABS_SERVER_MAX], pod_list_owner[ABS_ID_MAX];
 	char pod_local_path[SONIX_LINKED_PATH_MAX];
 	abs_episode_manifest_t pod_identity;
-	bool pod_played, pod_keep_failed;
+	bool pod_played;
 	abs_detail_local_t local;
 	char local_path[1280];
 	// §9.1 wave 2: the cached authenticated cover file for the accepted
@@ -1724,7 +1724,7 @@ static void pod_art_bind(const abs_episode_row_t *ep, int i, lv_obj_t *image) {
 	if (!ep || pod_art[i].pixels.pixels) return;
 	if (!pod_art[i].requested) {
 		char path[ABS_COVER_PATH_MAX], audio[SONIX_LINKED_PATH_MAX];
-		if ((ep->downloaded && abs_episode_download_path(pod_list_server, pod_list_owner, show,
+		if ((view == VIEW_POD_LOCAL_SHOW && abs_episode_download_path(pod_list_server, pod_list_owner, show,
 			ep->episode_id, NULL, audio, sizeof(audio)) && abs_episode_local_cover(audio, path, sizeof(path))) ||
 			abs_cover_cached_shelf(pod_list_server, show, path, sizeof(path)) ||
 			abs_cover_cached(pod_list_server, show, path, sizeof(path))) {
@@ -2211,7 +2211,7 @@ static void job_done_async(void *user) {
 					player_refresh_now_playing();
 					draw_podcasts();
 					switch_screen(player_screen);
-					if (done.pod_keep_failed) gui_notify_popup("podcast_download_failed");
+
 				}
 				return;
 			} else {
@@ -2345,6 +2345,7 @@ static void *worker_main(void *user) {
 		bool dl_finished = false;
 		long long dl_updated_ms = 0;
 		char dl_server[512] = "";
+		abs_auth_snapshot_t keep_auth = {0};
 
 		if (job.kind == JOB_TEST || job.kind == JOB_LIBRARIES) {
 			audiobookshelf_library_t found[ABS_LIBRARY_MAX];
@@ -2460,8 +2461,7 @@ static void *worker_main(void *user) {
 					if (abs_episode_download_path(auth.server, owner, job.id, job.episode_id,
 						id, done.pod_local_path, sizeof(done.pod_local_path))) {
 						if (verified_owner) {
-							if (job.pod_local_only) audiobookshelf_episode_refresh_position(&auth, id, &pod_show_op);
-							else audiobookshelf_episode_reconcile(&auth, id, &pod_show_op);
+							audiobookshelf_episode_refresh_position(&auth, id, &pod_show_op);
 						}
 						count = 1;
 					} else if (verified_owner && !job.pod_local_only) {
@@ -2476,7 +2476,7 @@ static void *worker_main(void *user) {
 							abs_episode_filename(episode, id->audio, sizeof(id->audio));
 							id->bytes = episode->track.size;
 							id->duration = episode->track.duration;
-							audiobookshelf_episode_reconcile(&auth, id, &pod_show_op);
+							audiobookshelf_episode_refresh_position(&auth, id, &pod_show_op);
 							abs_episode_checkpoint_t checkpoint;
 							double resume = audiobookdb_episode_get(id, &checkpoint, NULL) && !checkpoint.finished
 								? checkpoint.seconds : 0;
@@ -2489,17 +2489,9 @@ static void *worker_main(void *user) {
 						free(episode);
 					}
 					if (count > 0 && job.pod_keep_playing && verified_owner) {
-						const char *episodes[] = {job.episode_id, job.next_episode_id};
-						const char *titles[] = {job.title, job.next_title};
-						for (int i = 0; i < 2 && episodes[i][0] && !http_op_cancelled(&pod_show_op); i++) {
-							char path[SONIX_LINKED_PATH_MAX];
-							if (abs_episode_download_path(auth.server, owner, job.id, episodes[i], NULL, path, sizeof(path))) continue;
-							abs_download_enqueue_t req = {.profile_id = auth.profile_id, .server = auth.server, .owner_id = owner,
-								.library_id = job.library_id, .destination = "", .item_id = job.id, .episode_id = episodes[i],
-								.title = titles[i][0] ? titles[i] : episodes[i], .remote_progress = -1};
-							char error[192];
-							if (!abs_download_enqueue_episode(&req, NULL, NULL, error, sizeof(error))) done.pod_keep_failed = true;
-						}
+						// Only the verified binding is needed when enqueueing.
+						strcpy(keep_auth.profile_id, auth.profile_id);
+						strcpy(keep_auth.server, auth.server);
 					}
 				}
 				if (count > 0 && done.pod_episodes && owner[0]) {
@@ -2706,7 +2698,25 @@ static void *worker_main(void *user) {
 		pthread_mutex_lock(&job_lock);
 		result = done;
 		pthread_mutex_unlock(&job_lock);
-		gui_post(job_done_async, NULL);
+		bool delivered = gui_post(job_done_async, NULL);
+		// Publish the playable path before touching the persistent download queue.
+		// A slow card must not hold up the decoder while it commits optional preloads.
+		if (delivered && keep_auth.server[0]) {
+			const char *episodes[] = {job.episode_id, job.next_episode_id};
+			const char *titles[] = {job.title, job.next_title};
+			for (int i = 0; i < 2 && episodes[i][0] && !http_op_cancelled(&pod_show_op); i++) {
+				char path[SONIX_LINKED_PATH_MAX], error[192];
+				const char *owner = done.pod_identity.owner;
+				if (abs_episode_download_path(keep_auth.server, owner, job.id, episodes[i], NULL, path, sizeof(path))) continue;
+				abs_download_enqueue_t req = {.profile_id = keep_auth.profile_id, .server = keep_auth.server, .owner_id = owner,
+					.library_id = job.library_id, .destination = "", .item_id = job.id, .episode_id = episodes[i],
+					.title = titles[i][0] ? titles[i] : episodes[i], .remote_progress = -1};
+				if (!abs_download_enqueue_episode(&req, NULL, NULL, error, sizeof(error))) {
+					gui_notify_popup("podcast_download_failed");
+					break;
+				}
+			}
+		}
 	}
 	return NULL;
 }

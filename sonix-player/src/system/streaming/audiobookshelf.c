@@ -1505,6 +1505,35 @@ static bool read_episode_row(const json_doc_t *doc, int object, abs_episode_row_
 	return true;
 }
 
+typedef struct {
+	abs_episode_row_t **rows;
+	int count;
+	bool remote;
+} episode_state_rows_t;
+
+static int episode_row_id_order(const void *a, const void *b) {
+	const abs_episode_row_t *const *x = a, *const *y = b;
+	return strcmp((*x)->episode_id, (*y)->episode_id);
+}
+
+static void apply_episode_state(const char *episode, double seconds, bool finished, bool dirty, void *user) {
+	episode_state_rows_t *index = user;
+	if (index->remote && !dirty) return;
+	int lo = 0, hi = index->count;
+	while (lo < hi) {
+		int mid = lo + (hi - lo) / 2;
+		abs_episode_row_t *row = index->rows[mid];
+		int cmp = strcmp(episode, row->episode_id);
+		if (cmp < 0) hi = mid;
+		else if (cmp > 0) lo = mid + 1;
+		else {
+			row->finished = finished;
+			row->in_progress = !finished && seconds > 0;
+			return;
+		}
+	}
+}
+
 bool audiobookshelf_episode_badges(const abs_auth_snapshot_t *auth, const char *owner,
 	abs_episode_row_t *rows, int count, http_op_t *op, bool online) {
 	if (!auth || !owner || !owner[0] || !rows || count < 0) return false;
@@ -1512,6 +1541,15 @@ bool audiobookshelf_episode_badges(const abs_auth_snapshot_t *auth, const char *
 	json_doc_t doc;
 	bool parsed = online && api_request_with(auth->server, auth->token, "/api/me", NULL, &body, 10, NULL, op) &&
 		!http_last_truncated() && body && json_parse(body, &doc);
+	// Full-show rows share an identity scope. Index them once without changing
+	// display order, then read their saved checkpoints in one SQLite query.
+	episode_state_rows_t index = {.count = count};
+	bool single_show = count > 0;
+	for (int i = 1; i < count && single_show; i++) single_show = !strcmp(rows[i].show_id, rows[0].show_id);
+	if (single_show && (index.rows = malloc((size_t)count * sizeof(*index.rows)))) {
+		for (int i = 0; i < count; i++) index.rows[i] = &rows[i];
+		qsort(index.rows, (size_t)count, sizeof(*index.rows), episode_row_id_order);
+	}
 	bool got_snapshot = false;
 	if (parsed && abs_json_segment(&doc, json_root(&doc), "id", verified) && !strcmp(verified, owner)) {
 		int array = json_get(&doc, json_root(&doc), "mediaProgress");
@@ -1523,9 +1561,14 @@ bool audiobookshelf_episode_badges(const abs_auth_snapshot_t *auth, const char *
 				char show[ABS_ID_MAX], episode[ABS_ID_MAX];
 				if (!abs_json_segment(&doc, at, "episodeId", episode) ||
 					!abs_json_segment(&doc, at, "libraryItemId", show)) continue;
-				for (int i = 0; i < count; i++) if (!strcmp(rows[i].episode_id, episode) && !strcmp(rows[i].show_id, show)) {
-					rows[i].finished = json_obj_bool(&doc, at, "isFinished", false);
-					rows[i].in_progress = !rows[i].finished && json_double(&doc, json_get(&doc, at, "currentTime"), 0) > 0;
+				bool finished = json_obj_bool(&doc, at, "isFinished", false);
+				double seconds = json_double(&doc, json_get(&doc, at, "currentTime"), 0);
+				if (index.rows) {
+					if (!strcmp(rows[0].show_id, show)) apply_episode_state(episode, seconds, finished, false, &index);
+				} else for (int i = 0; i < count; i++) {
+					if (strcmp(rows[i].episode_id, episode) || strcmp(rows[i].show_id, show)) continue;
+					rows[i].finished = finished;
+					rows[i].in_progress = !finished && seconds > 0;
 					break;
 				}
 			}
@@ -1533,12 +1576,18 @@ bool audiobookshelf_episode_badges(const abs_auth_snapshot_t *auth, const char *
 	}
 	if (parsed) json_free(&doc);
 	free(body);
+	if (index.rows) {
+		index.remote = got_snapshot;
+		if (!http_op_cancelled(op)) audiobookdb_episode_states(auth->server, owner, rows[0].show_id, apply_episode_state, &index);
+		free(index.rows);
+		return true;
+	}
 	for (int i = 0; i < count && !http_op_cancelled(op); i++) {
 		abs_episode_manifest_t id = {0};
 		strcpy(id.server, auth->server); strcpy(id.owner, owner);
 		strcpy(id.show, rows[i].show_id); strcpy(id.episode, rows[i].episode_id);
-		char path[SONIX_LINKED_PATH_MAX];
-		rows[i].downloaded = abs_episode_download_path(id.server, id.owner, id.show, id.episode, NULL, path, sizeof(path));
+		// The list checks the card for visible rows only. Walking the SD path
+		// for every episode here makes an entire large show wait on filesystem I/O.
 		abs_episode_checkpoint_t s;
 		if (audiobookdb_episode_get(&id, &s, NULL) && (!got_snapshot || s.dirty)) {
 			rows[i].finished = s.finished;

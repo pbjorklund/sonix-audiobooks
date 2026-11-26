@@ -16,7 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: sonix-player
@@ -63,7 +63,7 @@ jobs:
           SONIX_PODCAST_SMOKE_SHOWS=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_LABELS=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_SLEEP=1 tools/audiobookshelf-podcast-smoke.sh
-          SONIX_PODCAST_SMOKE_NEXT=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_NEXT=large tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_SHOW_FILTERS=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_FROM_MUSIC=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_FROM_MUSIC=1 tools/audiobookshelf-podcast-smoke.sh

@@ -803,6 +803,24 @@ bool audiobookdb_episode_get(const abs_episode_manifest_t *id, abs_episode_check
 	return ok;
 }
 
+void audiobookdb_episode_states(const char *server, const char *owner, const char *show,
+		void (*visit)(const char *, double, bool, bool, void *), void *user) {
+	pthread_mutex_lock(&db_lock);
+	sqlite3_stmt *query = NULL;
+	if (db && sqlite3_prepare_v2(db, "SELECT episode,seconds,finished,dirty FROM ABS_EPISODE_PROGRESS "
+		"WHERE server=? AND owner=? AND show=?", -1, &query, NULL) == SQLITE_OK) {
+		sqlite3_bind_text(query, 1, server, -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(query, 2, owner, -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(query, 3, show, -1, SQLITE_TRANSIENT);
+		while (sqlite3_step(query) == SQLITE_ROW) {
+			visit((const char *)sqlite3_column_text(query, 0), sqlite3_column_double(query, 1),
+				sqlite3_column_int(query, 2) != 0, sqlite3_column_int(query, 3) != 0, user);
+		}
+	}
+	sqlite3_finalize(query);
+	pthread_mutex_unlock(&db_lock);
+}
+
 bool audiobookdb_episode_save(unsigned generation, const abs_episode_checkpoint_t *value) {
 	pthread_mutex_lock(&db_lock);
 	bool ok = generation == audiobookdb_history_generation() && abs_episode_progress_schema(db) &&

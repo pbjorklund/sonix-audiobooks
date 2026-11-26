@@ -196,6 +196,9 @@ bool audiobookdb_abs_next(const char *server, audiobookdb_abs_checkpoint_t *out)
 #include "src/system/streaming/abs_history.h"
 #include "src/system/streaming/abs_episode_progress.h"
 bool audiobookdb_episode_get(const abs_episode_manifest_t *id, abs_episode_checkpoint_t *out, unsigned *generation);
+// Visit the saved states for one account/show while holding the database lock.
+void audiobookdb_episode_states(const char *server, const char *owner, const char *show,
+	void (*visit)(const char *episode, double seconds, bool finished, bool dirty, void *user), void *user);
 bool audiobookdb_episode_save(unsigned generation, const abs_episode_checkpoint_t *value);
 bool audiobookdb_episode_apply(unsigned generation, const abs_episode_checkpoint_t *base, const abs_episode_checkpoint_t *value);
 bool audiobookdb_episode_next(const char *server, const char *owner, long long before, abs_episode_checkpoint_t *out);

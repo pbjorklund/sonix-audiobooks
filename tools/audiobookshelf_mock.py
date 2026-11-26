@@ -426,6 +426,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.podcast_smoke:
                 state, episode = progress.get("pod-41/pod41-ep-001")
                 payload["mediaProgress"] = [dict(episode, libraryItemId="pod-41", episodeId="pod41-ep-001")] if state == "value" else []
+                if (self.media_dir / "large-podcast-show").exists():
+                    payload["mediaProgress"] += [
+                        {"libraryItemId": "pod-41", "episodeId": f"pod41-ep-{i:03d}", "currentTime": 36, "isFinished": True}
+                        for i in range(3, 801)
+                    ]
                 if (self.media_dir / "show-progress-fixture").exists():
                     payload["mediaProgress"] = [
                         {"libraryItemId": "pod-41", "episodeId": "pod41-ep-002", "currentTime": 10, "isFinished": False},
@@ -685,6 +690,13 @@ class Handler(BaseHTTPRequestHandler):
                 payload["media"]["episodes"] = payload["media"]["episodes"][:2]
             elif (self.media_dir / "show-progress-fixture").exists():
                 payload["media"]["episodes"] = payload["media"]["episodes"][:3]
+            elif (self.media_dir / "large-podcast-show").exists():
+                first, second = payload["media"]["episodes"][:2]
+                rows = [dict(first, id=f"pod41-ep-{i:03d}", title=f"Fixture Episode {i:03d}",
+                             publishedAt=1700000000000 + i * 1000, addedAt=1700000000000 + i * 1000)
+                        for i in range(3, 801)]
+                payload["media"]["episodes"] = [dict(first, publishedAt=1700000000000),
+                    dict(second, publishedAt=1800000000000), *rows]
         for library_id, rows in self.fixture.rows_by_library.items():
             if any(row["id"] == item_id for row in rows):
                 payload.setdefault("libraryId", library_id)

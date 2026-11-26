@@ -2,9 +2,10 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
-## Sonix Audiobooks 1.3.1.7 (2026-11-26)
+## Sonix Audiobooks 1.3.1.8 (2026-11-26)
 
 - **Audiobookshelf resume:** Starting a downloaded episode or linked audiobook checks the server for a newer listening position. If the server is unreachable, playback uses the position saved on the R1. Browsing Downloads still works without a network request.
+- **Play next on large podcast shows:** The player looks up saved progress in one pass and checks the SD card only for visible rows. Oldest and Newest start playback before adding the selected and following episodes to the download queue.
 
 ## Sonix Audiobooks 1.3.1.6 (2026-11-25)
 
