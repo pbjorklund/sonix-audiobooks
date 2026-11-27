@@ -140,7 +140,10 @@ static tidalkeep_enqueue_result_t enqueue_quality(const tidal_track_t *track, in
 }
 
 tidalkeep_enqueue_result_t tidalkeep_enqueue_quality(const tidal_track_t *track, int quality, bool replace) {
-	return enqueue_quality(track, quality, replace, true, false);
+	// Only playlist batches create pool entries; replacing a single track
+	// preserves the location of its existing copy.
+	bool playlist = replace && track && tidalcache_is_playlist_only(track->id);
+	return enqueue_quality(track, quality, replace, playlist, false);
 }
 
 tidalkeep_enqueue_result_t tidalkeep_enqueue_batch(const tidal_track_t *track, int quality, bool replace, bool playlist) {

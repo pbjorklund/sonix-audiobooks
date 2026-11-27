@@ -2,7 +2,7 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
-## Sonix Audiobooks 1.3.1.13 (2026-11-27)
+## Sonix Audiobooks 1.3.1.14 (2026-11-27)
 
 - **TIDAL lyrics:** Open **Lyrics** from the Now Playing menu or swipe left across the cover. Timed lyrics highlight and follow the current line. Tap a line to seek. Plain lyrics stay readable, and saved lyrics work offline.
 - **Single-ear audio:** Add the button in Control Center settings. Tap to cycle from both ears to left-ear mono, right-ear mono, and back. Both channels are mixed into the selected ear without changing saved mono or balance settings. Bit-perfect and DSD playback are excluded.

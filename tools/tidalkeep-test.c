@@ -430,6 +430,11 @@ int main(int argc, char **argv) {
 	drain(&state);
 	assert(tidalcache_kept_quality(change.id) == TIDAL_QUALITY_HIRES);
 
+	tidal_track_t single = track(129, 1);
+	assert(tidalkeep_enqueue_quality(&single, TIDAL_QUALITY_LOW, false) == TIDALKEEP_ADDED);
+	drain(&state);
+	assert(tidalcache_is_kept(single.id) && !tidalcache_is_playlist_only(single.id));
+
 	tidal_track_t playlist = track(130, 1);
 	const char *album_ids[] = {playlist.album_id};
 	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_LOW, false, true) == TIDALKEEP_ADDED);
@@ -443,7 +448,12 @@ int main(int argc, char **argv) {
 	assert(counts[0] == 0);
 	fetched_count = 0;
 	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_LOW, false, true) == TIDALKEEP_SKIPPED);
-	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_LOW, false, false) == TIDALKEEP_ADDED);
+	assert(tidalkeep_enqueue_quality(&playlist, TIDAL_QUALITY_HIGH, true) == TIDALKEEP_ADDED);
+	drain(&state);
+	assert(tidalcache_is_playlist_only(playlist.id) && tidalcache_kept_quality(playlist.id) == TIDAL_QUALITY_HIGH);
+	assert(tidalcache_find(playlist.id, before, sizeof(before)));
+	fetched_count = 0;
+	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_HIGH, false, false) == TIDALKEEP_ADDED);
 	drain(&state);
 	assert(fetched_count == 0 && !tidalcache_is_playlist_only(playlist.id));
 	assert(tidalcache_find(playlist.id, after, sizeof(after)) && strcmp(before, after) && access(before, F_OK) != 0);
