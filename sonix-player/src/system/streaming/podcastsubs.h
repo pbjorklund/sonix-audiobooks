@@ -76,4 +76,8 @@ int podcastsubs_missing_details(long long *ids_out, int max);
 void podcastsubs_keep_address(long long feed_id, const char *url);
 bool podcastsubs_address(long long feed_id, char *out, size_t size);
 
+// Playback preferences are independent of the followed list.
+int podcastsubs_show_speed(const char *key); // 0 if absent
+bool podcastsubs_store_show_speed(const char *key, int permille);
+
 #endif /* PODCASTSUBS_H */

@@ -23,6 +23,18 @@ request() { grep -qF "$1" "$WORK/progress.requests"; }
 click() { xdotool mousemove --window "$WINDOW" "$1" "$2" click 1; sleep "${3:-.75}"; }
 shot() { scrot -o "$WORK/$1.png"; }
 grep_label() { tesseract "$WORK/$1.png" stdout 2>/dev/null | grep -F "$2" >/dev/null; }
+choose_speed() {
+    local speed=$1 x y
+    click 43 732
+    shot speed-menu
+    read -r x y < <(tesseract "$WORK/speed-menu.png" stdout --psm 11 tsv 2>/dev/null | awk -F '\t' -v speed="$speed" \
+        '$12 == speed { print int($7 + $9/2 - 60), int($8 + $10/2 - 50) }')
+    click "$x" "$y"
+}
+assert_speed() {
+    ffmpeg -v error -i "$WORK/$1.png" -vf 'crop=64:44:72:762,scale=256:176' -frames:v 1 -f image2pipe -vcodec png - |
+        tesseract stdin stdout --psm 7 2>/dev/null | grep -F "$2" >/dev/null
+}
 assert_show_art() {
     ffmpeg -v error -i "$WORK/$1.png" -pix_fmt rgb24 -f rawvideo - | python3 -c '
 import sys
@@ -497,6 +509,11 @@ assert list(json.loads((p / 'progress.sessions.json').read_text())) == [(p / 'pr
 PY
 fi
 shot streamed
+if [[ ${SONIX_PODCAST_SMOKE_SPEED:-0} == 1 ]]; then
+    choose_speed 1.25x
+    [[ $(sqlite3 "$CARD/.local/podcast.db" 'SELECT permille FROM PODCAST_SHOW_SPEED') == 1250 ]] ||
+        fail 'changing the streamed episode did not save its show speed'
+fi
 if [[ ${SONIX_PODCAST_SMOKE_ART:-0} == 1 ]]; then assert_show_art streamed; fi
 click 43 56 1
 shot return-detail
@@ -566,6 +583,9 @@ else
 fi
 mkdir -p "$CARD/Podcast/Native Podcast"
 cp "$MEDIA" "$CARD/Podcast/Native Podcast/Native Episode.$FORMAT"
+if [[ ${SONIX_PODCAST_SMOKE_SPEED:-0} == 1 ]]; then
+    printf 'feed_id=12\nepisode_id=34\n' >"$CARD/Podcast/Native Podcast/Native Episode.$FORMAT.tags"
+fi
 # Reopen the same card with the server unreachable. Remember Track is off.
 start_player offline
 click 356 160
@@ -590,6 +610,9 @@ sleep 2
 click 240 732 1
 wait_for 'offline position persisted' saved_position
 shot offline-playing
+if [[ ${SONIX_PODCAST_SMOKE_SPEED:-0} == 1 ]]; then
+    assert_speed offline-playing 1.25x || fail 'the saved download did not restore its streamed show speed after restart'
+fi
 if [[ ${SONIX_PODCAST_SMOKE_ART:-0} == 1 ]]; then assert_show_art offline-playing; fi
 if [[ ${SONIX_PODCAST_SMOKE_SYNC:-0} == 1 ]]; then
     wait_for 'offline checkpoint pending' bash -c '[[ $(sqlite3 -cmd ".timeout 500" "$1" "select dirty from ABS_EPISODE_PROGRESS") == 1 ]]' _ "$DB"
@@ -684,6 +707,13 @@ if [[ ${SONIX_PODCAST_SMOKE_RSS:-0} == 1 ]]; then
     shot native-show
     click 250 370 1
     wait_for 'native podcast playback' grep -Eq 'play requested .*Podcast/Native Podcast/Native Episode' "$WORK/offline.log"
+    if [[ ${SONIX_PODCAST_SMOKE_SPEED:-0} == 1 ]]; then
+        shot native-speed
+        assert_speed native-speed 1.0x || fail 'the native episode inherited the Audiobookshelf show speed'
+        choose_speed 1.0x
+        [[ $(sqlite3 "$CARD/.local/podcast.db" 'SELECT group_concat(permille) FROM (SELECT permille FROM PODCAST_SHOW_SPEED ORDER BY show_key)') == 1250,1000 ]] ||
+            fail 'saving the native feed speed changed the Audiobookshelf show preference'
+    fi
     [[ $(sqlite3 "$DB" 'select count(*) from ABS_EPISODE_PROGRESS') == 1 ]] ||
         fail 'native podcast wrote an Audiobookshelf checkpoint'
     printf 'Native on-card podcast playback passed without an extra ABS checkpoint.\n'

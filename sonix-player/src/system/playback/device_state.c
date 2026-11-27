@@ -476,14 +476,14 @@ void device_state_note_storage_gone(void) {
 	interrupted_pos = state.progress_current_secs;
 }
 
-// A book plays at the audiobook speed, an episode at the podcast speed, and
+// A book plays at the audiobook speed, an episode at its show speed, and
 // anything else at 1.0. Set at every track change and not only from the
 // pop-over, so a song that follows a book at 1.5x is not also played at 1.5x.
 static void apply_track_speed(void) {
 	if (audiobook_is_playing()) {
 		audio_set_speed(audiobook_speed());
 	} else if (podcastcache_is_episode(current_metadata_file)) {
-		audio_set_speed(podcast_speed());
+		audio_set_speed((double)podcast_speed_for(current_metadata_file) / 1000.0);
 	} else {
 		audio_set_speed(1.0);
 	}

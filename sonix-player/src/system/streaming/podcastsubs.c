@@ -109,6 +109,7 @@ static sqlite3 *open_db(void) {
 	add_url_column(db);
 	add_episodes_column(db);
 	exec(db, "CREATE TABLE IF NOT EXISTS PODCAST_RSS(id INTEGER PRIMARY KEY, url TEXT)");
+	exec(db, "CREATE TABLE IF NOT EXISTS PODCAST_SHOW_SPEED(show_key TEXT PRIMARY KEY, permille INTEGER NOT NULL)");
 	return db;
 }
 
@@ -539,4 +540,39 @@ bool podcastsubs_address(long long feed_id, char *out, size_t size) {
 	}
 	sqlite3_close(db);
 	return out[0] != '\0';
+}
+
+int podcastsubs_show_speed(const char *key) {
+	sqlite3 *db = NULL;
+	if (!db_path[0]) return 0;
+	int speed = 0;
+	if (sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+		sqlite3_busy_timeout(db, 250);
+		sqlite3_stmt *stmt = NULL;
+		if (sqlite3_prepare_v2(db, "SELECT permille FROM PODCAST_SHOW_SPEED WHERE show_key=?", -1, &stmt, NULL) == SQLITE_OK) {
+			sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+			if (sqlite3_step(stmt) == SQLITE_ROW) speed = sqlite3_column_int(stmt, 0);
+			sqlite3_finalize(stmt);
+		}
+	}
+	sqlite3_close(db);
+	return speed;
+}
+
+bool podcastsubs_store_show_speed(const char *key, int permille) {
+	sqlite3 *db = open_db();
+	if (!db) return false;
+	sqlite3_busy_timeout(db, 250);
+	sqlite3_stmt *stmt = NULL;
+	bool ok = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO PODCAST_SHOW_SPEED(show_key,permille) VALUES(?,?)", -1,
+		&stmt, NULL) == SQLITE_OK;
+	if (ok) {
+		sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+		sqlite3_bind_int(stmt, 2, permille);
+		ok = sqlite3_step(stmt) == SQLITE_DONE;
+		sqlite3_finalize(stmt);
+	}
+	if (!ok) fprintf(stderr, "podcastsubs: cannot save show speed: %s\n", sqlite3_errmsg(db));
+	sqlite3_close(db);
+	return ok;
 }

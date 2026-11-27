@@ -4003,9 +4003,7 @@ void podcastpage_init(gui_config_t *cfg) {
 	lv_timer_pause(art_timer);
 	qobuzart_set_root(storage_sd_root());
 
-	podcastcache_set_root(storage_sd_root());
-	podcastsubs_set_root(storage_sd_root());
-
+	// The cache and podcast database already use the card root set at startup.
 	// Notices only: the first list is asked for by the page when it really
 	// opens, not at player startup -- at startup the card may not have been read
 	// yet and the Wi-Fi may not be up.

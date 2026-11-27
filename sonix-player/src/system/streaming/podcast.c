@@ -11,6 +11,8 @@
 #include "src/system/core/json.h"
 #include "src/system/core/lang.h"
 #include "src/system/core/sha1.h"
+#include "src/system/streaming/abs_episode_playback.h"
+#include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/podcastrss.h"
 #include "src/system/streaming/podcastsubs.h"
 #include "src/system/streaming/streamkeys.h"
@@ -508,22 +510,39 @@ void podcast_set_skip_back(int seconds) { config_set_int("podcast", "skip_back",
 
 void podcast_set_skip_forward(int seconds) { config_set_int("podcast", "skip_forward", clamp_skip(seconds)); }
 
-int podcast_speed_permille(void) {
-	long value = config_get_int("podcast", "speed", 1000);
-	if (value < 250 || value > 4000) {
-		value = 1000;
+#define SHOW_SPEED_KEY_MAX (ABS_SERVER_MAX + 2 * ABS_ID_MAX + 32)
+
+static bool show_speed_key(const char *path, char key[SHOW_SPEED_KEY_MAX]) {
+	if (!path || !*path) return false;
+	abs_episode_manifest_t id;
+	if (abs_episode_playback_identity(path, &id)) {
+		// Length prefixes keep server and owner boundaries unambiguous.
+		if (!id.server[0] || !id.owner[0] || !id.show[0]) return false;
+		snprintf(key, SHOW_SPEED_KEY_MAX, "abs:%zu:%s%zu:%s%s", strlen(id.server), id.server,
+			strlen(id.owner), id.owner, id.show);
+		return true;
 	}
-	return (int)value;
+	long long feed;
+	if (!podcastcache_feed_id(path, &feed)) return false;
+	snprintf(key, SHOW_SPEED_KEY_MAX, "feed:%lld", feed);
+	return true;
 }
 
-void podcast_set_speed_permille(int permille) {
-	if (permille < 250 || permille > 4000) {
-		permille = 1000;
-	}
-	config_set_int("podcast", "speed", permille);
+static bool valid_speed(long permille) { return permille >= 250 && permille <= 4000; }
+
+int podcast_speed_for(const char *path) {
+	char key[SHOW_SPEED_KEY_MAX];
+	int saved = show_speed_key(path, key) ? podcastsubs_show_speed(key) : 0;
+	if (valid_speed(saved)) return saved;
+	// Keep a pre-upgrade preference as the default until a show is set.
+	long fallback = config_get_int("podcast", "speed", 1000);
+	return valid_speed(fallback) ? (int)fallback : 1000;
 }
 
-double podcast_speed(void) { return (double)podcast_speed_permille() / 1000.0; }
+bool podcast_remember_speed(const char *path, int permille) {
+	char key[SHOW_SPEED_KEY_MAX];
+	return valid_speed(permille) && show_speed_key(path, key) && podcastsubs_store_show_speed(key, permille);
+}
 
 bool podcast_stop_at_episode_end(void) { return config_get_int("podcast", "stop_episode_end", 0) != 0; }
 

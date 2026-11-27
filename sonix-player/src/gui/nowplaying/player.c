@@ -3590,6 +3590,7 @@ static void refresh_now_playing(void) {
 	update_fav_button();
 	update_format_label(&state);
 	update_qobuz_badge();
+	update_speed_button();
 
 	lyrics_request(&state);
 
@@ -3990,13 +3991,14 @@ static void update_format_label(const device_state_t *state) {
 	lv_label_set_text_fmt(format_label, "%d/%g %s", bits > 0 ? bits : 16, state->stream_sample_rate / 1000.0, name);
 }
 
-// The speed setting of what is playing: an episode has its own, apart from the
-// books'.
+// The playback engine already loaded the episode's show setting.
 static bool speed_is_podcast(void) { return podcast_mode && !audiobook_mode; }
 
 static int speed_current_permille(void) {
-	return speed_is_podcast() ? podcast_speed_permille() : audiobook_speed_permille();
+	return speed_is_podcast() ? (int)(audio_get_speed() * 1000.0 + 0.5) : audiobook_speed_permille();
 }
+
+static char speed_menu_path[sizeof(((device_state_t *)0)->current_file)];
 
 // Show the selected rate without requiring the speed menu to be open.
 static void update_speed_button(void) {
@@ -4017,10 +4019,12 @@ static void update_speed_button(void) {
 }
 
 static void speed_pick(void *user) {
+	device_state_t state;
+	device_state_get(&state);
+	if (!state.current_file[0] || strcmp(state.current_file, speed_menu_path) != 0) return;
 	int permille = (int)(intptr_t)user;
 	if (speed_is_podcast()) {
-		podcast_set_speed_permille(permille);
-		permille = podcast_speed_permille();
+		if (!podcast_remember_speed(state.current_file, permille)) toast_error("podcast_speed_not_saved");
 	} else {
 		audiobook_set_speed_permille(permille);
 		permille = audiobook_speed_permille();
@@ -4036,6 +4040,10 @@ static void speed_btn_event_cb(lv_event_t *e) {
 	static const int CHOICES[] = {500, 750, 1000, 1250, 1500, 1750, 2000};
 	static const char *const LABELS[] = {"0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "1.75x", "2.0x"};
 	enum { CHOICE_COUNT = sizeof(CHOICES) / sizeof(CHOICES[0]) };
+
+	device_state_t state;
+	device_state_get(&state);
+	snprintf(speed_menu_path, sizeof(speed_menu_path), "%s", state.current_file);
 
 	// Zeroed, not just filled field by field: popover_item_t also has
 	// `checked`, and stack garbage in it puts a tick on a random entry -- along
