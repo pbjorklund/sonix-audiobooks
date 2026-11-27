@@ -6,16 +6,24 @@
 #include "src/gui/audio/metronomepage.h"
 #include "src/gui/ebook/ebookpage.h"
 #include "src/gui/flappybird/flappybird.h"
+#include "src/gui/library/audiobooks.h"
 #include "src/gui/library/filespage.h"
 #include "src/gui/gearboy/gearboypage.h"
 #include "src/gui/shell/gridpage.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/settingsrow.h"
+#include "src/gui/wireless/wireless.h"
 
 lv_obj_t *morepage_screen;
 
+static void more_loaded_cb(lv_event_t *e) {
+	gridpage_hint_scroll(lv_event_get_user_data(e));
+}
+
 void morepage_init(gui_config_t *cfg) {
 	const grid_entry_t entries[] = {
+		{"wireless", &icon_menu_wireless, &wireless_screen, NULL},
+		{"audiobooks", &icon_menu_audiobooks, &audiobooks_screen, NULL},
 		{"dac", &icon_menu_dac, &dacpage_screen, NULL},
 #if GB_CORE
 		// The Game Boy emulator. Present only when the binary was built with
@@ -35,11 +43,10 @@ void morepage_init(gui_config_t *cfg) {
 		{"metronome", &icon_menu_metronome, &metronomepage_screen, NULL},
 	};
 
-	// Two columns by three rows, like the Music and Wireless pages, so a tile
-	// here is exactly the size of a tile there. The grid is laid out as full
-	// even with fewer entries, so the only tile sits where it would with six --
-	// top left -- instead of floating in the middle of a page of its own.
-	gridpage_build(morepage_screen, cfg, entries, (int)(sizeof(entries) / sizeof(entries[0])), 2, 3, true);
+	// Keep the usual tile size and scroll to the remaining tools.
+	lv_obj_t *grid = gridpage_build(morepage_screen, cfg, entries, (int)(sizeof(entries) / sizeof(entries[0])), 2, 3, true);
+	gridpage_set_scrolling(grid);
+	lv_obj_add_event_cb(morepage_screen, more_loaded_cb, LV_EVENT_SCREEN_LOADED, grid);
 
 	settingsrow_title(morepage_screen, cfg, "more");
 }

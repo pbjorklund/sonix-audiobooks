@@ -195,7 +195,8 @@ start_player first-run
 # Coordinates are relative to the 480x800 R1 SDL window. The assertions below
 # verify the resulting state, so an upstream layout change fails loudly instead
 # of reporting a false pass.
-click 355 420       # Home -> Audiobooks
+click 125 690       # Home -> More
+click 355 220       # More -> Audiobooks
 screenshot scan-offer
 click 240 584       # empty-library Scan button
 
@@ -272,7 +273,8 @@ screenshot checkpoint
 
 stop_player
 start_player resume-run
-click 355 420       # Home -> Audiobooks
+click 125 690       # Home -> More
+click 355 220       # More -> Audiobooks
 click 355 465       # Audiobooks -> Continue
 click 240 180       # Book One
 

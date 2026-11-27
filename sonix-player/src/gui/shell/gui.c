@@ -653,8 +653,6 @@ void gui_init(gui_config_t *cfg) {
 	// the screensaver, which is why they live on the system layer.
 	corners_init(cfg);
 
-	main_menu_init(cfg);
-
 	music_init(cfg);
 	coverflow_init(cfg);
 
@@ -672,9 +670,7 @@ void gui_init(gui_config_t *cfg) {
 	btsettings_init(cfg);
 	wireless_init(cfg);
 
-	// streaming section: three services that are not implemented yet, so the
-	// page exists and is walkable but its tiles say so when tapped.
-	// radio before the section, so its tile has somewhere to point.
+	// Radio exists before the Streaming grid binds its tile.
 	radiopage_init(cfg);
 	dacpage_init(cfg);
 	// After dacpage: the More section points at its pages.
@@ -695,6 +691,7 @@ void gui_init(gui_config_t *cfg) {
 	imageview_init(cfg); // likewise, for a picture
 	filespage_init(cfg);
 	streaming_init(cfg);
+	main_menu_init(cfg); // TIDAL and Audiobookshelf screens now exist.
 
 	player_init(cfg);
 

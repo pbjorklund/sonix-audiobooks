@@ -409,7 +409,8 @@ click 43 88 2          # the books view -> the library home
 click 43 88 2          # the library home -> library picker
 click 43 88 2          # the library picker -> Streaming
 click 43 88 2          # Streaming -> Home
-click 356 406 1        # Home -> Audiobooks (upstream 1.3.0 home layout)
+click 125 690 1        # Home -> More
+click 355 220 1        # More -> Audiobooks
 click 125 232 1        # Audiobooks -> Library
 # Simulate another client moving to part one after the Download imported part two.
 if [[ "$OFFLINE_RESTART" != 1 && "$CONFLICTS" != 1 ]]; then

@@ -79,6 +79,52 @@ shot() { scrot -o "$WORK/$1.png"; }
 assert_label() {
     tesseract "$WORK/$1.png" stdout 2>/dev/null | grep -F "$2" >/dev/null
 }
+if [[ ${1:-} == home ]]; then
+    for ((i=0; i<20; i++)); do
+        shot home-grid
+        tesseract "$WORK/home-grid.png" stdout --psm 11 2>/dev/null >"$WORK/home-grid.txt"
+        if grep -qx Streaming "$WORK/home-grid.txt"; then break; fi
+        sleep .2
+    done
+    for label in Music Streaming Tidal Audiobookshelf More Settings; do grep -qx "$label" "$WORK/home-grid.txt"; done
+    if grep -Ex 'Wireless|Audiobooks' "$WORK/home-grid.txt"; then exit 1; fi
+    click 125 410
+    shot direct-tidal
+    assert_label direct-tidal 'Saved for later'
+    click 43 88
+    shot back-from-tidal
+    assert_label back-from-tidal Streaming
+    click 355 410
+    shot direct-audiobookshelf
+    assert_label direct-audiobookshelf 'Podcast downloads'
+    click 43 88
+    shot back-from-audiobookshelf
+    assert_label back-from-audiobookshelf Streaming
+    click 125 690
+    shot more-grid
+    assert_label more-grid Wireless
+    assert_label more-grid Audiobooks
+    click 125 220
+    shot wireless
+    assert_label wireless Bluetooth
+    click 43 88
+    click 355 220
+    shot local-audiobooks
+    assert_label local-audiobooks Scan
+    click 43 88
+    # The existing tools below the fold remain reachable.
+    xdotool mousemove --window "$WINDOW" 240 630 mousedown 1
+    for y in 580 520 460 400 340 280; do
+        xdotool mousemove --window "$WINDOW" 240 "$y"
+        sleep .08
+    done
+    xdotool mouseup 1
+    sleep .8
+    shot more-scrolled
+    assert_label more-scrolled Metronome
+    printf 'Home shortcuts, Back, and moved entry points passed.\n'
+    exit 0
+fi
 click 356 160
 click 125 219
 shot home
