@@ -205,30 +205,29 @@ static job_kind_t list_kind;
 static bool page_more;
 static bool page_loading;
 
-static void submit(const job_t *job) {
+static unsigned submit(const job_t *job) {
 	pthread_mutex_lock(&job_lock);
 	pending = *job;
 	have_pending = true;
-	job_serial++;
+	if (++job_serial == 0) ++job_serial;
+	unsigned serial = job_serial;
 	pthread_cond_signal(&job_ready);
 	pthread_mutex_unlock(&job_lock);
+	return serial;
 }
 
 // ---------------------------------------------------------------------------
 // the busy veil
 //
-// Only for requests that lead to a list, and only because it stops a second
-// entry being tapped while the first is arriving. It lasts as long as one HTTP
-// request.
-//
-// Neither playback (the track starts while it downloads, see tidalcache_start)
-// nor login raises it; login has its own spinner on the code page, which the
-// veil would hide.
+// List requests and playback startup block another tap while they wait.
+// Login has its own spinner on the code page.
 // ---------------------------------------------------------------------------
 
-// A spinner in the middle of the screen, no text: understood without reading
-// and needing no translation. The string callers pass is ignored.
 static lv_obj_t *busy_layer;
+static lv_obj_t *busy_label;
+static unsigned play_starting; // GUI-owned serial; zero when not waiting
+static unsigned result_serial;
+static void play_started_async(void *user);
 
 static void busy_hide(void) {
 	if (busy_layer) {
@@ -237,10 +236,11 @@ static void busy_hide(void) {
 }
 
 static void busy_show(const char *text) {
-	(void)text;
 	if (!busy_layer) {
 		return;
 	}
+	if (play_starting) lv_label_set_text(busy_label, tr(text));
+	lv_obj_set_hidden(busy_label, !play_starting);
 	lv_obj_set_hidden(busy_layer, false);
 	lv_obj_move_foreground(busy_layer);
 }
@@ -254,6 +254,7 @@ static void build_busy_layer(void) {
 	lv_obj_set_style_border_width(busy_layer, 0, 0);
 	lv_obj_set_style_radius(busy_layer, 0, 0);
 	lv_obj_set_scrollable(busy_layer, false);
+	lv_obj_set_clickable(busy_layer, true);
 	lv_obj_set_hidden(busy_layer, true);
 	lv_obj_set_flex_flow(busy_layer, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(busy_layer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -263,6 +264,9 @@ static void build_busy_layer(void) {
 	lv_obj_t *spin = spinner_create(busy_layer, &icon_loader_big);
 	lv_obj_set_style_image_recolor(spin, lv_color_white(), 0);
 	lv_obj_set_style_image_recolor_opa(spin, LV_OPA_COVER, 0);
+	busy_label = lv_label_create(busy_layer);
+	lv_obj_set_style_text_font(busy_label, &font_ui_24, 0);
+	lv_obj_set_style_text_color(busy_label, lv_color_white(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,9 +1512,13 @@ static void job_done_cb(void *user) {
 	(void)user;
 	// Before reading any result_*: from here on the worker is held and nothing
 	// writes underneath. It is released on the way out, in job_result_taken().
-	busy_hide();
+	if (result_kind != JOB_PLAY && !play_starting) busy_hide();
 
 	if (result_error[0]) {
+		if (result_kind == JOB_PLAY && play_starting == result_serial) {
+			play_starting = 0;
+			busy_hide();
+		}
 		// Login has its own page to report on. A transient popup would leave
 		// the spinner turning on a code that will never arrive, with no way to
 		// retry.
@@ -1542,10 +1550,9 @@ static void job_done_cb(void *user) {
 		break;
 
 	case JOB_PLAY:
-		// Nothing: the worker already opened the player the moment the music
-		// started. This runs much later -- after the next track has also been
-		// prefetched, which is minutes -- and reopening it now would tear away
-		// whatever page the user has since opened.
+		// Normally already opened by the early callback, before artwork.
+		// Fall back here if that callback could not be queued.
+		play_started_async((void *)(uintptr_t)result_serial);
 		break;
 
 	case JOB_SAVE_ACCOUNT_ALBUM:
@@ -1754,7 +1761,9 @@ static void cover_ready_async(void *user) {
 }
 
 static void play_started_async(void *user) {
-	(void)user;
+	if (play_starting == 0 || play_starting != (unsigned)(uintptr_t)user) return;
+	play_starting = 0;
+	busy_hide();
 	player_refresh_now_playing();
 	switch_screen(player_screen);
 }
@@ -1923,8 +1932,9 @@ static bool prepare_track(const tidal_track_t *track, char *path, size_t size) {
 	return true;
 }
 
-static void do_play(int index, bool local_only) {
+static void do_play(int index, bool local_only, unsigned serial) {
 	if (index < 0 || index >= result_count) {
+		snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
 		return;
 	}
 
@@ -2027,6 +2037,7 @@ static void do_play(int index, bool local_only) {
 	}
 
 	if (queued_count == 0) {
+		snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
 		return;
 	}
 
@@ -2044,7 +2055,7 @@ static void do_play(int index, bool local_only) {
 
 	local_playback_queue = local_only;
 	device_state_play_list(path_ptr, queued_count, start);
-	gui_post(play_started_async, NULL);
+	gui_post(play_started_async, (void *)(uintptr_t)serial);
 	if (local_only) {
 		return;
 	}
@@ -2390,6 +2401,7 @@ static void *worker_main(void *arg) {
 
 		result_error[0] = '\0';
 		result_kind = job.kind;
+		result_serial = serial;
 		result_featured_gone = -1;
 
 		// The length of the list currently on screen, saved before touching
@@ -2624,7 +2636,7 @@ static void *worker_main(void *arg) {
 		}
 
 		case JOB_PLAY:
-			do_play(job.index, job.id != 0);
+			do_play(job.index, job.id != 0, serial);
 			break;
 
 		default:
@@ -2900,9 +2912,10 @@ static void background_list(const job_t *job, unsigned serial) {
 // Preview for the back swipe: is there a step to consume inside the page? It
 // moves nothing -- it only stops another screen's page being drawn under the
 // finger.
-static bool list_back_has_step(void) { return list_history_len > 0; }
+static bool list_back_has_step(void) { return play_starting || list_history_len > 0; }
 
 static bool list_back_guard(void) {
+	if (play_starting) return true;
 	discard_background_refresh();
 	if (list_history_len == 0) {
 		have_current_list = false;
@@ -2926,6 +2939,7 @@ static bool list_back_guard(void) {
 }
 
 static void run(const job_t *job, const char *waiting_text) {
+	if (play_starting) return;
 	// A job opening another list while one is already open: the previous one
 	// has to be remembered -- but when the new one is visible, not now.
 	if (job_is_list(job->kind)) {
@@ -2945,9 +2959,18 @@ static void run(const job_t *job, const char *waiting_text) {
 	if (job_is_list(job->kind) && show_cached_list(job)) return;
 	discard_background_refresh();
 	start_worker();
-	// No veil for playback (it starts immediately) or for login, which has its
-	// own spinner on the code page.
-	if (job->kind != JOB_PLAY && job->kind != JOB_LOGIN_BEGIN && job->kind != JOB_LOGIN_POLL) {
+	if (job->kind == JOB_PLAY) {
+		if (!worker_started) {
+			gui_notify_popup("cannot_start_the_request");
+			return;
+		}
+		// Show feedback during the manifest request and initial buffering,
+		// not for the rest of the download or the artwork request.
+		play_starting = submit(job);
+		busy_show("loading");
+		return;
+	}
+	if (job->kind != JOB_LOGIN_BEGIN && job->kind != JOB_LOGIN_POLL) {
 		busy_show(waiting_text);
 	}
 	submit(job);
@@ -2958,7 +2981,7 @@ static void run(const job_t *job, const char *waiting_text) {
 // deliberately left off so list_nav_commit() does not count the continuation
 // as a step forward), and the existing rows stay usable meanwhile.
 static void maybe_load_more(void) {
-	if (page_loading || grouping_rows || !page_more || !lv_obj_is_hidden(refresh_spinner)) {
+	if (play_starting || page_loading || grouping_rows || !page_more || !lv_obj_is_hidden(refresh_spinner)) {
 		return;
 	}
 	if (lv_screen_active() != list_screen || !have_current_list || !job_is_list(current_list_job.kind)) {

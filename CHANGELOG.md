@@ -2,6 +2,10 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 1.3.1.16 (2026-11-27)
+
+- **TIDAL playback:** Tapping a track shows **Loading…** immediately and ignores other track taps until the selected track is ready or an error is shown. A failed start leaves the album open so you can retry.
+
 ## Sonix Audiobooks 1.3.1.14 (2026-11-27)
 
 - **TIDAL lyrics:** Open **Lyrics** from the Now Playing menu or swipe left across the cover. Timed lyrics highlight and follow the current line. Tap a line to seek. Plain lyrics stay readable, and saved lyrics work offline.

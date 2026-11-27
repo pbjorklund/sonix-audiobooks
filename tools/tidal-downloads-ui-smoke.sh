@@ -12,12 +12,12 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "$WORK/run/usr/resource" "$CARD/.local/tidal-cache"
-if [[ ${1:-} == lyrics* ]]; then
+if [[ ${1:-} == lyrics* || ${1:-} == startup ]]; then
     printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' >"$WORK/asound.conf"
     export ALSA_CONFIG_PATH="$WORK/asound.conf"
 fi
 cp -a "$ROOT/sonix-packer/assets/R1/usr/resource/." "$WORK/run/usr/resource/"
-if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality && ${1:-} != lyrics-stream ]]; then
+if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality && ${1:-} != lyrics-stream && ${1:-} != startup ]]; then
     for id in 21 22; do
         album=$CARD/Music/Tidal/Fixture/Album-$id
         mkdir -p "$album"
@@ -40,9 +40,9 @@ language = English
 last_seen = $(date +%s)
 configured = 1
 INI
-if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality || ${1:-} == lyrics-stream ]]; then
+if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality || ${1:-} == lyrics-stream || ${1:-} == startup ]]; then
     duration=2
-    if [[ ${1:-} == lyrics-stream ]]; then
+    if [[ ${1:-} == lyrics-stream || ${1:-} == startup ]]; then
         duration=50
         touch "$WORK/release-21" "$WORK/release-22"
     fi
@@ -82,6 +82,50 @@ assert_label() {
 click 356 160
 click 125 219
 shot home
+if [[ ${1:-} == startup ]]; then
+    wait_for_manifest() {
+        for ((i=0; i<60; i++)); do [[ ! -e $WORK/playback-requested ]] || return 0; sleep .1; done
+        return 1
+    }
+    click 180 524
+    click 180 193
+    shot startup-album
+    assert_label startup-album 'Fixture Track 22'
+    touch "$WORK/hold-playback" "$WORK/reject-playback"
+    click 175 192
+    wait_for_manifest
+    shot startup-buffering
+    assert_label startup-buffering 'Loading'
+    click 175 292
+    rm "$WORK/hold-playback"
+    sleep 1
+    shot startup-rejected
+    assert_label startup-rejected 'the server answered 503'
+    if assert_label startup-rejected 'Loading'; then exit 1; fi
+    if grep -q 'tracks/22/playbackinfopostpaywall' "$WORK/mock.log"; then exit 1; fi
+
+    rm "$WORK/reject-playback" "$WORK/playback-requested"
+    touch "$WORK/hold-playback"
+    click 42 676 # Dismiss the error notice, outside its card.
+    click 175 192
+    wait_for_manifest
+    shot startup-retry
+    assert_label startup-retry 'Loading'
+    rm "$WORK/release-21" "$WORK/hold-playback"
+    for ((i=0; i<60; i++)); do [[ ! -e $WORK/active-21 ]] || break; sleep .1; done
+    [[ -e $WORK/active-21 ]]
+    shot startup-first-buffer
+    assert_label startup-first-buffer 'Loading'
+    touch "$WORK/release-21"
+    sleep 2
+    shot startup-playing
+    assert_label startup-playing 'Fixture Track 21'
+    assert_label startup-playing 'FLAC'
+    if assert_label startup-playing 'Loading'; then exit 1; fi
+    grep -q '/audio/21' "$WORK/mock.log"
+    printf 'TIDAL album playback showed loading immediately, blocked a second tap, and cleared on failure and success.\n'
+    exit 0
+fi
 if [[ ${1:-} == lyrics* ]]; then
     if [[ $1 == lyrics-stream ]]; then
         sidecar=$CARD/.local/tidal-cache/21.lrc

@@ -83,6 +83,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(album)
         elif path in ("/tracks/21/playbackinfopostpaywall", "/tracks/22/playbackinfopostpaywall"):
             track = path.split("/")[2]
+            if track == "21" and (work / "hold-playback").exists():
+                (work / "playback-requested").touch()
+                deadline = time.monotonic() + 12
+                while (work / "hold-playback").exists() and time.monotonic() < deadline:
+                    time.sleep(.05)
+                if (work / "reject-playback").exists():
+                    self.send_json({"userMessage": "Fixture playback rejected"}, status=503)
+                    return
             aac = (work / "fixture.m4a").is_file() and "audioquality=LOW" in request.query
             mime = "audio/mp4" if aac else "audio/flac"
             suffix = "?aac=1" if aac else ""
