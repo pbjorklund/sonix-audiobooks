@@ -415,6 +415,33 @@ else
 fi
 printf '%s: %d of %d audio bytes present at decoder startup\n' "$FORMAT" "$cached_bytes" "$media_bytes"
 awk '/^VmHWM:/ { print "Simulator peak RSS at decoder startup:", $2, $3 }' "/proc/$PLAYER/status"
+if [[ ${SONIX_PODCAST_SMOKE_FINISH:-0} == 1 ]]; then
+    wait_for 'full stream before seeking' cmp -s "$cache" "$MEDIA"
+    # Drag the slider near the end, then let playback reach EOF on its own.
+    shot before-finish
+    xdotool mousemove --window "$WINDOW" 164 608 mousedown 1
+    for x in 220 270 320 370 430; do
+        xdotool mousemove --window "$WINDOW" "$x" 608
+        sleep .08
+    done
+    xdotool mouseup 1
+    episode_complete() {
+        [[ $(sqlite3 -cmd '.timeout 500' "$DB" "SELECT finished FROM ABS_EPISODE_PROGRESS WHERE episode='pod41-ep-001'") == 1 ]]
+    }
+    wait_for 'natural episode completion' episode_complete
+    latest_requests=$(grep -c '/recent-episodes?' "$WORK/progress.requests")
+    click 43 56
+    shot completed-detail
+    click 43 88
+    shot completed-latest
+    grep_label completed-detail 'Mark as not heard' || fail 'completed episode detail still offered Mark as heard'
+    grep_label completed-latest 'To hear' || fail 'Back did not return to Latest To hear'
+    if grep_label completed-latest 'Episode 001'; then fail 'completed episode remained in Latest To hear'; fi
+    [[ $(grep -c '/recent-episodes?' "$WORK/progress.requests") == "$latest_requests" ]] ||
+        fail 'returning to the updated list fetched it again'
+    printf 'Podcast completion updated the detail and the existing To hear list without reopening it.\n'
+    exit 0
+fi
 if [[ ${SONIX_PODCAST_SMOKE_SLEEP:-0} == 1 ]]; then
     wait_for 'Audiobookshelf timer started' grep -q 'sleeptimer: 15 min' "$WORK/first.log"
     xdotool key --window "$WINDOW" n

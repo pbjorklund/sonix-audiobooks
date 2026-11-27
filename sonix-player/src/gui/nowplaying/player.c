@@ -26,6 +26,7 @@
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/toast.h"
 #include "src/gui/shell/topbar.h"
+#include "src/gui/streaming/audiobookshelfpage.h"
 #include "src/system/device/power.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/gearboy/gearboy.h"
@@ -4129,8 +4130,10 @@ static void handle_track_finished(void) {
 		device_state_get(&state);
 		double duration = episode.duration > 0 ? episode.duration : state.progress_total_secs;
 		bool full = !abs_episode_stream_owns(path) || abs_episode_stream_complete(path) || abs_episode_playback_switched(path);
-		if (full && duration > 0) abs_episode_playback_note(path, duration, duration, true, true);
-		else {
+		if (full && duration > 0) {
+			if (abs_episode_playback_note(path, duration, duration, true, true))
+				audiobookshelfpage_episode_finished(&episode);
+		} else {
 			abs_episode_playback_note(path, state.progress_current_secs, duration, true, false);
 			gui_notify_popup("audiobookshelf_request_failed");
 		}

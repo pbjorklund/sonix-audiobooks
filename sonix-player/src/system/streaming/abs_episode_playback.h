@@ -11,7 +11,8 @@ bool abs_episode_playback_local(const char *source_path, char *local, size_t cap
 void abs_episode_playback_did_switch(const char *source_path, const char *local);
 bool abs_episode_playback_switched(const char *source_path);
 bool abs_episode_playback_local_in_use(const char *source_path, char *local, size_t cap);
-void abs_episode_playback_note(const char *path, double seconds, double duration, bool force, bool finished);
+// True when a checkpoint was saved.
+bool abs_episode_playback_note(const char *path, double seconds, double duration, bool force, bool finished);
 bool abs_episode_playback_active(const abs_episode_manifest_t *id);
 void abs_episode_playback_deactivate(void);
 bool abs_episode_mark(const abs_episode_manifest_t *id, bool played);

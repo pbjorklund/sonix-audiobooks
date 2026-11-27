@@ -68,6 +68,7 @@ jobs:
           SONIX_PODCAST_SMOKE_SPEED=1 SONIX_PODCAST_SMOKE_RSS=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_FORMAT=m4a tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_INTERRUPT=1 tools/audiobookshelf-podcast-smoke.sh
+          SONIX_PODCAST_SMOKE_FINISH=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_SYNC=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_FILTERS=1 tools/audiobookshelf-podcast-smoke.sh
           SONIX_PODCAST_SMOKE_ROW_DOWNLOAD=1 SONIX_PODCAST_SMOKE_ART=1 tools/audiobookshelf-podcast-smoke.sh

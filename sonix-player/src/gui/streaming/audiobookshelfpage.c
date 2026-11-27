@@ -1513,28 +1513,48 @@ static void pod_play_next_cb(lv_event_t *e) {
 	draw_podcasts();
 }
 
+static void pod_progress_changed(const abs_episode_manifest_t *id, bool played) {
+	bool detail_changed = false, row_changed = false, finished_changed = false;
+	if (pod_detail && !strcmp(id->server, pod_identity.server) && !strcmp(id->owner, pod_identity.owner) &&
+		!strcmp(id->show, pod_identity.show) && !strcmp(id->episode, pod_identity.episode)) {
+		detail_changed = finished_changed = pod_played != played;
+		pod_played = played;
+	}
+	if (!strcmp(id->server, pod_list_server) && !strcmp(id->owner, pod_list_owner)) {
+		for (int i = 0; i < pod_episode_count; i++) {
+			abs_episode_row_t *ep = &pod_episodes[i];
+			if (strcmp(ep->show_id, id->show) || strcmp(ep->episode_id, id->episode)) continue;
+			finished_changed |= ep->finished != played;
+			row_changed = ep->finished != played || ep->in_progress;
+			ep->finished = played;
+			ep->in_progress = false;
+			break;
+		}
+		if (finished_changed) for (int i = 0; i < pod_show_count; i++) {
+			audiobookshelf_item_t *show = &pod_shows[i];
+			if (strcmp(show->id, id->show) || show->unheard < 0) continue;
+			if (played && show->unheard > 0) show->unheard--;
+			if (!played && show->unheard < show->tracks) show->unheard++;
+			break;
+		}
+	}
+	if (!busy && !pod_error && lv_screen_active() == audiobookshelf_screen &&
+		((view == VIEW_POD_DETAIL && detail_changed) || (view == VIEW_POD_SHOWS && finished_changed) ||
+		 ((view == VIEW_POD_EPISODES || view == VIEW_POD_LATEST || view == VIEW_POD_LOCAL_SHOW) && row_changed))) {
+		int scroll = lv_obj_get_scroll_y(content);
+		draw_podcasts();
+		lv_obj_scroll_to_y(content, scroll, LV_ANIM_OFF);
+	}
+}
+
+void audiobookshelfpage_episode_finished(const abs_episode_manifest_t *id) { pod_progress_changed(id, true); }
+
 static void pod_mark_cb(lv_event_t *e) {
 	(void)e;
 	if (busy || !pod_identity.owner[0]) return;
-	if (abs_episode_mark(&pod_identity, !pod_played)) {
-		pod_played = !pod_played;
-		for (int i = 0; i < pod_show_count; i++) {
-			audiobookshelf_item_t *show = &pod_shows[i];
-			if (strcmp(show->id, pod_identity.show) || show->unheard < 0) continue;
-			if (pod_played && show->unheard > 0) show->unheard--;
-			if (!pod_played && show->unheard < show->tracks) show->unheard++;
-			break;
-		}
-		for (int i = 0; i < pod_episode_count; i++) {
-			abs_episode_row_t *ep = &pod_episodes[i];
-			if (!strcmp(ep->show_id, pod_identity.show) && !strcmp(ep->episode_id, pod_identity.episode)) {
-				ep->finished = pod_played;
-				ep->in_progress = false;
-				break;
-			}
-		}
-		draw_podcasts();
-	} else gui_notify_popup("audiobookshelf_request_failed");
+	bool played = !pod_played;
+	if (abs_episode_mark(&pod_identity, played)) pod_progress_changed(&pod_identity, played);
+	else gui_notify_popup("audiobookshelf_request_failed");
 }
 
 static void pod_retry_cb(lv_event_t *e) {

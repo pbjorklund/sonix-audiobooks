@@ -115,17 +115,17 @@ double abs_episode_playback_resume(const char *path) {
 	return id.duration > 0 && s.seconds >= id.duration ? -1. : s.seconds;
 }
 
-void abs_episode_playback_note(const char *path, double seconds, double duration, bool force, bool finished) {
-	if (!isfinite(seconds) || seconds < 0 || !isfinite(duration) || duration <= 0) return;
+bool abs_episode_playback_note(const char *path, double seconds, double duration, bool force, bool finished) {
+	if (!isfinite(seconds) || seconds < 0 || !isfinite(duration) || duration <= 0) return false;
 	pthread_mutex_lock(&lock);
 	if (!source[0] || strcmp(path, source) || generation != audiobookdb_history_generation()) {
 		pthread_mutex_unlock(&lock);
-		return;
+		return false;
 	}
 	active = !force && !finished;
 	if (!finished && saved_finished && seconds >= duration - .1) {
 		pthread_mutex_unlock(&lock);
-		return;
+		return false;
 	}
 	if (finished) seconds = duration;
 	if (seconds > duration) seconds = duration;
@@ -133,13 +133,13 @@ void abs_episode_playback_note(const char *path, double seconds, double duration
 	if (!finished && ((!force && now - saved_mono < 5000) ||
 		(saved >= 0 && !saved_finished && fabs(saved - seconds) < .03) || (saved < 0 && seconds == 0))) {
 		pthread_mutex_unlock(&lock);
-		return;
+		return false;
 	}
 	abs_episode_checkpoint_t value = {.identity = identity, .seconds = seconds, .duration = duration,
 		.updated_ms = clock_ms(CLOCK_REALTIME), .finished = finished, .dirty = true};
 	unsigned epoch = generation;
 	pthread_mutex_unlock(&lock);
-	if (!audiobookdb_episode_save(epoch, &value)) return;
+	if (!audiobookdb_episode_save(epoch, &value)) return false;
 	pthread_mutex_lock(&lock);
 	if (generation == epoch && !strcmp(path, source)) {
 		saved = seconds;
@@ -148,6 +148,7 @@ void abs_episode_playback_note(const char *path, double seconds, double duration
 	}
 	pthread_mutex_unlock(&lock);
 	if (force || finished) audiobookshelf_episode_progress_wake();
+	return true;
 }
 
 bool abs_episode_mark(const abs_episode_manifest_t *id, bool played) {

@@ -2,6 +2,10 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 1.3.1.19 (2026-11-28)
+
+- **Audiobookshelf podcasts:** A finished episode now shows as heard when you go back from Now Playing. It drops out of **To hear** without reloading the list.
+
 ## Sonix Audiobooks 1.3.1.18 (2026-11-27)
 
 - **Podcast speed:** Changing an episode's playback speed saves it for that show, not for every podcast. The preference applies to streamed and downloaded Audiobookshelf episodes and to native podcast feeds, and survives a restart. Audiobook speed is unchanged.
