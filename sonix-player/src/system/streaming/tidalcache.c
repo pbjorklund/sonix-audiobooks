@@ -37,6 +37,13 @@
 
 static char cache_dir[512];
 static char music_dir[512];
+#define PLAYLIST_POOL ".playlist-tracks"
+
+static bool playlist_path(const char *path) {
+	size_t root = strlen(music_dir);
+	return root && !strncmp(path, music_dir, root) &&
+		!strncmp(path + root, "/" PLAYLIST_POOL "/", sizeof(PLAYLIST_POOL) + 1);
+}
 
 static __thread char last_error[192];
 
@@ -1415,6 +1422,12 @@ static bool find_saved(long track_id, char *out, size_t size) {
 	return saved_path(track_id, out, size, NULL);
 }
 
+bool tidalcache_is_playlist_only(long track_id) {
+	char path[512];
+	bool imported;
+	return saved_path(track_id, path, sizeof(path), &imported) && !imported && playlist_path(path);
+}
+
 int tidalcache_kept_quality(long track_id) {
 	char path[512], value[16];
 	bool imported;
@@ -1642,13 +1655,16 @@ static bool folder_has_exact_edition(const char *folder, const char *album_id) {
 	return name && album_id[0] && album_match(name + 1, "", album_id, 0) >= 3;
 }
 
-static bool publish_kept(const tidal_track_t *track, const char *from, int quality, const char *old) {
+static bool publish_kept(const tidal_track_t *track, const char *from, int quality, const char *old,
+		bool playlist_only) {
 	char folder[512], to[512], stem[200];
 	track_stem(track, stem, sizeof(stem));
 	const char *ext = strrchr(from, '.');
-	if (!ext || !album_folder(track, folder, sizeof(folder), false) || !ensure_path(folder)) {
-		return false;
-	}
+	if (playlist_only) {
+		if (snprintf(folder, sizeof(folder), "%s/" PLAYLIST_POOL "/%ld", music_dir, track->id) >= (int)sizeof(folder))
+			return false;
+	} else if (!album_folder(track, folder, sizeof(folder), false)) return false;
+	if (!ext || !ensure_path(folder)) return false;
 	char to_tags[544];
 	for (int attempt = 0; ; attempt++) {
 		char collision[24] = "";
@@ -1704,7 +1720,23 @@ static bool publish_kept(const tidal_track_t *track, const char *from, int quali
 	if (path_missing(to_cover)) {
 		rename(from_cover, to_cover);
 	}
+	if (playlist_path(from)) {
+		char from_lyrics[544], to_lyrics[544], parent[512];
+		snprintf(from_lyrics, sizeof(from_lyrics), "%.*s.lrc", (int)(ext - from), from);
+		snprintf(to_lyrics, sizeof(to_lyrics), "%.*s.lrc", (int)(strrchr(to, '.') - to), to);
+		if (path_missing(to_lyrics)) rename(from_lyrics, to_lyrics);
+		snprintf(parent, sizeof(parent), "%.*s", (int)(strrchr(from, '/') - from), from);
+		rmdir(parent);
+	}
 	return true;
+}
+
+bool tidalcache_promote_playlist_track(const tidal_track_t *track) {
+	char path[512];
+	bool imported;
+	if (!saved_path(track->id, path, sizeof(path), &imported)) return false;
+	if (imported || !playlist_path(path)) return true;
+	return publish_kept(track, path, tidalcache_kept_quality(track->id), NULL, false);
 }
 
 static bool verify_audio(const char *path, int expected_seconds, bool complete_transfer) {
@@ -1918,7 +1950,7 @@ void tidalcache_download_extras(const tidal_track_t *track) { download_extras(tr
 void tidalcache_refresh_extras(const tidal_track_t *track) { download_extras(track, true); }
 
 bool tidalcache_keep_quality(const tidal_track_t *track, const char *path, bool complete_transfer,
-		int quality, const char *replace_path) {
+		int quality, const char *replace_path, bool playlist_only) {
 	if (!track || track->id <= 0) {
 		return false;
 	}
@@ -1948,11 +1980,13 @@ bool tidalcache_keep_quality(const tidal_track_t *track, const char *path, bool 
 		if (!saved_path(track->id, current, sizeof(current), &imported) || imported ||
 			strcmp(current, replace_path) || lstat(current, &st) != 0 || !S_ISREG(st.st_mode)) return false;
 	}
-	return publish_kept(track, path, quality, replace_path);
+	// A playlist replacing the quality of an album copy keeps it in the album.
+	return publish_kept(track, path, quality, replace_path,
+		replace_path ? playlist_only && playlist_path(replace_path) : playlist_only);
 }
 
 bool tidalcache_keep(const tidal_track_t *track, const char *path, bool complete_transfer) {
-	return tidalcache_keep_quality(track, path, complete_transfer, TIDALCACHE_QUALITY_UNKNOWN, NULL);
+	return tidalcache_keep_quality(track, path, complete_transfer, TIDALCACHE_QUALITY_UNKNOWN, NULL, false);
 }
 
 static void migrate_track(long id) {
@@ -1974,7 +2008,7 @@ static void migrate_track(long id) {
 	track.track_number = atoi(number);
 	track.disc_number = atoi(disc);
 	track.release_year = atoi(year);
-	publish_kept(&track, path, TIDALCACHE_QUALITY_UNKNOWN, NULL);
+	publish_kept(&track, path, TIDALCACHE_QUALITY_UNKNOWN, NULL, false);
 }
 
 void tidalcache_publish_legacy(void) {
@@ -2015,7 +2049,7 @@ void tidalcache_kept_album_counts(const char *const *album_ids, int *counts, int
 	while ((e = readdir(d)) != NULL) {
 		char path[512], album_id[TIDAL_ID_MAX];
 		long id = kept_path(e->d_name, path, sizeof(path));
-		if (!id) continue;
+		if (!id || playlist_path(path)) continue;
 		kept_metadata(id, path, sizeof(path));
 		if (!read_tag(path, "album_id", album_id, sizeof(album_id)) || !album_id[0]) {
 			continue;
@@ -2095,6 +2129,7 @@ typedef struct {
 	long id;
 	int track_number;
 	int disc_number;
+	bool playlist_only;
 	char cover[512];
 } kept_entry_t;
 
@@ -2149,6 +2184,7 @@ static int collect_kept(kept_entry_t **out) {
 			kept_entry_t *kept = &all[count++];
 			memset(kept, 0, sizeof(*kept));
 			kept->id = id;
+			kept->playlist_only = playlist_path(path);
 			kept_cover_path(path, kept->cover, sizeof(kept->cover));
 			kept_metadata(id, path, sizeof(path));
 			char track[16], disc[16];
@@ -2190,7 +2226,8 @@ int tidalcache_kept_filtered(tidal_track_t *out, int max, int offset, const char
 	int count = collect_kept(&all), filled = 0;
 	for (int i = 0; i < count && filled < max; i++) {
 		const char *key = all[i].album_id[0] ? all[i].album_id : all[i].album;
-		if ((album && strcmp(album, key)) || (artist && strcmp(artist, group_artist(&all[i])))) continue;
+		if (((album || artist) && all[i].playlist_only) || (album && strcmp(album, key)) ||
+			(artist && strcmp(artist, group_artist(&all[i])))) continue;
 		if (offset > 0) { offset--; continue; }
 		kept_to_track(&all[i], &out[filled++]);
 	}
@@ -2221,6 +2258,7 @@ int tidalcache_kept_groups(tidal_album_t *out, int max, int offset, bool artists
 	kept_entry_t *all = NULL;
 	int count = collect_kept(&all), filled = 0;
 	for (int i = 0; i < count && filled < max; i++) {
+		if (all[i].playlist_only) continue;
 		const char *owner = group_artist(&all[i]);
 		if (artist && strcmp(artist, owner)) continue;
 		const char *key = all[i].album_id[0] ? all[i].album_id : all[i].album;
@@ -2228,6 +2266,7 @@ int tidalcache_kept_groups(tidal_album_t *out, int max, int offset, bool artists
 		const char *cover = "";
 		bool already = false;
 		for (int j = 0; j < count; j++) {
+			if (all[j].playlist_only) continue;
 			const char *other = all[j].album_id[0] ? all[j].album_id : all[j].album;
 			if (strcmp(group_artist(&all[j]), owner) || (!artists && strcmp(key, other))) continue;
 			if (j < i) { already = true; break; }

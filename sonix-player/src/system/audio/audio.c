@@ -6,6 +6,7 @@
 #include "src/system/decode/sndfile.h"
 #include "src/system/audio/replaygain.h"
 #include "src/system/audio/speed.h"
+#include "src/system/audio/singleear.h"
 #include "src/system/audio/swvolume.h"
 #include "src/system/audio/eq.h"
 #include "src/system/audio/decimate.h"
@@ -2384,6 +2385,38 @@ static int pcm_wait_or_wake(snd_pcm_t *pcm, int timeout_ms) {
 	return (revents & POLLOUT) ? 1 : 0;
 }
 
+// Keep a stereo PCM open for mono sources on the R1, so cycling ears does
+// not reopen the output or seek. Bit-perfect mode keeps the source layout.
+static int pcm_channels(int channels, bool passthrough) {
+#ifndef HOST_BUILD
+	if (!passthrough && channels == 1 && !pure_now()) return 2;
+#else
+	(void)passthrough;
+#endif
+	return channels;
+}
+
+static void *singleear_output(const void *buf, int frames, int channels, int output_channels, int bits,
+		 singleear_mode_t mode) {
+	static void *mono_buffer;
+	static size_t capacity;
+	if (output_channels != 2 || (channels == 2 && mode == SINGLEEAR_STEREO)) return (void *)buf;
+	void *out = (void *)buf;
+	if (channels == 1) {
+		size_t bytes = (size_t)frames * 2 * (bits / 8);
+		if (bytes > capacity) {
+			void *grown = realloc(mono_buffer, bytes);
+			if (!grown) return NULL;
+			mono_buffer = grown;
+			capacity = bytes;
+		}
+		out = mono_buffer;
+	}
+	if (bits == 32) singleear_s32(mode, buf, out, frames, channels);
+	else singleear_s16(mode, buf, out, frames, channels);
+	return out;
+}
+
 static snd_pcm_sframes_t pcm_write_recover(snd_pcm_t **pcm, const void *buf, snd_pcm_uframes_t frames, int channels,
 										   int rate, int bits, snd_pcm_uframes_t *period, abs_history_capture_t *history) {
 	for (int attempt = 0; attempt < 8; attempt++) {
@@ -2725,12 +2758,13 @@ static void play_wav_file(const char *filepath) {
 	// The previous track's PCM when it stayed open and suits this one, as on
 	// the decoded path.
 	snd_pcm_uframes_t period_size;
-	snd_pcm_t *pcm_handle = gapless_take(info.channels, info.sample_rate, info.out_bits, &period_size);
+	int output_channels = pcm_channels(info.channels, false);
+	snd_pcm_t *pcm_handle = gapless_take(output_channels, info.sample_rate, info.out_bits, &period_size);
 	playback_follow(pcm_handle);
 	if (pcm_handle) {
 		pcm_device_open = true;
 	} else {
-		pcm_handle = open_pcm_device(info.channels, info.sample_rate, info.out_bits, &period_size);
+		pcm_handle = open_pcm_device(output_channels, info.sample_rate, info.out_bits, &period_size);
 	}
 	if (!pcm_handle) {
 		fclose(f);
@@ -2939,7 +2973,7 @@ static void play_wav_file(const char *filepath) {
 					// again. The file is already positioned where the sound
 					// stopped, so nothing else has to move.
 					snd_pcm_uframes_t new_period = period_size;
-					pcm_handle = open_pcm_device(info.channels, info.sample_rate, info.out_bits, &new_period);
+					pcm_handle = open_pcm_device(output_channels, info.sample_rate, info.out_bits, &new_period);
 					if (!pcm_handle) {
 						fprintf(stderr, "Audio: cannot reopen the device after a pause\n");
 						audio_command = AUDIO_CMD_STOP;
@@ -2994,7 +3028,7 @@ static void play_wav_file(const char *filepath) {
 				track_route = now_route;
 				history_sample(&history, pcm_handle, info.sample_rate);
 				history.submitted = history.rendered;
-				if (!pcm_reroute(&pcm_handle, info.channels, info.sample_rate, info.out_bits,
+				if (!pcm_reroute(&pcm_handle, output_channels, info.sample_rate, info.out_bits,
 								 &period_size)) {
 					fprintf(stderr, "Audio: reroute failed\n");
 					pthread_mutex_lock(&audio_mutex);
@@ -3019,6 +3053,7 @@ static void play_wav_file(const char *filepath) {
 		read_bytes -= read_bytes % (size_t)src_frame_bytes;
 		read_pos += (int64_t)read_bytes;
 		int frames_read = (int)(read_bytes / (size_t)src_frame_bytes);
+		singleear_mode_t ear = pure_now() ? SINGLEEAR_STEREO : singleear_get();
 		if (frames_read > 0) {
 			if (raw) {
 				wav_convert(&info, raw, buffer, (size_t)frames_read);
@@ -3034,15 +3069,19 @@ static void play_wav_file(const char *filepath) {
 				// tone shaping left it and widening that.
 				soundfield_process((short *)buffer, frames_read, info.channels);
 				crossfeed_process((short *)buffer, frames_read, info.channels, info.sample_rate);
-				mono_process((short *)buffer, frames_read, info.channels);
-				balance_process((short *)buffer, frames_read, info.channels);
+				if (ear == SINGLEEAR_STEREO) {
+					mono_process((short *)buffer, frames_read, info.channels);
+					balance_process((short *)buffer, frames_read, info.channels);
+				}
 			} else {
 				replaygain_process_s32((int32_t *)buffer, frames_read, info.channels);
 				eq_process_s32((int32_t *)buffer, frames_read, info.channels, info.sample_rate);
 				soundfield_process_s32((int32_t *)buffer, frames_read, info.channels);
 				crossfeed_process_s32((int32_t *)buffer, frames_read, info.channels, info.sample_rate);
-				mono_process_s32((int32_t *)buffer, frames_read, info.channels);
-				balance_process_s32((int32_t *)buffer, frames_read, info.channels);
+				if (ear == SINGLEEAR_STEREO) {
+					mono_process_s32((int32_t *)buffer, frames_read, info.channels);
+					balance_process_s32((int32_t *)buffer, frames_read, info.channels);
+				}
 			}
 		}
 		if (frames_read <= 0) {
@@ -3108,8 +3147,9 @@ static void play_wav_file(const char *filepath) {
 		}
 
 		health_lap(&health, STAGE_EFFECTS);
-		snd_pcm_sframes_t written = pcm_write_recover(&pcm_handle, buffer, frames_to_write, info.channels,
-													  info.sample_rate, info.out_bits, &period_size, &history);
+		void *output = singleear_output(buffer, frames_read, info.channels, output_channels, info.out_bits, ear);
+		snd_pcm_sframes_t written = output ? pcm_write_recover(&pcm_handle, output, frames_to_write, output_channels,
+			info.sample_rate, info.out_bits, &period_size, &history) : -ENOMEM;
 		health_lap(&health, STAGE_WRITE);
 
 		if (written == -EINTR) {
@@ -3149,7 +3189,7 @@ static void play_wav_file(const char *filepath) {
 	bool keep_open = pcm_handle && gapless_enabled && played_to_the_end && !is_paused &&
 					 (!pcm_is_bluetooth(pcm_handle) || bt_hold_usable(pcm_handle));
 	if (keep_open) {
-		gapless_hold(pcm_handle, info.channels, info.sample_rate, info.out_bits, period_size);
+		gapless_hold(pcm_handle, output_channels, info.sample_rate, info.out_bits, period_size);
 		pcm_handle = NULL;
 	}
 
@@ -3360,12 +3400,13 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 	// The previous track's PCM, if it stayed open and suits this one too: that
 	// is the whole of gapless. Never for DoP -- see the comment above
 	// gapless_release().
-	snd_pcm_t *pcm_handle = passthrough ? NULL : gapless_take(channels, out_rate, out_bits, &period_size);
+	int output_channels = pcm_channels(channels, passthrough);
+	snd_pcm_t *pcm_handle = passthrough ? NULL : gapless_take(output_channels, out_rate, out_bits, &period_size);
 	playback_follow(pcm_handle);
 	if (pcm_handle) {
 		pcm_device_open = true;
 	} else {
-		pcm_handle = open_pcm_device(channels, out_rate, out_bits, &period_size);
+		pcm_handle = open_pcm_device(output_channels, out_rate, out_bits, &period_size);
 	}
 	if (!pcm_handle && out_bits == 32 && !passthrough && last_open_err == -ENOMEM) {
 		// Not the device refusing S32: the driver found no memory even for the
@@ -3382,7 +3423,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 		// The decimator is S32 only.
 		decim_factor = 1;
 		out_rate = sample_rate;
-		pcm_handle = open_pcm_device(channels, sample_rate, out_bits, &period_size);
+		pcm_handle = open_pcm_device(output_channels, sample_rate, out_bits, &period_size);
 	}
 	if (!pcm_handle && passthrough) {
 		// DSD256 asks the card for 705.6 kHz, which an output that is not this
@@ -3654,7 +3695,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 				auto_set_output();
 				{
 					snd_pcm_uframes_t new_period = period_size;
-					pcm_handle = open_pcm_device(channels, out_rate, out_bits, &new_period);
+					pcm_handle = open_pcm_device(output_channels, out_rate, out_bits, &new_period);
 					if (!pcm_handle) {
 						fprintf(stderr, "Audio: cannot reopen the device after a pause\n");
 						audio_command = AUDIO_CMD_STOP;
@@ -3700,7 +3741,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 				track_route = now_route;
 				history_sample(&history, pcm_handle, out_rate);
 				history.submitted = history.rendered;
-				if (!pcm_reroute(&pcm_handle, channels, out_rate, out_bits, &period_size)) {
+				if (!pcm_reroute(&pcm_handle, output_channels, out_rate, out_bits, &period_size)) {
 					fprintf(stderr, "Audio: reroute failed\n");
 					pthread_mutex_lock(&audio_mutex);
 					audio_command = AUDIO_CMD_STOP;
@@ -3749,6 +3790,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 		// same at normal speed, and deliberately not at any other.
 		uint64_t frames_read;
 		uint64_t input_frames;
+		singleear_mode_t ear = passthrough || pure_now() ? SINGLEEAR_STEREO : singleear_get();
 		// Before the decode, as a seek or a resume this turn has just emptied
 		// the stream (see playback_follow).
 		playback_follow(pcm_handle);
@@ -3777,8 +3819,10 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 				// image, this pulls it back inside the head, and balance stays
 				// the last word on what reaches each ear.
 				crossfeed_process_s32((int32_t *)buffer, (int)frames_read, channels, out_rate);
-				mono_process_s32((int32_t *)buffer, (int)frames_read, channels);
-				balance_process_s32((int32_t *)buffer, (int)frames_read, channels);
+				if (ear == SINGLEEAR_STEREO) {
+					mono_process_s32((int32_t *)buffer, (int)frames_read, channels);
+					balance_process_s32((int32_t *)buffer, (int)frames_read, channels);
+				}
 			}
 		} else {
 			pthread_mutex_lock(&audio_mutex);
@@ -3805,8 +3849,10 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 				crossfeed_process((short *)buffer, (int)frames_read, channels, sample_rate);
 				// Last in the chain, after everything that could have changed
 				// the level: the balance is about what reaches each ear.
-				mono_process((short *)buffer, (int)frames_read, channels);
-				balance_process((short *)buffer, (int)frames_read, channels);
+				if (ear == SINGLEEAR_STEREO) {
+					mono_process((short *)buffer, (int)frames_read, channels);
+					balance_process((short *)buffer, (int)frames_read, channels);
+				}
 			}
 		}
 
@@ -3932,8 +3978,9 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 		}
 
 		health_lap(&health, STAGE_EFFECTS);
-		snd_pcm_sframes_t written =
-			pcm_write_recover(&pcm_handle, buffer, frames_read, channels, out_rate, out_bits, &period_size, &history);
+		void *output = singleear_output(buffer, (int)frames_read, channels, output_channels, out_bits, ear);
+		snd_pcm_sframes_t written = output ?
+			pcm_write_recover(&pcm_handle, output, frames_read, output_channels, out_rate, out_bits, &period_size, &history) : -ENOMEM;
 		health_lap(&health, STAGE_WRITE);
 
 		if (written == -EINTR) {
@@ -3987,7 +4034,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 	bool keep_open = pcm_handle && gapless_enabled && played_to_the_end && !is_paused && !passthrough &&
 					 (!pcm_is_bluetooth(pcm_handle) || bt_hold_usable(pcm_handle));
 	if (keep_open) {
-		gapless_hold(pcm_handle, channels, out_rate, out_bits, period_size);
+		gapless_hold(pcm_handle, output_channels, out_rate, out_bits, period_size);
 		pcm_handle = NULL;
 	}
 
@@ -4944,19 +4991,22 @@ static int external_write(const void *frames, int count, bool passthrough) {
 		const void *chunk = (const char *)frames + (size_t)written * external_frame_bytes;
 		int n = count - written;
 		int gain = atomic_load_explicit(&sleep_gain_q10, memory_order_relaxed);
+		singleear_mode_t ear = !passthrough && !pure_now() && external_channels == 2 ? singleear_get() : SINGLEEAR_STEREO;
 		union { int32_t s32[512]; short s16[512]; } faded;
-		if (!passthrough && gain < 1024 && (external_bits == 16 || external_bits == 32) &&
+		if (!passthrough && (gain < 1024 || ear != SINGLEEAR_STEREO) && (external_bits == 16 || external_bits == 32) &&
 			external_channels > 0 && external_channels <= 512) {
 			int cap = 512 / external_channels;
 			if (n > cap) n = cap;
 			int samples = n * external_channels;
 			if (external_bits == 32) {
 				memcpy(faded.s32, chunk, (size_t)n * external_frame_bytes);
-				fade_apply_s32(faded.s32, samples, gain);
+				if (gain < 1024) fade_apply_s32(faded.s32, samples, gain);
+				if (ear != SINGLEEAR_STEREO) singleear_s32(ear, faded.s32, faded.s32, n, 2);
 				chunk = faded.s32;
 			} else {
 				memcpy(faded.s16, chunk, (size_t)n * external_frame_bytes);
-				fade_apply_s16(faded.s16, samples, gain);
+				if (gain < 1024) fade_apply_s16(faded.s16, samples, gain);
+				if (ear != SINGLEEAR_STEREO) singleear_s16(ear, faded.s16, faded.s16, n, 2);
 				chunk = faded.s16;
 			}
 		}

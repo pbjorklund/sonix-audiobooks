@@ -184,7 +184,9 @@ enum {
 };
 int tidalcache_kept_quality(long track_id);
 bool tidalcache_keep_quality(const tidal_track_t *track, const char *path, bool complete_transfer,
-	int quality, const char *replace_path);
+	int quality, const char *replace_path, bool playlist_only);
+bool tidalcache_is_playlist_only(long track_id);
+bool tidalcache_promote_playlist_track(const tidal_track_t *track);
 bool tidalcache_has_album_folder(const tidal_album_t *album);
 // Link identifiable existing files without opening audio or taking ownership.
 int tidalcache_link_album_tracks(const tidal_album_t *album, const tidal_track_t *tracks, int count);

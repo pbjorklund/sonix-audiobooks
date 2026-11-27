@@ -26,6 +26,8 @@ void player_refresh_artist(void);
 
 // Reads the lyrics of `path` again, once an .lrc has been saved beside it, and
 // brings their page in when it is the file playing.
+bool player_lyrics_available(void);
+void player_lyrics_open(void);
 void player_lyrics_reload(const char *path);
 
 // The "4/12" under the progress bar: the place in the queue as the screen shows

@@ -1099,8 +1099,6 @@ static lv_color_t alt_ink(void) {
 	return luma_of(s.red, s.green, s.blue) > 140 ? lv_color_hex(0x1A1A1A) : lv_color_white();
 }
 
-static void lyrics_repaint_lit(void);
-
 // The two glyphs that wear the accent, repainted whenever the accent of the
 // moment can have moved: the play/pause disc and the repeat/shuffle mode.
 static void paint_transport_tint(void) {
@@ -1117,7 +1115,6 @@ static void paint_transport_tint(void) {
 		lv_obj_set_style_bg_color(progress_slider, chrome_accent(), LV_PART_INDICATOR);
 		lv_obj_set_style_bg_color(progress_slider, chrome_accent(), LV_PART_KNOB);
 	}
-	lyrics_repaint_lit(); // the sung line wears it too
 }
 
 // Hides the artist's pill when there is no artist. An empty pill is a blank
@@ -1201,7 +1198,7 @@ static void paint_alt_tint(void) {
 // arrangement adds means anything to one. A shape drawn across nine hours of
 // speech is a flat stripe, and the nine hours would have to be decoded to find
 // that out.
-static bool playing_local_file(const device_state_t *state) {
+static bool playing_music_file(const device_state_t *state, bool include_tidal) {
 	if (state->live || !state->current_file[0] || audiobook_is_playing()) {
 		return false;
 	}
@@ -1211,9 +1208,15 @@ static bool playing_local_file(const device_state_t *state) {
 		return false;
 	}
 	const char *f = state->current_file;
-	return !qobuzcache_owns(f) && !tidalcache_owns(f) && !podcastcache_is_episode(f) && !dlna_owns_path(f) &&
-		   !dlna_owns_playback();
+	return !qobuzcache_owns(f) && (include_tidal || !tidalcache_owns(f)) && !podcastcache_is_episode(f) &&
+		   !dlna_owns_path(f) && !dlna_owns_playback();
 }
+
+static bool playing_local_file(const device_state_t *state) { return playing_music_file(state, false); }
+
+// TIDAL plays through a local cache file, which can carry an .lrc just like
+// a kept download. It need not be fully downloaded to display the sidecar.
+static bool playing_lyrics_file(const device_state_t *state) { return playing_music_file(state, true); }
 
 // Puts the progress slider over the waveform, or back where it belongs.
 //
@@ -1433,6 +1436,7 @@ static void lyrics_fill(void) {
 	lv_obj_clean(lyrics_view);
 	lyrics_pad();
 	lyrics_lit = -1;
+	lyrics_tap_ms = -1;
 	lyrics_user_until = 0;
 	lyrics_centred = false;
 	lv_anim_delete(lyrics_view, lyrics_scroll_exec);
@@ -1495,11 +1499,10 @@ static void *lyrics_worker(void *arg) {
 	return NULL;
 }
 
-// Only a file on the card has words to show.
-static bool lyrics_available(void) {
+bool player_lyrics_available(void) {
 	device_state_t state;
 	device_state_get(&state);
-	return playing_local_file(&state);
+	return playing_lyrics_file(&state);
 }
 
 // The page is up, or on its way in or out under a finger.
@@ -1520,7 +1523,7 @@ static bool lyrics_has_words(void) { return lyrics_loaded && lyrics_cur.count > 
 // starts: the tags of a FLAC are read whole, pictures included, and that is
 // not the interface's to wait for. Asked again only when the file changes.
 static void lyrics_request(const device_state_t *state) {
-	if (!state->current_file[0] || !playing_local_file(state)) {
+	if (!playing_lyrics_file(state)) {
 		return;
 	}
 	if (strcmp(state->current_file, lyrics_path) == 0) {
@@ -1580,16 +1583,9 @@ static void lyrics_paint_line(int index, bool lit) {
 		return;
 	}
 	lv_obj_t *label = lv_obj_get_child(lyrics_view, index);
-	// Unlit, the line wears the column's colour (see lyrics_look()).
-	if (lit) {
-		lv_obj_set_style_text_color(label, chrome_accent(), 0);
-	} else {
-		lv_obj_remove_local_style_prop(label, LV_STYLE_TEXT_COLOR, 0);
-	}
+	// Keep the high-contrast foreground over both artwork and theme backgrounds.
 	lv_obj_set_style_text_opa(label, lit ? LV_OPA_COVER : LYRICS_DIM_OPA, 0);
 }
-
-static void lyrics_repaint_lit(void) { lyrics_paint_line(lyrics_lit, true); }
 
 // The line being sung, lit and held in the middle of the column. Once a
 // finger has scrolled the words, the column comes back to it a few seconds
@@ -1816,6 +1812,7 @@ static void lyrics_progress_apply(int32_t progress) {
 	}
 
 	int32_t away = -(int32_t)cover_box_w * progress / LYRICS_FULL;
+	lyrics_shift(tidal_badge, away); // leaves the lyrics search button unobstructed
 	if (layout_studio_now) {
 		lyrics_shift(studio_cover, away);
 		lyrics_shift(studio_empty, away);
@@ -1950,7 +1947,7 @@ static void lyrics_commit(bool on) {
 	lyrics_wanted = on;
 	device_state_t state;
 	device_state_get(&state);
-	lyrics_allowed = on && playing_local_file(&state);
+	lyrics_allowed = on && playing_lyrics_file(&state);
 	lyrics_now = lyrics_allowed && lyrics_has_words();
 	if (lyrics_now) {
 		lyrics_slide_to(LYRICS_FULL);
@@ -2113,7 +2110,7 @@ static void lyrics_enable_wifi_cb(void *user) {
 	(void)user;
 	device_state_t state;
 	device_state_get(&state);
-	if (!state.current_file[0] || !playing_local_file(&state)) {
+	if (!playing_lyrics_file(&state)) {
 		return;
 	}
 	snprintf(lyrics_wifi_path, sizeof(lyrics_wifi_path), "%s", state.current_file);
@@ -2161,7 +2158,7 @@ static void lyrics_search_run(void) {
 	}
 	device_state_t state;
 	device_state_get(&state);
-	if (!state.current_file[0] || !playing_local_file(&state)) {
+	if (!playing_lyrics_file(&state)) {
 		return;
 	}
 
@@ -2216,6 +2213,17 @@ static void lyrics_offer_download(void) {
 	confirm_show("lyrics_download_title", "lyrics_download_note", "lyrics_download", lyrics_download_cb, NULL);
 }
 
+void player_lyrics_open(void) {
+	if (!player_lyrics_available()) return;
+	if (!lyrics_loaded) {
+		toast_plain("loading");
+	} else if (!lyrics_has_words()) {
+		lyrics_offer_download();
+	} else {
+		lyrics_commit(true);
+	}
+}
+
 // The swipe that pulls the page in (on the sleeve, right to left) or pushes it
 // out (on the words, left to right). `opening` is the user data. Sideways
 // only: a movement that reads as vertical is the column being scrolled, and
@@ -2241,7 +2249,7 @@ static void lyrics_drag_cb(lv_event_t *e) {
 	}
 
 	if (code == LV_EVENT_PRESSED) {
-		tracking = opening ? !lyrics_now && lyrics_available() && lyrics_loaded : lyrics_now;
+		tracking = opening ? !lyrics_now && player_lyrics_available() && lyrics_loaded : lyrics_now;
 		asking = opening && !lyrics_has_words();
 		engaged = false;
 		lv_indev_get_point(indev, &start);
@@ -3005,7 +3013,7 @@ static void update_layout(const device_state_t *state) {
 	// Studio only wants a picture and a name, and takes whatever is playing:
 	// a file, a cached Qobuz or Tidal track, a podcast, a book, a station.
 	bool local = playing_local_file(state);
-	bool lyrics = lyrics_wanted && local;
+	bool lyrics = lyrics_wanted && playing_lyrics_file(state);
 	bool studio = layout_choice == PLAYER_LAYOUT_STUDIO;
 	bool wave = layout_choice == PLAYER_LAYOUT_ALTERNATIVE && local;
 	bool alt = wave;

@@ -12,12 +12,18 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "$WORK/run/usr/resource" "$CARD/.local/tidal-cache"
+if [[ ${1:-} == lyrics* ]]; then
+    printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' >"$WORK/asound.conf"
+    export ALSA_CONFIG_PATH="$WORK/asound.conf"
+fi
 cp -a "$ROOT/sonix-packer/assets/R1/usr/resource/." "$WORK/run/usr/resource/"
-if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality ]]; then
+if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality && ${1:-} != lyrics-stream ]]; then
     for id in 21 22; do
         album=$CARD/Music/Tidal/Fixture/Album-$id
         mkdir -p "$album"
-        ffmpeg -nostdin -v error -f lavfi -i 'sine=duration=1' "$album/Track.mp3"
+        duration=1
+        if [[ ${1:-} == lyrics ]]; then duration=50; fi
+        ffmpeg -nostdin -v error -f lavfi -i "sine=duration=$duration" "$album/Track.mp3"
         printf 'title=Track %s\nartist=Fixture\nalbum_artist=Fixture\nalbum=Album %s\nalbum_id=%s\ntidal_id=%s\ntrack=1\n' "$id" "$id" "$id" "$id" >"$album/Track.mp3.tags"
         printf 'Fixture/Album-%s/Track.mp3\n' "$id" >"$CARD/.local/tidal-cache/$id.keep"
     done
@@ -34,8 +40,13 @@ language = English
 last_seen = $(date +%s)
 configured = 1
 INI
-if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality ]]; then
-    ffmpeg -nostdin -v error -f lavfi -i 'sine=duration=2' "$WORK/fixture.flac"
+if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality || ${1:-} == lyrics-stream ]]; then
+    duration=2
+    if [[ ${1:-} == lyrics-stream ]]; then
+        duration=50
+        touch "$WORK/release-21" "$WORK/release-22"
+    fi
+    ffmpeg -nostdin -v error -f lavfi -i "sine=duration=$duration" "$WORK/fixture.flac"
     python3 "$ROOT/tools/tidal-favourites-fixture.py" "$WORK" >"$WORK/mock.log" 2>&1 &
     MOCK=$!
     for ((i=0; i<100; i++)); do [[ ! -s $WORK/port ]] || break; sleep .1; done
@@ -71,6 +82,67 @@ assert_label() {
 click 356 160
 click 125 219
 shot home
+if [[ ${1:-} == lyrics* ]]; then
+    if [[ $1 == lyrics-stream ]]; then
+        sidecar=$CARD/.local/tidal-cache/21.lrc
+    else
+        sidecar=$CARD/Music/Tidal/Fixture/Album-21/Track.lrc
+        printf 'Plain lyrics for the next track\n' >"${sidecar%/*}/Second.txt"
+        cp "${sidecar%/*}/Second.txt" "$CARD/Music/Tidal/Fixture/Album-22/Track.txt"
+    fi
+    printf '[00:00.00]Opening verse\n[00:10.00]Second verse\n[00:20.00]Third verse\n[00:30.00]Closing verse\n[00:35.00]Encore verse\n' >"$sidecar"
+    if [[ $1 == lyrics-stream ]]; then
+        click 180 418
+        click 175 191
+        sleep 1
+        grep -q '/audio/21' "$WORK/mock.log"
+    else
+        click 190 200
+        click 77 235
+        click 180 320
+    fi
+    if [[ $1 == lyrics-stream ]]; then
+        # Pull the lyrics pane in by swiping left across the sleeve.
+        xdotool mousemove --window "$WINDOW" 365 300 mousedown 1
+        for x in 330 290 250 210 170 130 90; do
+            xdotool mousemove --window "$WINDOW" "$x" 300
+            sleep .08
+        done
+        xdotool mouseup 1
+        sleep 1
+    else
+        click 437 732
+        shot lyrics-menu
+        read -r x y < <(tesseract "$WORK/lyrics-menu.png" stdout tsv 2>/dev/null | awk -F '\t' \
+            '$12 == "Lyrics" { print int($7 + $9/2 - 60), int($8 + $10/2 - 50) }')
+        click "$x" "$y"
+    fi
+    shot lyrics-opening
+    assert_label lyrics-opening 'Opening verse'
+    # Tap a timed line to seek, then check it moved to the centre.
+    click 235 429
+    shot lyrics-seek
+    # The active line advances to the centre of the pane after a forward seek.
+    for pair in 'lyrics-opening Opening' 'lyrics-seek Closing'; do
+        read -r file word <<<"$pair"
+        tesseract "$WORK/$file.png" stdout tsv 2>/dev/null | awk -F '\t' -v word="$word" \
+            '$12 == word && $8 >= 305 && $8 <= 350 { found = 1 } END { exit !found }'
+    done
+    if [[ $1 == lyrics-stream ]]; then
+        sleep 5
+        shot lyrics-follow
+        tesseract "$WORK/lyrics-follow.png" stdout tsv 2>/dev/null | awk -F '\t' \
+            '$12 == "Encore" && $8 >= 305 && $8 <= 350 { found = 1 } END { exit !found }'
+    else
+        click 330 732
+        sleep 1
+        shot lyrics-plain
+        assert_label lyrics-plain 'Plain lyrics for the next track'
+        if assert_label lyrics-plain 'Closing verse'; then exit 1; fi
+    fi
+    printf 'TIDAL %s opened timed lyrics and re-centred on the current line after a seek.\n' "$1"
+    exit 0
+fi
 if [[ ${1:-} == quality ]]; then
     folder="$CARD/Music/Tidal/Fixture Artist/Fixture Album [21]"
     mkdir -p "$folder"

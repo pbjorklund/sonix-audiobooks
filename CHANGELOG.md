@@ -2,6 +2,12 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 1.3.1.13 (2026-11-27)
+
+- **TIDAL lyrics:** Open **Lyrics** from the Now Playing menu or swipe left across the cover. Timed lyrics highlight and follow the current line. Tap a line to seek. Plain lyrics stay readable, and saved lyrics work offline.
+- **Single-ear audio:** Add the button in Control Center settings. Tap to cycle from both ears to left-ear mono, right-ear mono, and back. Both channels are mixed into the selected ear without changing saved mono or balance settings. Bit-perfect and DSD playback are excluded.
+- **TIDAL playlist downloads:** Playlist tracks share one copy instead of creating separate one-track album folders. Downloading the album at the same quality can move a playlist copy into the album without downloading the audio again. Existing album files and linked imports are reused.
+
 ## Sonix Audiobooks 1.3.1.8 (2026-11-26)
 
 - **Audiobookshelf resume:** Starting a downloaded episode or linked audiobook checks the server for a newer listening position. If the server is unreachable, playback uses the position saved on the R1. Browsing Downloads still works without a network request.

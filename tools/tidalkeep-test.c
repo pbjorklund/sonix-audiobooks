@@ -429,6 +429,28 @@ int main(int argc, char **argv) {
 	assert(tidalkeep_enqueue_quality(&change, TIDAL_QUALITY_HIRES, true) == TIDALKEEP_ADDED);
 	drain(&state);
 	assert(tidalcache_kept_quality(change.id) == TIDAL_QUALITY_HIRES);
+
+	tidal_track_t playlist = track(130, 1);
+	const char *album_ids[] = {playlist.album_id};
+	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_LOW, false, true) == TIDALKEEP_ADDED);
+	drain(&state);
+	assert(tidalcache_is_playlist_only(playlist.id));
+	assert(tidalcache_find(playlist.id, before, sizeof(before)) && strstr(before, "/.playlist-tracks/130/"));
+	tidal_track_t listed;
+	assert(tidalcache_kept_track(playlist.id, &listed) && !strcmp(listed.album, playlist.album));
+	assert(tidalcache_kept_filtered(&listed, 1, 0, playlist.album_id, NULL) == 0);
+	tidalcache_kept_album_counts(album_ids, counts, 1);
+	assert(counts[0] == 0);
+	fetched_count = 0;
+	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_LOW, false, true) == TIDALKEEP_SKIPPED);
+	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_LOW, false, false) == TIDALKEEP_ADDED);
+	drain(&state);
+	assert(fetched_count == 0 && !tidalcache_is_playlist_only(playlist.id));
+	assert(tidalcache_find(playlist.id, after, sizeof(after)) && strcmp(before, after) && access(before, F_OK) != 0);
+	assert(tidalcache_kept_filtered(&listed, 1, 0, playlist.album_id, NULL) == 1);
+	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_HIRES, true, true) == TIDALKEEP_ADDED);
+	drain(&state);
+	assert(tidalcache_kept_quality(playlist.id) == TIDAL_QUALITY_HIRES && !tidalcache_is_playlist_only(playlist.id));
 	puts("tidalkeep-test: queue, retry, kept albums, removal, eviction and transfer progress passed");
 	(void)dir_entries;
 	return 0;

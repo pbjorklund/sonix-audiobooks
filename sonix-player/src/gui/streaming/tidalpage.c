@@ -1472,8 +1472,8 @@ static void queue_download_batch(void *user) {
 	downloads_queued = 0;
 	download_queue_full = download_batch.truncated;
 	for (int i = 0; i < count; i++) {
-		tidalkeep_enqueue_result_t queued = tidalkeep_enqueue_quality(&download_batch.tracks[i],
-			job->download_quality, download_batch.replace[i]);
+		tidalkeep_enqueue_result_t queued = tidalkeep_enqueue_batch(&download_batch.tracks[i],
+			job->download_quality, download_batch.replace[i], job->kind == JOB_DOWNLOAD_PLAYLIST);
 		if (queued == TIDALKEEP_REJECTED) {
 			download_queue_full = true;
 			break;

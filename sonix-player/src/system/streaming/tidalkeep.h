@@ -37,6 +37,7 @@ typedef enum {
 
 tidalkeep_enqueue_result_t tidalkeep_enqueue(const tidal_track_t *track);
 tidalkeep_enqueue_result_t tidalkeep_enqueue_quality(const tidal_track_t *track, int quality, bool replace);
+tidalkeep_enqueue_result_t tidalkeep_enqueue_batch(const tidal_track_t *track, int quality, bool replace, bool playlist);
 // True for Sonix-owned downloads made with a different (or unrecorded) setting.
 bool tidalkeep_quality_differs(int kept_quality, int requested_quality);
 

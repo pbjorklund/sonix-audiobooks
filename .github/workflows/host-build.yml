@@ -43,6 +43,12 @@ jobs:
         env:
           SONIX_SMOKE_SKIP_BUILD: 1
         run: tools/audiobookshelf-host-smoke.sh
+      - name: Check single-ear PCM routing
+        working-directory: ${{ github.workspace }}
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -I sonix-player tools/singleear-test.c \
+            sonix-player/src/system/audio/singleear.c -o /tmp/sonix-singleear-test
+          /tmp/sonix-singleear-test
       - name: Check sleep timer with a controlled clock
         working-directory: ${{ github.workspace }}
         run: |
@@ -86,6 +92,8 @@ jobs:
           tools/tidal-downloads-ui-smoke.sh local
           tools/tidal-downloads-ui-smoke.sh cache
           tools/tidal-downloads-ui-smoke.sh quality
+          tools/tidal-downloads-ui-smoke.sh lyrics
+          tools/tidal-downloads-ui-smoke.sh lyrics-stream
       - name: Check TIDAL download queue and R1 firmware tooling
         working-directory: ${{ github.workspace }}
         run: |

@@ -1819,6 +1819,11 @@ void trackmenu_details_open(const char *path) {
 	switcher_set_player_return(NULL);
 }
 
+static void open_lyrics_cb(void *user) {
+	(void)user;
+	player_lyrics_open();
+}
+
 void trackmenu_open(lv_obj_t *anchor) {
 	// Two tables rather than one with the label patched at runtime, because of
 	// the string-extraction tool: it reads popover_item_t initialisers (see
@@ -1836,6 +1841,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"show_album", open_album_cb, NULL},
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
+		{"trackmenu_lyrics", open_lyrics_cb, NULL},
 	};
 	static const popover_item_t ITEMS_PODCAST[] = {
 		{"trackmenu_queue", open_queue_cb, NULL},
@@ -1849,7 +1855,12 @@ void trackmenu_open(lv_obj_t *anchor) {
 	device_state_get(&state);
 	bool podcast = state.current_file[0] && podcastcache_is_episode(state.current_file);
 
-	popover_show(anchor, podcast ? ITEMS_PODCAST : ITEMS, 5);
+	if (podcast) {
+		popover_show(anchor, ITEMS_PODCAST, sizeof(ITEMS_PODCAST) / sizeof(*ITEMS_PODCAST));
+	} else {
+		int count = (int)(sizeof(ITEMS) / sizeof(*ITEMS));
+		popover_show(anchor, ITEMS, count - !player_lyrics_available());
+	}
 }
 
 void trackmenu_init(gui_config_t *cfg) {

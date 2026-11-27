@@ -33,6 +33,7 @@
 #include "src/gui/wireless/wifisettings.h"
 #include "src/system/remote/airplay.h"
 #include "src/system/audio/alsa-controls.h"
+#include "src/system/audio/singleear.h"
 #include "src/system/audio/audio.h"
 #include "src/system/bluetooth/bluetooth.h"
 #include "src/system/core/config.h"
@@ -97,6 +98,7 @@ static lv_obj_t *dlna_btn;
 static lv_obj_t *sleep_btn;
 static lv_obj_t *wifi_transfer_btn;
 static lv_obj_t *gapless_btn;
+static lv_obj_t *singleear_btn;
 
 // ---------------------------------------------------------------------------
 // Which buttons the panel carries, and where
@@ -129,6 +131,7 @@ static const char *const button_key[QP_BTN_COUNT] = {
 	[QP_BTN_SLEEP] = "sleep_timer",
 	[QP_BTN_WIFI_TRANSFER] = "wifi_transfer",
 	[QP_BTN_GAPLESS] = "gapless",
+	[QP_BTN_SINGLEEAR] = "singleear",
 };
 
 static const char *const button_tag[QP_BTN_COUNT] = {
@@ -146,6 +149,7 @@ static const char *const button_tag[QP_BTN_COUNT] = {
 	[QP_BTN_SLEEP] = "sleep_timer",
 	[QP_BTN_WIFI_TRANSFER] = "wifitransfer_title",
 	[QP_BTN_GAPLESS] = "musicsettings_gapless_playback",
+	[QP_BTN_SINGLEEAR] = "quickpanel_singleear",
 };
 
 static uint8_t slots[QP_SLOT_COUNT];  // the grid, QP_BTN_NONE where it is empty
@@ -1061,7 +1065,7 @@ static void order_load(void) {
 		}
 		// Keep Crossfade (before its layout migration), DLNA, Wi-Fi transfer and
 		// gapless among the unused controls unless explicitly placed.
-		bool waits = i == QP_BTN_DLNA || i == QP_BTN_WIFI_TRANSFER || i == QP_BTN_GAPLESS;
+		bool waits = i == QP_BTN_DLNA || i == QP_BTN_WIFI_TRANSFER || i == QP_BTN_GAPLESS || i == QP_BTN_SINGLEEAR;
 		if ((saved_version < 2 && i == QP_BTN_FADE) || waits) {
 			hidden[hidden_n++] = (uint8_t)i;
 		} else {
@@ -1190,6 +1194,8 @@ static lv_obj_t *button_widget(quickpanel_button_t which) {
 		return wifi_transfer_btn;
 	case QP_BTN_GAPLESS:
 		return gapless_btn;
+	case QP_BTN_SINGLEEAR:
+		return singleear_btn;
 	default:
 		return NULL;
 	}
@@ -1400,6 +1406,8 @@ const lv_image_dsc_t *quickpanel_button_icon(quickpanel_button_t button) {
 		return &icon_wifi_transfer_quick;
 	case QP_BTN_GAPLESS:
 		return &icon_gapless_on_quick;
+	case QP_BTN_SINGLEEAR:
+		return &icon_singleear_stereo;
 	default:
 		return &icon_wifi;
 	}
@@ -1516,6 +1524,13 @@ static void refresh_audio_buttons(void) {
 		}
 	}
 	circle_button_set_on(gapless_btn, gapless);
+	if (singleear_btn) {
+		singleear_mode_t ear = singleear_get();
+		lv_image_set_src(lv_obj_get_child(singleear_btn, 0), ear == SINGLEEAR_LEFT ? &icon_singleear_left :
+			ear == SINGLEEAR_RIGHT ? &icon_singleear_right : &icon_singleear_stereo);
+		circle_button_set_on(singleear_btn, ear != SINGLEEAR_STEREO);
+		lv_obj_set_style_opa(singleear_btn, pure || audio_get_dsd_multiple() ? LV_OPA_40 : LV_OPA_COVER, 0);
+	}
 }
 
 // After a button has switched something: the circles repaint, and the page
@@ -1735,6 +1750,17 @@ static void sleep_clicked_cb(lv_event_t *e) {
 		return;
 	}
 	sleeptimer_set_enabled(!sleeptimer_enabled());
+	toggled();
+}
+
+static void singleear_clicked_cb(lv_event_t *e) {
+	(void)e;
+	if (held_by_bit_perfect()) return;
+	if (audio_get_dsd_multiple()) {
+		toast_plain("quickpanel_singleear_pcm_only");
+		return;
+	}
+	singleear_cycle();
 	toggled();
 }
 
@@ -2088,6 +2114,9 @@ void quickpanel_init(gui_config_t *cfg) {
 	gapless_btn = make_circle_button(row, &icon_gapless_off_quick);
 	lv_obj_add_event_cb(gapless_btn, gapless_clicked_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_add_event_cb(gapless_btn, gapless_page_cb, LV_EVENT_LONG_PRESSED, NULL);
+
+	singleear_btn = make_circle_button(row, &icon_singleear_stereo);
+	lv_obj_add_event_cb(singleear_btn, singleear_clicked_cb, LV_EVENT_CLICKED, NULL);
 
 	bright_row = lv_obj_create(controls_card);
 	lv_obj_set_size(bright_row, lv_pct(100), BRIGHT_ROW_H);
