@@ -42,6 +42,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlsplit(self.path)
         path = request.path
+        queue_all = (work / "queue-all").exists()
         if path == saved_path:
             if not request.query.startswith("include=items,items.albums:artists,items.albums:coverArt"):
                 self.send_error(400)
@@ -50,7 +51,8 @@ class Handler(BaseHTTPRequestHandler):
             elif (work / "reject-saved").exists():
                 self.send_json({"errors": [{"status": "403"}]}, status=403)
             elif "page%5Bcursor%5D=album%2Bpage" in self.path:
-                self.send_json({"data": [{"id": i, "type": "albums"} for i in saved],
+                ids = sorted(saved | ({"33"} if queue_all else set()))
+                self.send_json({"data": [{"id": i, "type": "albums"} for i in ids],
                                 "links": {"self": path}, "included": [{"id": "21", "type": "albums",
                                     "attributes": {"title": "Account Saved Album", "numberOfItems": 2},
                                     "relationships": {"artists": {"data": [{"id": "12", "type": "artists"}]}}},
@@ -74,6 +76,13 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(.05)
             if (work / "reject-favourites").exists():
                 self.send_json({"userMessage": "Fixture offline"}, status=503)
+            elif queue_all:
+                offset = int(parse_qs(request.query).get("offset", [0])[0])
+                # Repeated entries keep the fixture small while forcing a second page
+                # and exercising the queue's track deduplication.
+                items = [album] * 50 if not offset else [dict(album, id=41, title="Unavailable Album"),
+                                                        dict(album, id=31, title="Second Album", numberOfTracks=1)]
+                self.send_json({"items": items, "totalNumberOfItems": 52})
             elif (work / "bulk-albums").exists():
                 self.send_json({"items": [album, dict(album, id=31, title="Second Album", numberOfTracks=1),
                                           dict(album, id=41, title="Missing Album")]})
@@ -85,9 +94,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/albums/31/tracks" and (work / "bulk-albums").exists():
             self.send_json({"items": [dict(tracks[0], id=31, title="Fixture Track 31",
                                            album=dict(album, id=31, title="Second Album"))]})
+        elif queue_all and path in ("/albums/31/tracks", "/albums/32/tracks", "/albums/33/tracks"):
+            item = int(path.split("/")[2])
+            name = f"Bulk Album {item}"
+            self.send_json({"items": [dict(tracks[0], id=item, title=f"Fixture Track {item}",
+                                           album=dict(album, id=item, title=name, numberOfTracks=1))]})
         elif path == "/albums/21":
             self.send_json(album)
-        elif path in ("/tracks/21/playbackinfopostpaywall", "/tracks/22/playbackinfopostpaywall"):
+        elif path in ("/tracks/21/playbackinfopostpaywall", "/tracks/22/playbackinfopostpaywall") or (
+                queue_all and path in {f"/tracks/{i}/playbackinfopostpaywall" for i in (31, 32, 33)}):
             track = path.split("/")[2]
             if track == "21" and (work / "hold-playback").exists():
                 (work / "playback-requested").touch()
@@ -102,7 +117,7 @@ class Handler(BaseHTTPRequestHandler):
             suffix = "?aac=1" if aac else ""
             manifest = json.dumps({"mimeType": mime, "urls": [f"http://127.0.0.1:{self.server.server_port}/audio/{track}{suffix}"]})
             self.send_json({"manifest": base64.b64encode(manifest.encode()).decode()})
-        elif path in ("/audio/21", "/audio/22"):
+        elif path in ("/audio/21", "/audio/22") or (queue_all and path in ("/audio/31", "/audio/32", "/audio/33")):
             track = path.rsplit("/", 1)[1]
             aac = request.query == "aac=1"
             data = (work / ("fixture.m4a" if aac else "fixture.flac")).read_bytes()

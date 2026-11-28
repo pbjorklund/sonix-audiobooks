@@ -1703,8 +1703,7 @@ static int saved_related(const json_doc_t *doc, int included, int album, const c
 	return json_obj_str(doc, link, "id", id, sizeof(id)) ? included_resource(doc, included, type, id) : -1;
 }
 
-int tidal_saved_albums(tidal_album_t *out, int max) {
-	if (!out || max <= 0) return -1;
+static int walk_saved_albums(tidal_album_t *out, int max, bool (*visit)(const char *, void *), void *user) {
 	const char query[] = "?include=items,items.albums:artists,items.albums:coverArt";
 	const char cursor_param[] = "page[cursor]=";
 	char url[1200];
@@ -1720,11 +1719,15 @@ int tidal_saved_albums(tidal_album_t *out, int max) {
 			api_done(body, &doc);
 			break;
 		}
-		for (int i = 0, len = json_len(&doc, data); i < len && count < max; i++) {
+		for (int i = 0, len = json_len(&doc, data); i < len && (visit || count < max); i++) {
 			int link = json_at(&doc, data, i);
 			char type[32], id[TIDAL_ID_MAX];
 			if (!json_obj_str(&doc, link, "type", type, sizeof(type)) || strcmp(type, "albums") ||
 				!json_obj_str(&doc, link, "id", id, sizeof(id)) || !saved_album_id(id)) continue;
+			if (visit) {
+				if (!visit(id, user)) { api_done(body, &doc); return -1; }
+				continue;
+			}
 			int item = included_resource(&doc, included, "albums", id);
 			int attrs = json_get(&doc, item, "attributes");
 			tidal_album_t *album = &out[count++];
@@ -1745,7 +1748,7 @@ int tidal_saved_albums(tidal_album_t *out, int max) {
 		char next[1200];
 		bool more = json_obj_str(&doc, json_get(&doc, root, "links"), "next", next, sizeof(next)) && next[0];
 		api_done(body, &doc);
-		if (!more || count == max) return count;
+		if (!more || (!visit && count == max)) return count;
 		// Only reuse the opaque cursor, never a server-provided host or path.
 		char *value = strstr(next, cursor_param);
 		if (value) value += sizeof(cursor_param) - 1;
@@ -1759,6 +1762,14 @@ int tidal_saved_albums(tidal_album_t *out, int max) {
 	}
 	set_error("%s", tr("tidal_unreadable_tidal_reply"));
 	return -1;
+}
+
+int tidal_saved_albums(tidal_album_t *out, int max) {
+	return out && max > 0 ? walk_saved_albums(out, max, NULL, NULL) : -1;
+}
+
+bool tidal_saved_album_visit(bool (*visit)(const char *, void *), void *user) {
+	return visit && walk_saved_albums(NULL, 0, visit, user) == 0;
 }
 
 bool tidal_saved_album_set(const char *id, bool saved) {

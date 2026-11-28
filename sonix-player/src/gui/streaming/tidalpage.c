@@ -98,6 +98,7 @@ typedef enum {
 	JOB_KEPT_PLAYLISTS,
 	JOB_DOWNLOAD_PLAYLIST,
 	JOB_DOWNLOAD_ALBUM,
+	JOB_DOWNLOAD_ALBUM_LIST,
 	JOB_LINK_KEPT_ALBUMS,
 	JOB_REFRESH_KEPT_ALBUM,
 } job_kind_t;
@@ -1589,6 +1590,10 @@ static void job_done_cb(void *user) {
 		toast_success("done");
 		break;
 
+	case JOB_DOWNLOAD_ALBUM_LIST:
+		report_album_queued();
+		break;
+
 	case JOB_DOWNLOAD_ALBUM:
 	case JOB_DOWNLOAD_PLAYLIST:
 		offer_download_batch();
@@ -2392,6 +2397,52 @@ static int link_list_albums(int visible, bool all_favourites, char *error, size_
 	return linked;
 }
 
+typedef struct {
+	tidal_track_t *tracks;
+	int quality, queued;
+	bool failed;
+} album_list_download_t;
+
+static bool queue_album_tracks(const char *id, void *user) {
+	album_list_download_t *batch = user;
+	for (int offset = 0; offset <= INT_MAX - TIDAL_PAGE_LIMIT; offset += TIDAL_PAGE_LIMIT) {
+		if (!wifi_is_connected() || !tidal_logged_in()) return false;
+		int n = tidal_album_tracks(id, offset, batch->tracks, TIDAL_PAGE_LIMIT);
+		if (n < 0) break;
+		for (int i = 0; i < n; i++) {
+			// Bulk download fills gaps only. It never moves playlist copies or
+			// replaces audio stored at a different quality.
+			tidalkeep_enqueue_result_t result = tidalkeep_enqueue_quality(&batch->tracks[i], batch->quality, false);
+			if (result == TIDALKEEP_REJECTED) return false;
+			batch->queued += result == TIDALKEEP_ADDED;
+		}
+		if (n < TIDAL_PAGE_LIMIT) return true;
+	}
+	batch->failed = true;
+	return true; // an unavailable album should not prevent later ones from queuing
+}
+
+static void queue_album_list(job_kind_t source, int quality) {
+	tidal_album_t *albums = calloc(TIDAL_PAGE_LIMIT, sizeof(*albums));
+	album_list_download_t batch = {.quality = quality, .tracks = calloc(TIDAL_PAGE_LIMIT, sizeof(*batch.tracks))};
+	bool ok = albums && batch.tracks && wifi_is_connected() && tidal_logged_in();
+	bool saved = source == JOB_SAVED_ALBUMS;
+	if (ok && saved) ok = tidal_saved_album_visit(queue_album_tracks, &batch);
+	const char *root = tidal_card_root();
+	for (int offset = 0; ok; offset += TIDAL_PAGE_LIMIT) {
+		if (offset > INT_MAX - TIDAL_PAGE_LIMIT || !wifi_is_connected() || !tidal_logged_in()) { ok = false; break; }
+		int n = saved ? tidalsaved_list(root, offset, albums, TIDAL_PAGE_LIMIT)
+			: tidal_favorite_albums(offset, albums, TIDAL_PAGE_LIMIT);
+		if (n < 0) { ok = false; break; }
+		for (int i = 0; i < n && ok; i++) ok = queue_album_tracks(albums[i].id_text, &batch);
+		if (n < TIDAL_PAGE_LIMIT) break;
+	}
+	free(batch.tracks);
+	free(albums);
+	downloads_queued = batch.queued;
+	download_enqueue_failed = !ok || batch.failed;
+}
+
 static void *worker_main(void *arg) {
 	(void)arg;
 
@@ -2465,7 +2516,7 @@ static void *worker_main(void *arg) {
 		// silently.) Nor does an extra page clear it: the old rows stay on
 		// screen and usable while the new ones download.
 		bool preserve_list = job.kind == JOB_PLAY || job.kind == JOB_DOWNLOAD_ALBUM ||
-			job.kind == JOB_DOWNLOAD_PLAYLIST || job.kind == JOB_REFRESH_KEPT_ALBUM ||
+			job.kind == JOB_DOWNLOAD_PLAYLIST || job.kind == JOB_DOWNLOAD_ALBUM_LIST || job.kind == JOB_REFRESH_KEPT_ALBUM ||
 			job.kind == JOB_SAVE_ACCOUNT_ALBUM || job.kind == JOB_LINK_KEPT_ALBUMS;
 		if (!preserve_list && off == 0) {
 			result_count = 0;
@@ -2637,6 +2688,9 @@ static void *worker_main(void *arg) {
 		case JOB_LINK_KEPT_ALBUMS:
 			downloads_queued = link_list_albums(kept_count, job.id == JOB_FAV_ALBUMS, result_error, sizeof(result_error));
 			break;
+		case JOB_DOWNLOAD_ALBUM_LIST:
+			queue_album_list((job_kind_t)job.id, job.download_quality);
+			break;
 		case JOB_DOWNLOAD_PLAYLIST:
 		case JOB_DOWNLOAD_ALBUM: {
 			bool playlist = job.kind == JOB_DOWNLOAD_PLAYLIST;
@@ -2763,7 +2817,7 @@ static bool inflight_is_back; // going back consumes a step instead of adding on
 static bool inflight_replace; // tab switches replace the displayed view
 
 static bool job_is_list(job_kind_t kind) {
-	return kind != JOB_PLAY && kind != JOB_DOWNLOAD_ALBUM && kind != JOB_DOWNLOAD_PLAYLIST &&
+	return kind != JOB_PLAY && kind != JOB_DOWNLOAD_ALBUM && kind != JOB_DOWNLOAD_PLAYLIST && kind != JOB_DOWNLOAD_ALBUM_LIST &&
 		   kind != JOB_REFRESH_KEPT_ALBUM && kind != JOB_SAVE_ACCOUNT_ALBUM && kind != JOB_LINK_KEPT_ALBUMS && kind != JOB_LOGIN_BEGIN &&
 		   kind != JOB_LOGIN_POLL && kind != JOB_NONE;
 }
@@ -3969,6 +4023,24 @@ static void link_local_albums(void *user) {
 	run(&job, "loading");
 }
 
+static void queue_all_albums_confirmed(void *user) {
+	job_kind_t source = (job_kind_t)(intptr_t)user;
+	if (lv_screen_active() != list_screen || list_kind != source) return;
+	const job_t job = {.kind = JOB_DOWNLOAD_ALBUM_LIST, .id = source, .download_quality = tidalkeep_quality()};
+	run(&job, "loading");
+}
+
+static void download_all_albums(void *user) {
+	(void)user;
+	if (!wifi_is_connected() || !tidal_logged_in()) {
+		gui_notify_popup(!wifi_is_connected() ? "enable_wi_fi_first" : "tidal_sign_in_to_tidal");
+		return;
+	}
+	if (list_kind == JOB_FAV_ALBUMS || list_kind == JOB_SAVED_ALBUMS)
+		confirm_show("tidal_download_all_albums", "tidal_download_all_albums_note", "download",
+			queue_all_albums_confirmed, (void *)(intptr_t)list_kind);
+}
+
 static void toggle_download_groups(void *user) {
 	(void)user;
 	group_favourite_downloads = !group_favourite_downloads;
@@ -3980,12 +4052,13 @@ static void toggle_download_groups(void *user) {
 static void list_album_menu_cb(lv_event_t *e) {
 	if (switcher_back_drag_active() || player_sheet_drag_active()) return;
 	discard_background_refresh();
-	if (list_kind == JOB_FAV_ALBUMS) {
-		const popover_item_t items[] = {
-			{.label = "tidal_link_local_album", .action = link_local_albums},
-			{.label = "tidal_group_downloads", .action = toggle_download_groups, .checked = group_favourite_downloads},
-		};
-		popover_show(lv_event_get_current_target(e), items, 2);
+	if (list_kind == JOB_FAV_ALBUMS || list_kind == JOB_SAVED_ALBUMS) {
+		popover_item_t items[3] = {{.label = "tidal_link_local_album", .action = link_local_albums}};
+		int count = 1;
+		if (list_kind == JOB_FAV_ALBUMS) items[count++] = (popover_item_t){.label = "tidal_group_downloads",
+			.action = toggle_download_groups, .checked = group_favourite_downloads};
+		items[count++] = (popover_item_t){.label = "tidal_download_all_albums", .action = download_all_albums};
+		popover_show(lv_event_get_current_target(e), items, count);
 	} else if (can_link_album_list(list_kind)) {
 		const popover_item_t item = {.label = "tidal_link_local_album", .action = link_local_albums};
 		popover_show(lv_event_get_current_target(e), &item, 1);

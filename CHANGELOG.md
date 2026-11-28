@@ -2,6 +2,10 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 1.3.1.25 (2026-11-28)
+
+- **TIDAL:** Choose **Download all albums** from the menu in **Favourite albums** or **Saved for later**. After confirmation, the player queues missing tracks, including from albums beyond the visible page. Existing downloads stay at their current quality.
+
 ## Sonix Audiobooks 1.3.1.24 (2026-11-28)
 
 - **Podcast Downloads:** Open a downloaded Audiobookshelf show to combine the Unplayed, Started, and Finished filters offline. **Remove played downloads** deletes only local copies of finished episodes after confirmation, without resetting listening progress. Completed transfers no longer appear in the podcast transfer queue.

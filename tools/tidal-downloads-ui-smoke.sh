@@ -17,7 +17,7 @@ if [[ ${1:-} == lyrics* || ${1:-} == startup ]]; then
     export ALSA_CONFIG_PATH="$WORK/asound.conf"
 fi
 cp -a "$ROOT/sonix-packer/assets/R1/usr/resource/." "$WORK/run/usr/resource/"
-if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality && ${1:-} != lyrics-stream && ${1:-} != startup && ${1:-} != large-album ]]; then
+if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality && ${1:-} != lyrics-stream && ${1:-} != startup && ${1:-} != large-album && ${1:-} != queue-all ]]; then
     for id in 21 22; do
         album=$CARD/Music/Tidal/Fixture/Album-$id
         mkdir -p "$album"
@@ -40,7 +40,7 @@ language = English
 last_seen = $(date +%s)
 configured = 1
 INI
-if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality || ${1:-} == lyrics-stream || ${1:-} == startup || ${1:-} == large-album ]]; then
+if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality || ${1:-} == lyrics-stream || ${1:-} == startup || ${1:-} == large-album || ${1:-} == queue-all ]]; then
     duration=2
     if [[ ${1:-} == lyrics-stream || ${1:-} == startup ]]; then
         duration=50
@@ -128,6 +128,57 @@ fi
 click 356 160
 click 125 219
 shot home
+if [[ ${1:-} == queue-all ]]; then
+    touch "$WORK/queue-all" "$WORK/release-22" "$WORK/release-31" "$WORK/release-32" "$WORK/release-33"
+    kept="$CARD/Music/Tidal/Fixture Artist/Fixture Album [21]"
+    mkdir -p "$kept"
+    cp "$WORK/fixture.flac" "$kept/Existing.flac"
+    printf 'Fixture Artist/Fixture Album [21]/Existing.flac\n' >"$CARD/.local/tidal-cache/21.keep"
+    printf 'tidal_id=21\nalbum_id=21\n' >"$kept/Existing.flac.tags"
+    sqlite3 "$CARD/.local/tidal-saved.db" "CREATE TABLE saved(id TEXT UNIQUE NOT NULL,title TEXT,artist TEXT,cover TEXT,released TEXT,tracks INTEGER); INSERT INTO saved VALUES('32','Local Bulk Bookmark','','','',1);"
+    queue_collection() {
+        local name=$1 menu_y x y
+        click 430 88
+        shot "$name-menu"
+        menu_y=$(tesseract "$WORK/$name-menu.png" stdout --psm 11 tsv 2>/dev/null |
+            awk -F '\t' '$12 == "Download" && $7 > 230 { print int($8+$10/2-50); exit }')
+        [[ -n $menu_y ]]
+        click 300 "$menu_y"
+        shot "$name-confirm"
+        assert_label "$name-confirm" 'Download all albums'
+        [[ $(grep -c 'GET /.*playbackinfopostpaywall' "$WORK/mock.log" || true) == "$2" ]]
+        read -r x y < <(awk '/CONFIRMDUMP ok / {split($(NF-1),x,"="); split($NF,y,"=")} END {if (x[2]) print x[2],y[2]}' "$WORK/player.log")
+        click "$x" "$y"
+        for ((i=0; i<45; i++)); do
+            shot "$name-queued"
+            if assert_label "$name-queued" '2 tracks added to downloads'; then return 0; fi
+            sleep .2
+        done
+        return 1
+    }
+    wait_kept() {
+        for ((i=0; i<100; i++)); do [[ ! -s $CARD/.local/tidal-cache/$1.keep ]] || return 0; sleep .1; done
+        return 1
+    }
+    click 180 524
+    queue_collection favourites 0
+    assert_label favourites-queued 'Download failed'
+    wait_kept 22
+    wait_kept 31
+    grep -Eq '/users/1/favorites/albums\?.*&offset=50' "$WORK/mock.log"
+    sleep 3 # let the modal queued notice dismiss before navigating
+    click 43 88
+    click 180 309
+    queue_collection saved 2
+    wait_kept 32
+    wait_kept 33
+    grep -F 'page%5Bcursor%5D=album%2Bpage' "$WORK/mock.log" >/dev/null
+    cmp "$WORK/fixture.flac" "$kept/Existing.flac"
+    grep -Fx 'Fixture Artist/Fixture Album [21]/Existing.flac' "$CARD/.local/tidal-cache/21.keep" >/dev/null
+    ! grep -Eq 'GET /tracks/21/playbackinfopostpaywall|"(POST|DELETE) /userCollection' "$WORK/mock.log"
+    printf 'TIDAL queued missing tracks across all Favourite and Saved pages and preserved existing audio.\n'
+    exit 0
+fi
 if [[ ${1:-} == large-album ]]; then
     touch "$WORK/large-album"
     click 180 524

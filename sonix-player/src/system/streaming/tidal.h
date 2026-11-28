@@ -128,6 +128,8 @@ typedef struct {
 } tidal_album_t;
 
 int tidal_saved_albums(tidal_album_t *out, int max);
+// Visit album IDs from every Saved for later page, without the display limit.
+bool tidal_saved_album_visit(bool (*visit)(const char *, void *), void *user);
 bool tidal_saved_album_set(const char *id, bool saved);
 
 typedef struct {

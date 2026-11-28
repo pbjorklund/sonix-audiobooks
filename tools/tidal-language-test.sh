@@ -6,6 +6,7 @@ lang_dir=${1:-$source_dir}
 for source in "$source_dir"/*.ini; do
 	language="$lang_dir/${source##*/}"
 	for key in tidal_downloads tidal_download tidal_download_album tidal_download_queued \
+		tidal_download_all_albums tidal_download_all_albums_note \
 		tidal_album_download_queued_note tidal_downloads_finished tidal_downloads_failed_note \
 		tidal_retry_failed_downloads tidal_remove_download tidal_download_remove_note \
 		tidal_download_progress tidal_album_partial tidal_album_downloaded tidal_download_queue_full \

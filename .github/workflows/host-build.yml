@@ -105,6 +105,7 @@ jobs:
           tools/tidal-downloads-ui-smoke.sh startup
           tools/tidal-downloads-ui-smoke.sh home
           tools/tidal-downloads-ui-smoke.sh large-album
+          tools/tidal-downloads-ui-smoke.sh queue-all
       - name: Check TIDAL download queue and R1 firmware tooling
         working-directory: ${{ github.workspace }}
         run: |
