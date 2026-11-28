@@ -38,7 +38,6 @@
 // 16 stored jobs including terminal history (§8.1); "Clear finished" and
 // explicit Remove free capacity. An enqueue that would exceed the bound fails
 // before any network activity.
-#define ABS_DL_JOB_CAP 16
 // More than 256 tracks is an explicit unsupported error (§8.2 step 2).
 #define ABS_DL_FILE_CAP 256
 
@@ -74,6 +73,9 @@ const char *abs_download_state_name(abs_download_state_t state);
 // Returns ABS_DL_STATE_COUNT if no job matches the episode's account and identity.
 abs_download_state_t abs_download_episode_state(const char *server, const char *owner,
 	const char *show, const char *episode);
+// Like episode_state, with a snapshot of the matching job’s live byte counters.
+abs_download_state_t abs_download_episode_status(const char *server, const char *owner,
+	const char *show, const char *episode, long long *done, long long *total);
 
 // Mirror of one DOWNLOAD_JOB row, plus worker RAM fields (last two). The
 // database, not this struct, is the source of truth; the volatile generation
@@ -400,13 +402,20 @@ typedef struct {
 	unsigned generation;            // 0 while quiesced/stale
 	int job_count;                  // FIFO order by seq
 	bool storage_paused;            // queue-wide ENOSPC/card pause (§8.4)
-	abs_download_job_t jobs[ABS_DL_JOB_CAP];
+	abs_download_job_t *jobs;
+	size_t capacity;
+	unsigned view_revision;
 } abs_download_snapshot_t;
 
-// Copies the current queue state under the mutex into the caller's (typically
-// screen-lifetime) buffer. Returns false while quiesced or after a detected
-// card swap (generation 0): the GUI must stop polling until re-init.
+// Zero-initialize before the first use and release when done. The owned job
+// buffer is reused across calls. False means unavailable (generation 0).
 bool abs_download_snapshot(abs_download_snapshot_t *out);
+// Like snapshot, but copies only when jobs or transfer counters have changed.
+bool abs_download_snapshot_update(abs_download_snapshot_t *out, bool *changed);
+void abs_download_snapshot_release(abs_download_snapshot_t *out);
+// Changes when job states change, not when a write advances the byte counter.
+// Returns 0 while storage is unavailable, like the full snapshot.
+unsigned abs_download_revision(void);
 
 // ---------------------------------------------------------------------------
 // Worker (§8.1: one persistent worker, FIFO). Production runs the worker

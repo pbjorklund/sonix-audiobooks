@@ -29,7 +29,8 @@ static int files_created;
 // The scripted outcome of the next fetch: negative counts down failures.
 static int fail_next;
 // Ids that were fetched, in order.
-static long fetched[64];
+enum { LARGE_QUEUE = 260 };
+static long fetched[LARGE_QUEUE];
 static int fetched_count;
 static bool corrupt_once;
 static bool short_audio;
@@ -461,7 +462,28 @@ int main(int argc, char **argv) {
 	assert(tidalkeep_enqueue_batch(&playlist, TIDAL_QUALITY_HIRES, true, true) == TIDALKEEP_ADDED);
 	drain(&state);
 	assert(tidalcache_kept_quality(playlist.id) == TIDAL_QUALITY_HIRES && !tidalcache_is_playlist_only(playlist.id));
-	puts("tidalkeep-test: queue, retry, kept albums, removal, eviction and transfer progress passed");
+
+	fetched_count = 0;
+	pthread_mutex_lock(&fetch_lock);
+	hold_fetch = true;
+	fetch_waiting = false;
+	pthread_mutex_unlock(&fetch_lock);
+	enqueue_track(10000, 1);
+	pthread_mutex_lock(&fetch_lock);
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += 5;
+	while (!fetch_waiting) assert(pthread_cond_timedwait(&fetch_gate, &fetch_lock, &deadline) == 0);
+	for (int i = 1; i < LARGE_QUEUE; i++) enqueue_track(10000 + i, i % 10 + 1);
+	assert(tidalkeep_state().pending == LARGE_QUEUE - 1);
+	tidal_track_t last_pending = track(10000 + LARGE_QUEUE - 1, 10);
+	assert(tidalkeep_enqueue(&last_pending) == TIDALKEEP_SKIPPED);
+	hold_fetch = false;
+	pthread_cond_signal(&fetch_gate);
+	pthread_mutex_unlock(&fetch_lock);
+	drain(&state);
+	assert(state.failed == 0 && state.pending == 0 && fetched_count == LARGE_QUEUE);
+	for (int i = 0; i < LARGE_QUEUE; i++) assert(fetched[i] == 10000 + i);
+	puts("tidalkeep-test: 260-track FIFO, retry, kept albums, removal, eviction and transfer progress passed");
 	(void)dir_entries;
 	return 0;
 }

@@ -66,7 +66,7 @@ if grep -qE 'gui_post|http_|sqlite3_|audiobookshelf_download\(|audiobookdb_' "$Q
 fi
 grep -q 'abs_list_create' "$QUEUEGUI" || fail_s "the queue screen must render through abslist (pooled rows, §8.5 line 893)"
 grep -q '#define ABS_QUEUE_POLL_MS 250' "$QUEUEGUI" || fail_s "the 4 Hz snapshot-poll constant drifted (§8.1 line 446)"
-[[ $(grep -c 'abs_download_snapshot(' "$QUEUEGUI") -eq 1 ]] || fail_s "exactly one snapshot poll site expected"
+[[ $(grep -c 'abs_download_snapshot_update(' "$QUEUEGUI") -eq 1 ]] || fail_s "exactly one snapshot poll site expected"
 grep -q 'abs_download_enqueue' "$QUEUEGUI" &&
 	fail_s "enqueuing belongs to the browse page, not the queue screen"
 for key in audiobookshelf_downloads audiobookshelf_queue_none audiobookshelf_queue_pause \
@@ -79,7 +79,7 @@ BD_LINE=$(grep -n 'static void begin_download' "$PAGE" | cut -d: -f1)
 [[ -n "$BD_LINE" ]] || fail_s "begin_download() moved: enqueue assertion needs re-anchoring"
 sed -n "$((BD_LINE + 1)),$((BD_LINE + 70))p" "$PAGE" | grep -q 'abs_download_enqueue_book(' ||
 	fail_s "begin_download() no longer enqueues (§8.5 line 587)"
-if grep -qE 'resume_import_cb|download_progress\(|gui_modal_progress|audiobookshelf_download\(' "$PAGE"; then
+if grep -qE 'resume_import_cb|\bdownload_progress\(|gui_modal_progress|audiobookshelf_download\(' "$PAGE"; then
 	fail_s "the page still carries the legacy sync-download/modal path (§8.5 line 587)"
 fi
 if grep -q 'downloaded_resume_file' "$PAGE"; then

@@ -19,8 +19,6 @@
 // failed list that "retry failed downloads" can put back on the queue.
 // ---------------------------------------------------------------------------
 
-#define TIDALKEEP_MAX 128
-
 typedef struct {
 	int pending;  // queued, not yet attempted
 	int done;     // finished and kept in this session
@@ -30,7 +28,7 @@ typedef struct {
 } tidalkeep_state_t;
 
 typedef enum {
-	TIDALKEEP_REJECTED, // no queue capacity or worker unavailable
+	TIDALKEEP_REJECTED, // allocation failed or worker unavailable
 	TIDALKEEP_SKIPPED,  // already kept, in flight, queued, or not streamable
 	TIDALKEEP_ADDED,
 } tidalkeep_enqueue_result_t;

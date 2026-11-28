@@ -249,7 +249,7 @@ static void queue_stop(void) {
 }
 
 static abs_download_job_t snapshot_job(long long id) {
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap), "snapshot unavailable\n");
 	for (int i = 0; i < snap.job_count; i++) {
 		if (snap.jobs[i].id == id) return snap.jobs[i];
@@ -584,7 +584,7 @@ static bool audiobook_sync_row(const char *abs_book, char *server_out, size_t se
 // cannot observe the clear synchronously).
 static void wait_index_pending_cleared(const char *item, long long *job_out) {
 	for (int i = 0; i < 4000; i++) {
-		abs_download_snapshot_t snap;
+		abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 		CHECK(abs_download_snapshot(&snap), "snapshot during import wait\n");
 		bool any_pending = false;
 		for (int k = 0; k < snap.job_count; k++) {
@@ -1416,7 +1416,7 @@ static void offline_phase_crash_valid(void) {
 	// worker step runs (§8.2 line 540). The crashed row is already there —
 	// recovery adopts it, nothing is re-enqueued.
 	queue_init();
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap) && snap.job_count == 1, "crash rows\n");
 	long long job_id = snap.jobs[0].id;
 	CHECK(job_state(job_id) == ABS_DL_FINALIZING, "crash state %s\n",
@@ -1478,7 +1478,7 @@ static void offline_phase_crash_incomplete(void) {
 	CHECK(!file_exists_abs(manifest), "the child wrote no manifest\n");
 
 	queue_init();
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap) && snap.job_count == 1, "crash rows\n");
 	long long job_id = snap.jobs[0].id;
 	CHECK(job_state(job_id) == ABS_DL_FINALIZING, "crash state %s\n",
@@ -1535,7 +1535,7 @@ static void offline_phase_crash_missing(void) {
 	offline_paths(want_dest, sizeof(want_dest), dest_abs, sizeof(dest_abs), final1, sizeof(final1),
 				  final2, sizeof(final2));
 	queue_init();
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap) && snap.job_count == 1, "crash rows\n");
 	long long job_id = snap.jobs[0].id;
 	CHECK(abs_download_sync_blocked(want_dest), "the recovered barrier must hold\n");
@@ -1947,7 +1947,7 @@ typedef struct {
 static void *pause_watcher_main(void *arg) {
 	pause_watcher_t *w = arg;
 	for (int i = 0; i < 400000 && !__atomic_load_n(&w->fired, __ATOMIC_ACQUIRE); i++) {
-		abs_download_snapshot_t snap;
+		abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 		if (abs_download_snapshot(&snap)) {
 			for (int j = 0; j < snap.job_count; j++) {
 				if (snap.jobs[j].id != w->job_id || snap.jobs[j].state != ABS_DL_DOWNLOADING) continue;
@@ -2539,7 +2539,7 @@ static void live_run(void) {
 	}
 	CHECK(!audiobookdb_scan_running(), "the scan never finished\n");
 	{
-		abs_download_snapshot_t snap;
+		abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 		CHECK(abs_download_snapshot(&snap), "snapshot after the import pass\n");
 		for (int k = 0; k < snap.job_count; k++) {
 			if (snap.jobs[k].state == ABS_DL_DONE) {

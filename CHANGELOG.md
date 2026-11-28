@@ -2,6 +2,13 @@
 
 All entries here are specific to Sonix Audiobooks. The project also inherits ongoing work from [Sonix Player](https://github.com/Tartarus6/sonix-player); upstream changes are not repeated line-by-line here.
 
+## Sonix Audiobooks 1.3.1.24 (2026-11-28)
+
+- **Podcast Downloads:** Open a downloaded Audiobookshelf show to combine the Unplayed, Started, and Finished filters offline. **Remove played downloads** deletes only local copies of finished episodes after confirmation, without resetting listening progress. Completed transfers no longer appear in the podcast transfer queue.
+- **Larger queues:** Audiobookshelf and TIDAL no longer have fixed limits on the number of queued downloads. TIDAL fetches every page of an album or playlist when you queue it.
+- **Download progress:** Audiobookshelf episode details show live progress without leaving the episode page.
+- **Less background work:** Streaming pages do fewer repeated checks and redraws during downloads and playback.
+
 ## Sonix Audiobooks 1.3.1.19 (2026-11-28)
 
 - **Audiobookshelf podcasts:** A finished episode now shows as heard when you go back from Now Playing. It drops out of **To hear** without reloading the list.

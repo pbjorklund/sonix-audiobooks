@@ -352,11 +352,19 @@ if [[ ${SONIX_PODCAST_SMOKE_DETAIL_QUEUE:-0} == 1 ]]; then
     click 43 88 .8
     shot latest-queued-and-active
     click 250 282 .8
+    touch "$WORK/media/hold-download-at-131072" "$WORK/media/hold-download-at-393216"
     rm "$WORK/media/hold-podcast-download"
-    wait_for 'second episode started transferring' request 'GET /api/items/pod-41/file/258638762231958/download '
-    sleep 1
-    shot detail-downloading
-    grep_label detail-downloading Downloading || fail 'detail did not show Downloading'
+    check_download_progress() {
+        local bytes=$1 percent=$(( $1 * 100 / $(stat -c %s "$MEDIA") ))
+        wait_for "download reached $bytes bytes" test -f "$WORK/media/download-reached-$bytes"
+        sleep 1
+        shot "detail-downloading-$bytes"
+        grep_label "detail-downloading-$bytes" Downloading && grep_label "detail-downloading-$bytes" "$percent%" ||
+            fail "detail did not show $percent% at $bytes bytes"
+        rm "$WORK/media/hold-download-at-$bytes"
+    }
+    check_download_progress 131072
+    check_download_progress 393216
     episode_done() {
         [[ $(sqlite3 -cmd '.timeout 500' "$CARD/.local/audiobookshelf-downloads.db" \
             "SELECT state FROM DOWNLOAD_JOB WHERE episode_id='pod41-ep-001'") == DONE ]]
@@ -589,7 +597,7 @@ if [[ ${SONIX_PODCAST_SMOKE_LABELS:-0} == 1 ]]; then
     grep_label legacy-show-title 'Unknown show' || fail 'legacy download did not use the local fallback'
     click 250 282 1.2
     shot online-local-show
-    click 250 178 1.2
+    click 250 243 1.2
     shot online-local-detail
     grep_label online-local-detail 'Play local copy' || fail 'download detail did not offer local playback'
     cmp "$WORK/before-download-browse.requests" "$WORK/progress.requests" || fail 'browsing a downloaded episode contacted ABS'
@@ -621,7 +629,22 @@ click 250 418 1.2
 shot offline-downloads
 click 250 282 1.2
 shot offline-show
-click 250 178 1.2
+if [[ ${SONIX_PODCAST_SMOKE_SYNC:-0} == 1 ]]; then
+    # Isolate the three pills so OCR doesn't confuse their checkmarks with text.
+    for pill in 'Unplayed:108:78' 'Started:236:63' 'Finished:348:69'; do
+        IFS=: read -r label x width <<< "$pill"
+        ffmpeg -v error -i "$WORK/offline-show.png" -vf "crop=$width:32:$x:206,scale=iw*4:ih*4" \
+            -frames:v 1 -f image2pipe -vcodec png - | tesseract stdin stdout --psm 7 2>/dev/null |
+            grep -F "$label" >/dev/null || fail "downloaded show is missing the $label filter"
+    done
+    click 195 172 1.2
+    shot offline-hide-started
+    grep_label offline-hide-started 'No results' || fail 'Started download remained after deselecting Started'
+    click 195 172 1.2
+    shot offline-restore-started
+    grep_label offline-restore-started 'Downloaded' || fail 'Started download did not return'
+fi
+click 250 243 1.2
 shot offline-detail
 if [[ ${SONIX_PODCAST_SMOKE_ART:-0} == 1 ]]; then
     click 250 525 1.2
@@ -669,7 +692,7 @@ PY
     click 124 704 1.2
     click 250 418 1.2
     click 250 282 1.2
-    click 250 178 1.2
+    click 250 243 1.2
     shot reconnect-detail
     art_offset=0
     if [[ ${SONIX_PODCAST_SMOKE_ART:-0} == 1 ]]; then art_offset=140; fi
@@ -696,13 +719,24 @@ PY
     local_media=$(find "$CARD/Podcast/ABS" -type f -name "*.$FORMAT" -print -quit)
     [[ -n $local_media && -s $local_media ]] || fail 'expected the published episode before removal'
     kill "$PLAYER"; wait "$PLAYER" || true; PLAYER=
+    # Test offline cleanup from the saved checkpoint, with no active player
+    # or server reconciliation to change the fixture during the test.
+    kill "$MOCK"; wait "$MOCK" || true; MOCK=
+    sqlite3 "$DB" 'UPDATE ABS_EPISODE_PROGRESS SET finished=1'
+    progress_before_removal=$(sqlite3 "$DB" 'select seconds, finished from ABS_EPISODE_PROGRESS')
     start_player removal
     click 356 160
     click 124 704 1.2
     click 250 418 1.2
-    click 427 314 1
-    shot removal-menu
-    click 350 463 1.1
+    click 250 200 1
+    shot finished-not-in-queue
+    grep_label finished-not-in-queue 'No downloads yet' || fail 'finished transfer remained in the podcast queue'
+    click 43 88 1
+    shot played-cleanup-action
+    cleanup_y=$(tesseract "$WORK/played-cleanup-action.png" stdout --psm 11 tsv 2>/dev/null |
+        awk -F '\t' '$12 == "played" {print int($8 + $10/2 - 50); exit}')
+    [[ -n $cleanup_y ]] || fail 'Downloads did not offer played cleanup'
+    click 250 "$cleanup_y" 1.1
     shot removal-confirmation
     wait_for 'bulk removal confirmation' grep -q 'CONFIRMDUMP ok ' "$WORK/removal.log"
     read -r confirm_x confirm_y < <(awk '/CONFIRMDUMP ok / {split($(NF-1),x,"="); split($NF,y,"="); print x[2],y[2]; exit}' "$WORK/removal.log")
@@ -718,8 +752,8 @@ PY
     if [[ ${SONIX_PODCAST_SMOKE_ART:-0} == 1 ]]; then
         wait_for 'downloaded art removed with the episode' test ! -e "$sidecar"
     fi
-    checkpoint_after_removal=$(sqlite3 -cmd '.timeout 500' "$DB" 'select seconds from ABS_EPISODE_PROGRESS')
-    [[ $checkpoint_after_removal == "$checkpoint_before_removal" ]] ||
+    progress_after_removal=$(sqlite3 -cmd '.timeout 500' "$DB" 'select seconds, finished from ABS_EPISODE_PROGRESS')
+    [[ $progress_after_removal == "$progress_before_removal" ]] ||
         fail 'removing the download changed the episode checkpoint'
     printf 'Podcast sync passed: lost history reply, offline upload, heard/unheard, local resume, and removal preserving progress.\n'
 fi

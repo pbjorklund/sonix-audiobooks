@@ -34,7 +34,9 @@ Before downloading, you can now view a **Book Detail** page. This provides a ful
 - **Queue download**: Add the book to the download queue.
 
 ### Download Queue
-Downloads are now managed by a persistent 16-job FIFO queue. The queue is durable, meaning it survives crashes or power loss. You can pause, resume, cancel, remove, or retry individual jobs from the Queue screen. The system includes a `WAITING_NETWORK` backoff to prevent repeated failures during connectivity drops.
+The download queue has no preset job limit and keeps its order across restarts. From the Queue screen, you can pause, resume, cancel, remove, or retry individual downloads. If the connection drops, the queue waits before retrying.
+
+Completed podcast transfers disappear from the Transfer queue. To free space, use **Remove played downloads** in podcast **Downloads**. After confirmation, it deletes local copies of episodes marked finished for the current account, across all shows. It keeps unfinished downloads, the episode in use, and listening progress.
 
 ### Server-Specific Downloads
 If a book is available on multiple configured servers, you can explicitly choose to "Download anyway from this server," allowing you to override the default profile for a specific book.

@@ -842,6 +842,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.wfile.write(body[start:start + chunk_size])
             self.wfile.flush()
+            if self.path.endswith("/download") and file_token == "258638762231958" and start in (7 * chunk_size, 23 * chunk_size):
+                gate = self.media_dir / f"hold-download-at-{start + chunk_size}"
+                if gate.exists():
+                    (self.media_dir / f"download-reached-{start + chunk_size}").touch()
+                    deadline = time.monotonic() + 10
+                    while gate.exists() and time.monotonic() < deadline:
+                        time.sleep(.05)
             if start + chunk_size < len(body):
                 time.sleep(delay_ms / 1000.0)
 

@@ -17,7 +17,7 @@ if [[ ${1:-} == lyrics* || ${1:-} == startup ]]; then
     export ALSA_CONFIG_PATH="$WORK/asound.conf"
 fi
 cp -a "$ROOT/sonix-packer/assets/R1/usr/resource/." "$WORK/run/usr/resource/"
-if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality && ${1:-} != lyrics-stream && ${1:-} != startup ]]; then
+if [[ ${1:-} != empty && ${1:-} != favourites && ${1:-} != saved && ${1:-} != local && ${1:-} != cache && ${1:-} != quality && ${1:-} != lyrics-stream && ${1:-} != startup && ${1:-} != large-album ]]; then
     for id in 21 22; do
         album=$CARD/Music/Tidal/Fixture/Album-$id
         mkdir -p "$album"
@@ -40,7 +40,7 @@ language = English
 last_seen = $(date +%s)
 configured = 1
 INI
-if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality || ${1:-} == lyrics-stream || ${1:-} == startup ]]; then
+if [[ ${1:-} == favourites || ${1:-} == saved || ${1:-} == local || ${1:-} == cache || ${1:-} == quality || ${1:-} == lyrics-stream || ${1:-} == startup || ${1:-} == large-album ]]; then
     duration=2
     if [[ ${1:-} == lyrics-stream || ${1:-} == startup ]]; then
         duration=50
@@ -128,6 +128,23 @@ fi
 click 356 160
 click 125 219
 shot home
+if [[ ${1:-} == large-album ]]; then
+    touch "$WORK/large-album"
+    click 180 524
+    click 427 194
+    shot large-album-menu
+    assert_label large-album-menu 'Download album'
+    read -r download_y < <(tesseract "$WORK/large-album-menu.png" stdout tsv 2>/dev/null | awk -F '\t' \
+        '$12 == "Download" && $7 > 240 { y = $8 + $10/2 - 50 } END { if (y) print int(y) }')
+    click 290 "$download_y"
+    for ((i=0; i<80; i++)); do [[ ! -e $WORK/active-21 ]] || break; sleep .1; done
+    [[ -e $WORK/active-21 ]]
+    shot large-album-queued
+    assert_label large-album-queued '260 tracks added to downloads'
+    grep -Eq '/albums/21/tracks\?.*&offset=250' "$WORK/mock.log"
+    printf 'TIDAL loaded every page and queued all 260 tracks from one album.\n'
+    exit 0
+fi
 if [[ ${1:-} == startup ]]; then
     wait_for_manifest() {
         for ((i=0; i<60; i++)); do [[ ! -e $WORK/playback-requested ]] || return 0; sleep .1; done
@@ -500,7 +517,7 @@ pixels = sys.stdin.buffer.read()
 def icon(x1, y1, x2, y2):
     return sum(min(pixels[(600*y+x)*3:(600*y+x)*3+3]) > 150
                for y in range(y1,y2) for x in range(x1,x2))
-assert icon(480, 228, 510, 260) > 20, "active spinner not visible"
+assert icon(480, 228, 510, 260) > 20, "active download icon not visible"
 assert icon(475, 322, 512, 350) > 20, "pending queue icon not visible"
 '
     touch "$WORK/release-21"

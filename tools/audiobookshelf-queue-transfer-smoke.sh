@@ -60,6 +60,7 @@ SOURCES=(../tools/audiobookshelf-queue-transfer-test.c
 	src/system/streaming/abs_download.c src/system/streaming/abs_episode_card.c src/system/streaming/streamturn.c
 	src/system/streaming/abs_history.c src/system/streaming/abs_episode_progress.c
 	src/system/streaming/abs_episode_playback.c src/system/streaming/abs_episode_stream.c
+	src/system/streaming/abs_show_reader.c
 	src/system/library/audiobookdb.c src/system/library/library.c
 	# The test drives the REAL audiobookscan (the §8.3 scan-completion import
 	# runs through the §8.5 line-592 notification), so the scanner's own stack

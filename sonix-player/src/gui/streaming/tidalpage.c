@@ -1,6 +1,7 @@
 #include "tidalpage.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/system/device/power.h"
 #include "src/gui/shell/popover.h"
 #include "src/gui/streaming/qobuzart.h"
 #include "src/gui/shell/settingsrow.h"
@@ -1104,7 +1106,7 @@ typedef struct {
 	long track_id;
 	bool local_folder;
 	bool show_kept;
-	lv_obj_t *spinner;
+	lv_obj_t *active_icon;
 	lv_obj_t *queue;
 } album_badge_t;
 
@@ -1163,9 +1165,9 @@ static void refresh_album_badges(void) {
 		album_badge_t *badge = &album_badges[i];
 		char detail[400];
 		if (badge->track_id) counts[i] = badge->show_kept && tidalcache_is_kept(badge->track_id);
-		if (badge->spinner) {
+		if (badge->active_icon) {
 			tidalkeep_activity_t state = tidalkeep_activity(badge->track_id, badge->id);
-			lv_obj_set_hidden(badge->spinner, state != TIDALKEEP_ACTIVE);
+			lv_obj_set_hidden(badge->active_icon, state != TIDALKEEP_ACTIVE);
 			lv_obj_set_hidden(badge->queue, state != TIDALKEEP_QUEUED);
 		}
 		if (counts[i] && badge->total > 0 && counts[i] == badge->total) {
@@ -1278,11 +1280,15 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 
 static void make_activity_badge(album_badge_t *badge) {
 	lv_obj_t *row = lv_obj_get_parent(lv_obj_get_parent(badge->label));
-	badge->spinner = spinner_create(row, &icon_loader_small);
+	// The status label carries live progress. A static badge identifies the
+	// active row without animating and repainting the list for the entire transfer.
+	badge->active_icon = lv_image_create(row);
+	lv_image_set_src(badge->active_icon, &icon_download);
+	lv_obj_add_style(badge->active_icon, &theme_style_icon, 0);
 	badge->queue = lv_image_create(row);
 	lv_image_set_src(badge->queue, &icon_list_queue);
 	lv_obj_add_style(badge->queue, &theme_style_icon, 0);
-	lv_obj_set_hidden(badge->spinner, true);
+	lv_obj_set_hidden(badge->active_icon, true);
 	lv_obj_set_hidden(badge->queue, true);
 }
 
@@ -1441,22 +1447,29 @@ static void job_result_taken(void) {
 }
 
 static int downloads_queued;
-static bool download_queue_full;
+static bool download_enqueue_failed;
 
 static struct {
 	job_t job;
-	tidal_track_t tracks[TIDAL_MAX_HELD];
-	bool replace[TIDAL_MAX_HELD];
+	tidal_track_t *tracks;
+	bool *replace;
 	int count;
-	bool truncated;
 } download_batch;
+
+static void clear_download_batch(void) {
+	free(download_batch.tracks);
+	free(download_batch.replace);
+	download_batch.tracks = NULL;
+	download_batch.replace = NULL;
+	download_batch.count = 0;
+}
 
 static void report_album_queued(void) {
 	char message[192];
 	snprintf(message, sizeof(message), tr("tidal_album_download_queued_note"), downloads_queued);
-	if (download_queue_full) {
+	if (download_enqueue_failed) {
 		size_t length = strlen(message);
-		snprintf(message + length, sizeof(message) - length, "\n%s", tr("tidal_download_queue_full"));
+		snprintf(message + length, sizeof(message) - length, "\n%s", tr("download_failed"));
 	}
 	gui_notify_popup(message);
 }
@@ -1465,25 +1478,29 @@ static void queue_download_batch(void *user) {
 	(void)user;
 	const job_t *job = &download_batch.job;
 	int count = download_batch.count;
-	if (job->kind == JOB_DOWNLOAD_PLAYLIST) {
-		long ids[TIDAL_MAX_HELD];
-		for (int i = 0; i < count; i++) ids[i] = download_batch.tracks[i].id;
-		if (!tidalsaved_playlist_set(tidal_card_root(), job->id_text, job->text, ids, count)) {
+	if (job->kind == JOB_DOWNLOAD_PLAYLIST && count > 0) {
+		long *ids = malloc((size_t)count * sizeof(*ids));
+		if (ids) for (int i = 0; i < count; i++) ids[i] = download_batch.tracks[i].id;
+		bool saved = ids && tidalsaved_playlist_set(tidal_card_root(), job->id_text, job->text, ids, count);
+		free(ids);
+		if (!saved) {
+			clear_download_batch();
 			gui_notify_popup("download_failed");
 			return;
 		}
 	}
 	downloads_queued = 0;
-	download_queue_full = download_batch.truncated;
+	download_enqueue_failed = false;
 	for (int i = 0; i < count; i++) {
 		tidalkeep_enqueue_result_t queued = tidalkeep_enqueue_batch(&download_batch.tracks[i],
 			job->download_quality, download_batch.replace[i], job->kind == JOB_DOWNLOAD_PLAYLIST);
 		if (queued == TIDALKEEP_REJECTED) {
-			download_queue_full = true;
+			download_enqueue_failed = true;
 			break;
 		}
 		downloads_queued += queued == TIDALKEEP_ADDED;
 	}
+	clear_download_batch();
 	report_album_queued();
 }
 
@@ -2086,13 +2103,19 @@ static void do_play(int index, bool local_only, unsigned serial) {
 //      missing one between the playing track and the two after it.
 static void queue_watch_cb(lv_timer_t *timer) {
 	(void)timer;
-	tidalkeep_state_t downloads = tidalkeep_state();
-	refresh_download_status(downloads);
 	static tidalkeep_state_t last_badges;
-	if (lv_screen_active() == list_screen && album_badge_count &&
-		(downloads.active || last_badges.active || downloads.done != last_badges.done)) {
-		refresh_album_badges();
-		last_badges = downloads;
+	tidalkeep_state_t downloads = tidalkeep_state();
+	lv_obj_t *screen = lv_screen_active();
+	if ((screen == list_screen || screen == tidal_screen) && power_screen_is_on() && !player_sheet_is_open()) {
+		refresh_download_status(downloads);
+		// Transferred bytes do not change which rows are kept, active or queued.
+		if (screen == list_screen && album_badge_count &&
+			(downloads.active != last_badges.active || downloads.current != last_badges.current ||
+			 downloads.pending != last_badges.pending || downloads.done != last_badges.done ||
+			 downloads.failed != last_badges.failed)) {
+			refresh_album_badges();
+			last_badges = downloads;
+		}
 	}
 	// A queue that is a library list holds no cache files, and walking it here
 	// would be a database read per entry, once a second, for nothing. The
@@ -2101,7 +2124,6 @@ static void queue_watch_cb(lv_timer_t *timer) {
 	// awake is only ever lowered here.
 	bool library_queue = playlist_is_library_backed();
 	if (library_queue) {
-		tidalcache_set_protected(NULL, 0);
 		waiting_for_track = false;
 	}
 
@@ -2118,17 +2140,24 @@ static void queue_watch_cb(lv_timer_t *timer) {
 	int count = playlist_count();
 	int current = playlist_current_index();
 
-	static char queued[TIDALCACHE_PROTECTED_MAX][512];
-	static const char *queued_ptr[TIDALCACHE_PROTECTED_MAX];
-	int protect = 0;
-	for (int i = current; !library_queue && i >= 0 && i < count && protect < TIDALCACHE_PROTECTED_MAX; i++) {
-		if (playlist_path_at(i, queued[protect], sizeof(queued[0]))) {
-			queued_ptr[protect] = queued[protect];
-			protect++;
+	// Cache pruning only needs a new protected window when the queue moves.
+	static unsigned protected_revision;
+	static int protected_from = -2;
+	unsigned revision = playlist_revision();
+	int from = library_queue ? -1 : current;
+	if (revision != protected_revision || from != protected_from) {
+		static char queued[TIDALCACHE_PROTECTED_MAX][512];
+		const char *queued_ptr[TIDALCACHE_PROTECTED_MAX];
+		int protect = 0;
+		for (int i = from; i >= 0 && i < count && protect < TIDALCACHE_PROTECTED_MAX; i++) {
+			if (playlist_path_at(i, queued[protect], sizeof(queued[0]))) {
+				queued_ptr[protect] = queued[protect];
+				protect++;
+			}
 		}
-	}
-	if (!library_queue) {
 		tidalcache_set_protected(queued_ptr, protect);
+		protected_revision = revision;
+		protected_from = from;
 	}
 
 	// The first missing one in the window, `current` included: if that is the
@@ -2612,25 +2641,37 @@ static void *worker_main(void *arg) {
 		case JOB_DOWNLOAD_ALBUM: {
 			bool playlist = job.kind == JOB_DOWNLOAD_PLAYLIST;
 			int (*load)(const char *, int, tidal_track_t *, int) = playlist ? tidal_playlist_tracks : tidal_album_tracks;
+			clear_download_batch();
 			download_batch.job = job;
-			download_batch.count = 0;
-			download_batch.truncated = false;
-			while (download_batch.count < TIDAL_MAX_HELD) {
+			size_t capacity = 0;
+			bool ok = false;
+			for (;;) {
 				int offset = download_batch.count;
+				if (offset > INT_MAX - TIDAL_PAGE_LIMIT) break;
+				size_t need = (size_t)offset + TIDAL_PAGE_LIMIT;
+				if (need > capacity) {
+					size_t max = SIZE_MAX / sizeof(*download_batch.tracks);
+					if (need > max) break;
+					size_t next = capacity <= max / 2 ? capacity * 2 : max;
+					if (next < need) next = need;
+					tidal_track_t *tracks = realloc(download_batch.tracks, next * sizeof(*tracks));
+					if (!tracks) break;
+					download_batch.tracks = tracks;
+					capacity = next;
+				}
 				int got = load(job.id_text, offset, download_batch.tracks + offset, TIDAL_PAGE_LIMIT);
-				if (got < 0) {
-					snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
+				if (got < 0) break;
+				download_batch.count += got;
+				if (got < TIDAL_PAGE_LIMIT) {
+					if (download_batch.count > 0)
+						download_batch.replace = calloc((size_t)download_batch.count, sizeof(*download_batch.replace));
+					ok = !download_batch.count || download_batch.replace;
 					break;
 				}
-				download_batch.count += got;
-				if (got < TIDAL_PAGE_LIMIT) break;
 			}
-			if (download_batch.count == TIDAL_MAX_HELD) {
-				tidal_track_t extra;
-				int got = load(job.id_text, download_batch.count, &extra, 1);
-				if (got < 0 || (playlist && got > 0)) {
-					snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
-				} else download_batch.truncated = got > 0;
+			if (!ok) {
+				clear_download_batch();
+				snprintf(result_error, sizeof(result_error), "%s", tr("download_failed"));
 			}
 			break;
 		}

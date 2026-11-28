@@ -33,8 +33,9 @@ bool abs_episode_manifest_read(const char *folder, abs_episode_manifest_t *out);
 bool abs_episode_manifest_commit(const char *folder, const abs_episode_manifest_t *manifest);
 bool abs_episode_download_path(const char *server, const char *owner, const char *show,
 	const char *episode, abs_episode_manifest_t *manifest, char *path, size_t cap);
-// A NULL show lists one row per show; a show ID lists only its episodes.
-int abs_episode_download_list(const char *server, const char *owner, const char *show, int offset,
+// A NULL show lists one row per show. A show ID lists episodes matching the
+// ABS_EP_* state mask, filtered before pagination using saved checkpoints.
+int abs_episode_download_list(const char *server, const char *owner, const char *show, unsigned states, int offset,
 	abs_episode_row_t *out, int cap, bool *more);
 bool abs_episode_download_remove(const char *server, const char *owner, const char *show,
 	const char *episode, const char *in_use);
@@ -43,9 +44,10 @@ typedef struct {
 	char server[ABS_SERVER_MAX], owner[ABS_ID_MAX], show[ABS_ID_MAX];
 	bool finished_only;
 	int count;
-	char (*episodes)[ABS_ID_MAX];
+	struct { char show[ABS_ID_MAX], episode[ABS_ID_MAX]; } *episodes;
 } abs_episode_removal_t;
-// Snapshot the exact downloads offered for confirmation. Caller frees episodes.
+// Snapshot the exact downloads offered for confirmation. An empty show is
+// allowed only for played-only cleanup across all shows. Caller frees episodes.
 bool abs_episode_removal_plan(abs_episode_removal_t *plan, const char *in_use);
 // Returns the number removed, or -1 if the card changed before starting.
 int abs_episode_removal_apply(const abs_episode_removal_t *plan, const char *in_use);

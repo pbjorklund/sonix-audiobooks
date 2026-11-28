@@ -6,8 +6,7 @@
 // Durability. The SQLite database on the card is the only durable state; the
 // RAM mirror exists to serve snapshots and the worker without holding
 // read-modify-write sessions open. Every state transition, file commit and
-// removal runs inside one transaction and is followed by a mirror reload
-// (16 rows, cheap), so the database can never drift from what the GUI saw.
+// removal runs inside one transaction. The mirror grows with the on-card queue.
 //
 // One worker, one active job. `abs_download_pump()` performs exactly one step:
 // pausing acknowledgement, auth resolution, identity fetch, one file transfer,
@@ -179,8 +178,10 @@ static file_identity_t db_identity;     // recorded at init, re-checked per acce
 static unsigned card_generation;        // monotonic across inits, process-wide
 static unsigned snapshot_generation;    // bumped on every committed visible change
 
-static abs_download_job_t jobs[ABS_DL_JOB_CAP]; // mirror, FIFO order by seq
+static abs_download_job_t *jobs; // mirror, FIFO order by seq
+static size_t jobs_capacity;
 static int jobs_count;
+static unsigned view_revision; // changes for both transitions and byte counters
 
 static bool storage_paused;             // §8.4: ENOSPC/card write failure pauses the whole queue
 static bool wait_blocked;               // a job hit the network; FIFO suspended until connectivity changes
@@ -682,17 +683,48 @@ static void job_from_row(sqlite3_stmt *stmt, abs_download_job_t *j) {
 	j->generation = snapshot_generation;
 }
 
+static bool reserve_jobs(abs_download_job_t **rows, size_t *capacity, size_t count) {
+	if (count <= *capacity) return true;
+	size_t max = SIZE_MAX / sizeof(**rows);
+	if (count > max) return false;
+	size_t next = *capacity ? (*capacity > max / 2 ? max : *capacity * 2) : 16;
+	if (next < count) next = count;
+	abs_download_job_t *grown = realloc(*rows, next * sizeof(**rows));
+	if (!grown) return false;
+	*rows = grown;
+	*capacity = next;
+	return true;
+}
+
 // One committed change = reload the mirror and tag the snapshot generation.
-// The generation is the coalescing hint a >=4 Hz GUI poll compares (§8.1).
 static void reload_locked(void) {
+	long long live_id = 0, live_done = 0, live_total = -1;
+	int live_file = -1;
+	for (int i = 0; i < jobs_count; i++) {
+		if (jobs[i].id != active_id || jobs[i].state != ABS_DL_DOWNLOADING) continue;
+		live_id = jobs[i].id;
+		live_file = jobs[i].file_index;
+		live_done = jobs[i].bytes_done;
+		live_total = jobs[i].bytes_total;
+		break;
+	}
 	jobs_count = 0;
 	active_id = 0;
 	active_state = ABS_DL_QUEUED;
 	sqlite3_stmt *stmt = prepare_locked("SELECT * FROM DOWNLOAD_JOB ORDER BY seq");
+	int rc = SQLITE_ERROR;
 	if (stmt) {
-		while (jobs_count < ABS_DL_JOB_CAP && sqlite3_step(stmt) == SQLITE_ROW) {
+		while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+			if (!reserve_jobs(&jobs, &jobs_capacity, (size_t)jobs_count + 1)) {
+				rc = SQLITE_NOMEM;
+				break;
+			}
 			abs_download_job_t *j = &jobs[jobs_count++];
 			job_from_row(stmt, j);
+			if (j->id == live_id && j->state == ABS_DL_DOWNLOADING && j->file_index == live_file) {
+				j->bytes_done = live_done;
+				j->bytes_total = live_total;
+			}
 			if (j->state == ABS_DL_FETCHING || j->state == ABS_DL_DOWNLOADING ||
 				j->state == ABS_DL_PAUSING || j->state == ABS_DL_FINALIZING) {
 				if (!active_id) {
@@ -703,7 +735,15 @@ static void reload_locked(void) {
 		}
 		sqlite3_finalize(stmt);
 	}
+	if (rc != SQLITE_DONE) {
+		// Never process a partial mirror. The durable rows remain on the card.
+		fprintf(stderr, "abs-download: cannot reload the queue (%d)\n", rc);
+		jobs_count = 0;
+		active_id = 0;
+		stale = true;
+	}
 	snapshot_generation++;
+	view_revision++;
 }
 
 // Persist the mutable work columns of one job row inside the caller's
@@ -1152,19 +1192,9 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 		sqlite3_finalize(stmt);
 	}
 	if (!have_existing) {
-		int count = 0;
-		stmt = prepare_locked("SELECT COUNT(*) FROM DOWNLOAD_JOB");
-		if (stmt) {
-			if (sqlite3_step(stmt) == SQLITE_ROW) {
-				count = sqlite3_column_int(stmt, 0);
-			}
-			sqlite3_finalize(stmt);
-		}
-		if (count >= ABS_DL_JOB_CAP) {
-			// §8.1: the bound trips the enqueue before any network activity.
+		if (!reserve_jobs(&jobs, &jobs_capacity, (size_t)jobs_count + 1)) {
 			db_exec("ROLLBACK");
-			snprintf(error, error_size, "Queue is full (%d downloads); remove or clear finished ones",
-					 ABS_DL_JOB_CAP);
+			snprintf(error, error_size, "Not enough memory to add the download");
 			pthread_mutex_unlock(&lock);
 			return false;
 		}
@@ -1254,7 +1284,22 @@ static bool run_enqueue(const abs_download_enqueue_t *req, bool is_book, long lo
 		// (§8.1: selecting an already queued item opens its existing row).
 		*deduped_out = !inserted_now;
 	}
-	reload_locked();
+	if (inserted_now) {
+		// A new row sorts last. Append rather than reading the whole queue on
+		// every enqueue, and leave the active transfer's RAM counters alone.
+		stmt = prepare_locked("SELECT * FROM DOWNLOAD_JOB WHERE id=?");
+		if (stmt) sqlite3_bind_int64(stmt, 1, existing);
+		bool appended = stmt && sqlite3_step(stmt) == SQLITE_ROW;
+		if (appended) {
+			job_from_row(stmt, &jobs[jobs_count++]);
+			snapshot_generation++;
+			view_revision++;
+		}
+		sqlite3_finalize(stmt);
+		if (!appended) reload_locked();
+	} else if (!job_by_id_locked(existing)) {
+		reload_locked();
+	}
 	cv_signal();
 	pthread_mutex_unlock(&lock);
 	return true;
@@ -1583,14 +1628,6 @@ bool abs_download_clear_finished_kind(const char *kind, char *error, size_t erro
 		pthread_mutex_unlock(&lock);
 		return false;
 	}
-	abs_download_job_t finished[ABS_DL_JOB_CAP];
-	int finished_count = 0;
-	for (int i = 0; i < jobs_count && finished_count < ABS_DL_JOB_CAP; i++) {
-		if ((!kind || !strcmp(jobs[i].kind, kind)) && (jobs[i].state == ABS_DL_DONE ||
-			jobs[i].state == ABS_DL_FAILED || jobs[i].state == ABS_DL_CANCELLED)) {
-			finished[finished_count++] = jobs[i];
-		}
-	}
 	ok = db_exec("BEGIN IMMEDIATE");
 	const char *statements[] = {
 		"DELETE FROM DOWNLOAD_FILE WHERE job_id IN (SELECT id FROM DOWNLOAD_JOB"
@@ -1607,8 +1644,12 @@ bool abs_download_clear_finished_kind(const char *kind, char *error, size_t erro
 	if (!ok) {
 		db_exec("ROLLBACK");
 	} else {
-		for (int i = 0; i < finished_count; i++) {
-			delete_job_parts_locked(&finished[i]);
+		// The old mirror is still available under the lock until reload.
+		for (int i = 0; i < jobs_count; i++) {
+			const abs_download_job_t *job = &jobs[i];
+			if ((!kind || !strcmp(job->kind, kind)) && (job->state == ABS_DL_DONE ||
+				job->state == ABS_DL_FAILED || job->state == ABS_DL_CANCELLED))
+				delete_job_parts_locked(job);
 		}
 		// The queue-wide card pause lifts only when its paused job left.
 		if (storage_paused) {
@@ -1634,29 +1675,52 @@ bool abs_download_clear_finished_kind(const char *kind, char *error, size_t erro
 // Snapshot and status (§8.5)
 // ---------------------------------------------------------------------------
 
-bool abs_download_snapshot(abs_download_snapshot_t *out) {
-	if (!out) {
-		return false;
-	}
+bool abs_download_snapshot_update(abs_download_snapshot_t *out, bool *changed) {
+	if (!out) return false;
 	pthread_mutex_lock(&lock);
-	storage_stale_locked(); // a 4 Hz poll is the first to notice a card swap
-	bool ok = armed && !stale;
-	if (ok) {
-		out->generation = snapshot_generation;
-		out->job_count = jobs_count;
-		out->storage_paused = storage_paused;
-		memcpy(out->jobs, jobs, sizeof(jobs[0]) * (size_t)jobs_count);
-	} else {
+	bool ok = armed && !storage_stale_locked();
+	bool refresh = !changed || !out->generation || out->view_revision != view_revision ||
+		out->storage_paused != storage_paused;
+	if (changed) *changed = refresh;
+	if (ok && refresh) ok = reserve_jobs(&out->jobs, &out->capacity, (size_t)jobs_count);
+	if (!ok) {
 		out->generation = 0;
 		out->job_count = 0;
 		out->storage_paused = false;
+	} else if (refresh) {
+		out->generation = snapshot_generation;
+		out->view_revision = view_revision;
+		out->job_count = jobs_count;
+		out->storage_paused = storage_paused;
+		if (jobs_count) memcpy(out->jobs, jobs, sizeof(jobs[0]) * (size_t)jobs_count);
 	}
 	pthread_mutex_unlock(&lock);
 	return ok;
 }
 
+bool abs_download_snapshot(abs_download_snapshot_t *out) { return abs_download_snapshot_update(out, NULL); }
+
+void abs_download_snapshot_release(abs_download_snapshot_t *out) {
+	free(out->jobs);
+	*out = (abs_download_snapshot_t){0};
+}
+
+unsigned abs_download_revision(void) {
+	pthread_mutex_lock(&lock);
+	unsigned revision = armed && !storage_stale_locked() ? snapshot_generation : 0;
+	pthread_mutex_unlock(&lock);
+	return revision;
+}
+
 abs_download_state_t abs_download_episode_state(const char *server, const char *owner,
 	const char *show, const char *episode) {
+	return abs_download_episode_status(server, owner, show, episode, NULL, NULL);
+}
+
+abs_download_state_t abs_download_episode_status(const char *server, const char *owner,
+	const char *show, const char *episode, long long *done, long long *total) {
+	if (done) *done = 0;
+	if (total) *total = -1;
 	if (!server || !owner || !show || !episode || !owner[0] || !episode[0]) return ABS_DL_STATE_COUNT;
 	pthread_mutex_lock(&lock);
 	abs_download_state_t state = ABS_DL_STATE_COUNT;
@@ -1665,7 +1729,11 @@ abs_download_state_t abs_download_episode_state(const char *server, const char *
 			const abs_download_job_t *job = &jobs[i];
 			if (!strcmp(job->server, server) && !strcmp(job->owner_id, owner) &&
 				!strcmp(job->item_id, show) && !strcmp(job->episode_id, episode)) {
-				if (state == ABS_DL_STATE_COUNT || job->state < ABS_DL_DONE) state = job->state;
+				if (state == ABS_DL_STATE_COUNT || job->state < ABS_DL_DONE) {
+					state = job->state;
+					if (done) *done = job->bytes_done;
+					if (total) *total = job->bytes_total;
+				}
 				if (state < ABS_DL_DONE) break;
 			}
 		}
@@ -1676,14 +1744,7 @@ abs_download_state_t abs_download_episode_state(const char *server, const char *
 
 bool abs_download_busy(void) {
 	pthread_mutex_lock(&lock);
-	bool busy = false;
-	for (int i = 0; i < jobs_count; i++) {
-		if (jobs[i].state == ABS_DL_FETCHING || jobs[i].state == ABS_DL_DOWNLOADING ||
-			jobs[i].state == ABS_DL_PAUSING || jobs[i].state == ABS_DL_FINALIZING) {
-			busy = true;
-			break;
-		}
-	}
+	bool busy = active_id != 0;
 	pthread_mutex_unlock(&lock);
 	return busy;
 }
@@ -1827,11 +1888,18 @@ static int import_pending(bool episodes_only, char *error, size_t error_size) {
 	// The candidates are copied once, under the lock: rows can disappear
 	// (Remove/Clear finished) or the card can be pulled while the pass runs,
 	// and each row is re-consulted durably right before its flag is cleared.
-	abs_download_job_t pending[ABS_DL_JOB_CAP];
+	abs_download_job_t *pending = NULL;
+	size_t capacity = 0;
 	int count = 0;
-	for (int i = 0; i < jobs_count && count < ABS_DL_JOB_CAP; i++) {
+	for (int i = 0; i < jobs_count; i++) {
 		if (jobs[i].state == ABS_DL_DONE && jobs[i].index_pending &&
 			(!episodes_only || !strcmp(jobs[i].kind, ABS_DL_KIND_EPISODE))) {
+			if (!reserve_jobs(&pending, &capacity, (size_t)count + 1)) {
+				free(pending);
+				snprintf(error, error_size, "Not enough memory to import downloads");
+				pthread_mutex_unlock(&lock);
+				return -1;
+			}
 			pending[count++] = jobs[i];
 		}
 	}
@@ -1881,6 +1949,7 @@ static int import_pending(bool episodes_only, char *error, size_t error_size) {
 		if (!ok && !first_error[0])
 			snprintf(first_error, sizeof(first_error), "%s", import_error[0] ? import_error : "The resume import failed");
 	}
+	free(pending);
 	if (first_error[0] && error_size > strlen(first_error)) {
 		snprintf(error, error_size, "%s", first_error);
 	}
@@ -1903,9 +1972,11 @@ void abs_download_op_progress(const abs_download_op_ctx_t *ctx, long long done, 
 	abs_download_job_t *j = job_by_id_locked(ctx->job_id);
 	// RAM-backed counters (§8.2): written to the mirror only, persisted at the
 	// next transition. A stale context (different job or phase) is ignored.
-	if (j && ctx->job_id == active_id && ctx->state == j->state) {
+	if (j && ctx->job_id == active_id && ctx->state == j->state &&
+		(j->bytes_done != done || j->bytes_total != total)) {
 		j->bytes_done = done;
 		j->bytes_total = total;
+		view_revision++;
 	}
 	pthread_mutex_unlock(&lock);
 }
@@ -2832,9 +2903,19 @@ bool abs_download_init(const abs_download_config_t *config) {
 	// The database identity is read after the recovery commit: it is what all
 	// later commands compare against (the card-generation guard).
 	file_identity_read(db_path, &db_identity);
+	reload_locked();
+	if (stale) {
+		sqlite3_close(db);
+		db = NULL;
+		free(jobs);
+		jobs = NULL;
+		jobs_capacity = 0;
+		http_op_destroy(&queue_http_op);
+		pthread_mutex_unlock(&lock);
+		return false;
+	}
 	armed = true;
 	card_generation++;
-	reload_locked();
 	// §8.3 line 559: the queue's abandon joins the shared download turn's
 	// table. Idempotent across card-reopen inits (registration deduplicates
 	// by pointer), and the callback refuses to wake anything while disarmed.
@@ -2908,6 +2989,9 @@ void abs_download_quiesce_storage(void) {
 		}
 	}
 	auth_drop();
+	free(jobs);
+	jobs = NULL;
+	jobs_capacity = 0;
 	jobs_count = 0;
 	active_id = 0;
 	active_state = ABS_DL_QUEUED;

@@ -6,7 +6,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 work = Path(sys.argv[1])
 album = {"id": 21, "title": "Fixture Album", "numberOfTracks": 2, "artist": {"name": "Fixture Artist"}}
@@ -59,7 +59,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"data": [{"id": "99", "type": "tracks"}],
                                 "links": {"self": path, "next": path + "?page[cursor]=album%2Bpage"}})
         elif path in ("/users/1/favorites/tracks", "/albums/21/tracks"):
-            self.send_json({"items": tracks, "totalNumberOfItems": len(tracks)})
+            items = tracks
+            if path == "/albums/21/tracks" and (work / "large-album").exists():
+                items = [dict(tracks[0], id=i + 21, title=f"Fixture Track {i + 21}", trackNumber=i + 1)
+                         for i in range(260)]
+            query = parse_qs(request.query)
+            offset, limit = int(query.get("offset", [0])[0]), int(query.get("limit", [100])[0])
+            self.send_json({"items": items[offset:offset + limit], "totalNumberOfItems": len(items)})
         elif path == "/users/1/favorites/albums":
             if (work / "hold-favourites").exists():
                 (work / "favourites-refresh-started").touch()

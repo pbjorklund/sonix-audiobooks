@@ -3924,24 +3924,30 @@ static void queue_watch_cb(lv_timer_t *timer) {
 	// radio awake whether or not the queue moved off it.
 	bool library_queue = playlist_is_library_backed();
 	if (library_queue) {
-		podcastcache_set_protected(NULL, 0);
 		waiting_for_episode = false;
 	}
 
 	int count = playlist_count();
 	int current = playlist_current_index();
 
-	static char queued[PODCASTCACHE_PROTECTED_MAX][512];
-	static const char *queued_ptr[PODCASTCACHE_PROTECTED_MAX];
-	int protect = 0;
-	for (int i = current; !library_queue && i >= 0 && i < count && protect < PODCASTCACHE_PROTECTED_MAX; i++) {
-		if (playlist_path_at(i, queued[protect], sizeof(queued[0]))) {
-			queued_ptr[protect] = queued[protect];
-			protect++;
+	// Cache pruning only needs a new protected window when the queue moves.
+	static unsigned protected_revision;
+	static int protected_from = -2;
+	unsigned revision = playlist_revision();
+	int from = library_queue ? -1 : current;
+	if (revision != protected_revision || from != protected_from) {
+		static char queued[PODCASTCACHE_PROTECTED_MAX][512];
+		const char *queued_ptr[PODCASTCACHE_PROTECTED_MAX];
+		int protect = 0;
+		for (int i = from; i >= 0 && i < count && protect < PODCASTCACHE_PROTECTED_MAX; i++) {
+			if (playlist_path_at(i, queued[protect], sizeof(queued[0]))) {
+				queued_ptr[protect] = queued[protect];
+				protect++;
+			}
 		}
-	}
-	if (!library_queue) {
 		podcastcache_set_protected(queued_ptr, protect);
+		protected_revision = revision;
+		protected_from = from;
 	}
 
 	if (waiting_for_episode) {

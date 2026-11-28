@@ -1,9 +1,11 @@
 #include "abs_episode_card.h"
+#include "abs_show_reader.h"
 
 #include <dirent.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -326,11 +328,14 @@ static int by_title(const void *a, const void *b) {
 	return n ? n : strcmp(x->episode_id, y->episode_id);
 }
 
-int abs_episode_download_list(const char *server, const char *owner, const char *show, int offset,
-	abs_episode_row_t *out, int cap, bool *more) {
-	if (!server || !owner || !owner[0] || !out || !more || offset < 0 || cap <= 0 ||
-		cap > ABS_PAGE_LIMIT || offset > 4096 - cap) return -1;
-	*more = false;
+typedef bool (*episode_visitor_t)(const abs_episode_manifest_t *episode, void *user);
+
+static int scan_downloads(const char *server, const char *owner, const char *show, unsigned states, int offset,
+	abs_episode_row_t *out, int cap, bool *more, episode_visitor_t visit, void *user) {
+	if (!server || !owner || !owner[0]) return -1;
+	if (!visit && (!out || !more || offset < 0 || cap <= 0 ||
+		cap > ABS_PAGE_LIMIT || offset > 4096 - cap)) return -1;
+	if (more) *more = false;
 	unsigned generation = abs_download_card_generation();
 	if (!generation) return -1;
 	char hex[65], rel[ABS_DL_DEST_MAX], root[SONIX_LINKED_PATH_MAX];
@@ -346,10 +351,11 @@ int abs_episode_download_list(const char *server, const char *owner, const char 
 	char wanted[65];
 	if (show) hash(show, NULL, wanted);
 	int count = 0, total = 0, keep = offset + cap;
-	abs_episode_row_t *rows = calloc((size_t)keep, sizeof(*rows));
-	if (!rows) { closedir(shows); return -1; }
+	abs_episode_row_t *rows = visit ? NULL : calloc((size_t)keep, sizeof(*rows));
+	if (!visit && !rows) { closedir(shows); return -1; }
+	bool ok = true;
 	struct dirent *ds;
-	while ((ds = readdir(shows)) != NULL) {
+	while (ok && (ds = readdir(shows)) != NULL) {
 		if (!hash_name(ds->d_name) || (show && strncmp(ds->d_name, wanted, 24))) continue;
 		abs_episode_row_t group = {0};
 		char showdir[SONIX_LINKED_PATH_MAX];
@@ -369,12 +375,23 @@ int abs_episode_download_list(const char *server, const char *owner, const char 
 				!abs_episode_card_dir(expected, checked, sizeof(checked)) || strcmp(checked, folder) ||
 				abs_download_sync_blocked(expected)) continue;
 			if (show && strcmp(show, m.show)) continue;
+			if (visit) {
+				if (!(ok = visit(&m, user))) break;
+				continue;
+			}
 			if (!show) {
 				if (!group.show_id[0]) strcpy(group.show_id, m.show);
 				if (!group.title[0] && m.show_title[0]) strcpy(group.title, m.show_title);
 				continue;
 			}
 			abs_episode_row_t row = {.duration = m.duration, .published_ms = m.published_ms, .downloaded = true};
+			abs_episode_checkpoint_t checkpoint;
+			if (audiobookdb_episode_get(&m, &checkpoint, NULL)) {
+				row.finished = checkpoint.finished;
+				row.in_progress = !checkpoint.finished && checkpoint.seconds > 0;
+			}
+			unsigned state = row.finished ? ABS_EP_FINISHED : row.in_progress ? ABS_EP_STARTED : ABS_EP_UNPLAYED;
+			if (!(states & state)) continue;
 			strcpy(row.show_id, m.show);
 			strcpy(row.episode_id, m.episode);
 			strcpy(row.title, m.title);
@@ -401,11 +418,16 @@ int abs_episode_download_list(const char *server, const char *owner, const char 
 	}
 	closedir(shows);
 	int n = count > offset ? count - offset : 0;
-	if (generation != abs_download_card_generation()) n = -1;
+	if (!ok || generation != abs_download_card_generation()) n = -1;
 	if (n > 0) memcpy(out, rows + offset, (size_t)n * sizeof(*out));
-	*more = n >= 0 && total > keep;
+	if (more) *more = n >= 0 && total > keep;
 	free(rows);
 	return n;
+}
+
+int abs_episode_download_list(const char *server, const char *owner, const char *show, unsigned states, int offset,
+	abs_episode_row_t *out, int cap, bool *more) {
+	return scan_downloads(server, owner, show, states, offset, out, cap, more, NULL, NULL);
 }
 
 bool abs_episode_download_remove(const char *server, const char *owner, const char *show,
@@ -427,42 +449,49 @@ bool abs_episode_download_remove(const char *server, const char *owner, const ch
 	return true;
 }
 
-static bool removal_eligible(const abs_episode_removal_t *plan, const char *episode, const char *in_use) {
+static bool removal_eligible(const abs_episode_removal_t *plan, const char *show, const char *episode,
+	const char *in_use) {
 	abs_episode_manifest_t id;
 	char audio[SONIX_LINKED_PATH_MAX];
-	if (!abs_episode_download_path(plan->server, plan->owner, plan->show, episode, &id, audio, sizeof(audio)) ||
+	if (!abs_episode_download_path(plan->server, plan->owner, show, episode, &id, audio, sizeof(audio)) ||
 		(in_use && !strcmp(in_use, audio))) return false;
 	if (!plan->finished_only) return true;
 	abs_episode_checkpoint_t checkpoint;
 	return audiobookdb_episode_get(&id, &checkpoint, NULL) && checkpoint.finished;
 }
 
+typedef struct {
+	abs_episode_removal_t *plan;
+	const char *in_use;
+	int capacity;
+} removal_scan_t;
+
+static bool collect_removal(const abs_episode_manifest_t *id, void *user) {
+	removal_scan_t *scan = user;
+	abs_episode_removal_t *plan = scan->plan;
+	if (!removal_eligible(plan, id->show, id->episode, scan->in_use)) return true;
+	if (plan->count == scan->capacity) {
+		if (scan->capacity > INT_MAX / 2) return false;
+		int capacity = scan->capacity ? scan->capacity * 2 : ABS_PAGE_LIMIT;
+		if ((size_t)capacity > SIZE_MAX / sizeof(*plan->episodes)) return false;
+		void *next = realloc(plan->episodes, (size_t)capacity * sizeof(*plan->episodes));
+		if (!next) return false;
+		plan->episodes = next;
+		scan->capacity = capacity;
+	}
+	strcpy(plan->episodes[plan->count].show, id->show);
+	strcpy(plan->episodes[plan->count++].episode, id->episode);
+	return true;
+}
+
 bool abs_episode_removal_plan(abs_episode_removal_t *plan, const char *in_use) {
-	if (!plan || plan->episodes || !plan->show[0]) return false;
+	if (!plan || plan->episodes || (!plan->show[0] && !plan->finished_only)) return false;
 	plan->generation = abs_download_card_generation();
 	if (!plan->generation) return false;
 	plan->count = 0;
-	int capacity = 0;
-	abs_episode_row_t *rows = calloc(ABS_PAGE_LIMIT, sizeof(*rows));
-	if (!rows) return false;
-	bool more = false, ok = true;
-	for (int offset = 0; ; offset += ABS_PAGE_LIMIT) {
-		int n = abs_episode_download_list(plan->server, plan->owner, plan->show, offset, rows, ABS_PAGE_LIMIT, &more);
-		if (n < 0) { ok = false; break; }
-		for (int i = 0; i < n; i++) {
-			if (!removal_eligible(plan, rows[i].episode_id, in_use)) continue;
-			if (plan->count == capacity) {
-				capacity = capacity ? capacity * 2 : ABS_PAGE_LIMIT;
-				void *next = realloc(plan->episodes, (size_t)capacity * sizeof(*plan->episodes));
-				if (!next) { ok = false; break; }
-				plan->episodes = next;
-			}
-			strcpy(plan->episodes[plan->count++], rows[i].episode_id);
-		}
-		if (!ok || !more) break;
-	}
-	free(rows);
-	if (!ok || plan->generation != abs_download_card_generation()) {
+	removal_scan_t scan = {.plan = plan, .in_use = in_use};
+	if (scan_downloads(plan->server, plan->owner, plan->show[0] ? plan->show : NULL,
+		ABS_EP_ALL, 0, NULL, 0, NULL, collect_removal, &scan) < 0 || plan->generation != abs_download_card_generation()) {
 		free(plan->episodes);
 		plan->episodes = NULL;
 		plan->count = 0;
@@ -475,9 +504,9 @@ int abs_episode_removal_apply(const abs_episode_removal_t *plan, const char *in_
 	if (!plan || !plan->episodes || !plan->generation || plan->generation != abs_download_card_generation()) return -1;
 	int removed = 0;
 	for (int i = 0; i < plan->count && plan->generation == abs_download_card_generation(); i++) {
-		const char *episode = plan->episodes[i];
-		if (removal_eligible(plan, episode, in_use) &&
-			abs_episode_download_remove(plan->server, plan->owner, plan->show, episode, in_use)) removed++;
+		const char *show = plan->episodes[i].show, *episode = plan->episodes[i].episode;
+		if (removal_eligible(plan, show, episode, in_use) &&
+			abs_episode_download_remove(plan->server, plan->owner, show, episode, in_use)) removed++;
 	}
 	return removed;
 }

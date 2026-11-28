@@ -94,31 +94,9 @@ static lv_obj_t *clear_row;
 static lv_obj_t *storage_note;
 static lv_timer_t *poll_timer;
 
-// The screen-lifetime snapshot: one heap copy the poll refreshes in place.
-// Alive only while the screen is loaded (§8.6 line 605: the UI owns snapshot
-// memory, so it is not held while the user is elsewhere). Design note in
-// .specs/forge-m3-gui-report.md: the engine's snapshot struct is fixed at
-// 16 whole jobs (37.5 KiB); the line's <24 KiB target assumes paged rows, and
-// the engine exposes no paging surface in 0.6.0 — bounded one-copy reuse, not
-// per-tick copies, is the posture this wave takes.
+// The poll keeps a reusable snapshot only while the screen is loaded.
 static abs_download_snapshot_t *snap;
-
-// What the rows were last painted from; the coalescing test between polls.
-typedef struct {
-	unsigned generation;
-	int count;
-	bool storage_paused;
-	struct {
-		long long id;
-		unsigned generation;
-		int state;
-		int file_index;
-		int file_count;
-		long long bytes_done;
-		long long bytes_total;
-	} job[ABS_DL_JOB_CAP];
-} queue_cache_t;
-static queue_cache_t cache;
+static bool unavailable_shown;
 
 static queue_action_cell_t action_cells[QUEUE_ACTION_CELLS];
 
@@ -227,8 +205,7 @@ static void queue_action_cb(void *user) {
 static void clear_finished_cb(lv_event_t *e) {
 	(void)e;
 	char error[ABS_DL_ERROR_MAX];
-	if (!abs_download_clear_finished_kind(podcasts_only ? ABS_DL_KIND_EPISODE : ABS_DL_KIND_BOOK,
-		error, sizeof(error)))
+	if (!podcasts_only && !abs_download_clear_finished_kind(ABS_DL_KIND_BOOK, error, sizeof(error)))
 		toast_error(error[0] ? error : tr("audiobookshelf_request_failed"));
 }
 
@@ -286,42 +263,6 @@ static void queue_row_bind(void *user, int index, char *title, size_t title_size
 	}
 }
 
-// The coalescing test between two polls: the engine's transition generation,
-// the job set, the per-job progress counters, or the storage pause changed.
-// The refresh happens after the decision, so the caller paints a snapshot the
-// cache then describes exactly.
-static bool queue_snapshot_changed(const abs_download_snapshot_t *next) {
-	bool changed = false;
-	if (next->generation != cache.generation || next->job_count != cache.count ||
-		next->storage_paused != cache.storage_paused)
-		changed = true;
-	for (int i = 0; i < next->job_count && i < ABS_DL_JOB_CAP; i++) {
-		const abs_download_job_t *job = &next->jobs[i];
-		if (job->id != cache.job[i].id || job->generation != cache.job[i].generation ||
-			(int)job->state != cache.job[i].state ||
-			job->file_index != cache.job[i].file_index ||
-			job->file_count != cache.job[i].file_count ||
-			job->bytes_done != cache.job[i].bytes_done ||
-			job->bytes_total != cache.job[i].bytes_total)
-			changed = true;
-	}
-	cache.generation = next->generation;
-	cache.count = next->job_count;
-	cache.storage_paused = next->storage_paused;
-	memset(cache.job, 0, sizeof(cache.job));
-	for (int i = 0; i < next->job_count && i < ABS_DL_JOB_CAP; i++) {
-		const abs_download_job_t *job = &next->jobs[i];
-		cache.job[i].id = job->id;
-		cache.job[i].generation = job->generation;
-		cache.job[i].state = (int)job->state;
-		cache.job[i].file_index = job->file_index;
-		cache.job[i].file_count = job->file_count;
-		cache.job[i].bytes_done = job->bytes_done;
-		cache.job[i].bytes_total = job->bytes_total;
-	}
-	return changed;
-}
-
 static bool queue_has_terminal(void) {
 	if (!snap) return false;
 	for (int i = 0; i < snap->job_count; i++) {
@@ -338,13 +279,10 @@ static bool queue_has_terminal(void) {
 static void poll_once(void) {
 	poll_count++;
 	if (!snap) return;
-	bool ok = abs_download_snapshot(snap);
-
 	bool changed;
-	if (!ok) {
-		changed = cache.generation != 0 || cache.count != 0 || cache.storage_paused;
-		memset(&cache, 0, sizeof(cache));
-		if (!changed) return;
+	if (!abs_download_snapshot_update(snap, &changed)) {
+		if (unavailable_shown) return;
+		unavailable_shown = true;
 		repaint_count++;
 		abs_list_set_count(list, 0);
 		abs_list_note(list, tr("audiobookshelf_queue_not_available"));
@@ -353,18 +291,20 @@ static void poll_once(void) {
 		return;
 	}
 
+	unavailable_shown = false;
+	if (!changed) return;
 	int visible = 0;
 	for (int i = 0; i < snap->job_count; i++) {
-		if (strcmp(snap->jobs[i].kind, podcasts_only ? ABS_DL_KIND_EPISODE : ABS_DL_KIND_BOOK)) continue;
+		if (strcmp(snap->jobs[i].kind, podcasts_only ? ABS_DL_KIND_EPISODE : ABS_DL_KIND_BOOK) ||
+			(podcasts_only && snap->jobs[i].state == ABS_DL_DONE)) continue;
 		if (visible != i) snap->jobs[visible] = snap->jobs[i];
 		visible++;
 	}
 	snap->job_count = visible;
-	if (!queue_snapshot_changed(snap)) return; // the coalesced idle tick
 	repaint_count++;
 
 	lv_obj_set_hidden(storage_note, !snap->storage_paused);
-	lv_obj_set_hidden(clear_row, !queue_has_terminal());
+	lv_obj_set_hidden(clear_row, podcasts_only || !queue_has_terminal());
 
 	// Note first, count second: the pooled renderer skips a rebind while the
 	// note is up, so the ordering decides which view the rebind lands on.
@@ -383,7 +323,7 @@ static void poll_timer_cb(lv_timer_t *timer) {
 static void queue_screen_loaded_cb(lv_event_t *e) {
 	(void)e;
 	if (!snap) snap = calloc(1, sizeof(*snap));
-	memset(&cache, 0, sizeof(cache));
+	unavailable_shown = false;
 	if (poll_timer) lv_timer_resume(poll_timer);
 	poll_once(); // paint the present state before the first tick
 }
@@ -396,6 +336,7 @@ static void queue_screen_unloaded_cb(lv_event_t *e) {
 	printf("audiobookshelf: queue screen closed after %u poll ticks (%u repaints)\n",
 		   poll_count, repaint_count);
 	if (snap) {
+		abs_download_snapshot_release(snap);
 		free(snap);
 		snap = NULL;
 	}
@@ -410,6 +351,7 @@ static void queue_screen_delete_cb(lv_event_t *e) {
 		poll_timer = NULL;
 	}
 	if (snap) {
+		abs_download_snapshot_release(snap);
 		free(snap);
 		snap = NULL;
 	}

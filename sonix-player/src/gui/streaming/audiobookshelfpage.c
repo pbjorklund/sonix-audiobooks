@@ -16,6 +16,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/library/audiobooks.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/system/device/power.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/nowplaying/coverloader.h"
 #include "src/gui/shell/icons.h"
@@ -168,6 +169,7 @@ typedef struct {
 	bool pod_keep_playing;
 	char next_episode_id[ABS_ID_MAX], next_title[ABS_NAME_MAX];
 	int podcast_filter, podcast_order;
+	unsigned podcast_download_states;
 } job_t;
 
 static job_t pod_retry;
@@ -175,7 +177,7 @@ static bool pod_error, pod_more;
 static bool pod_episode_desc = true;
 static abs_episode_sort_t pod_episode_sort;
 static bool pod_show_by_date, pod_show_desc;
-static unsigned pod_show_states = ABS_EP_ALL;
+static unsigned pod_show_states = ABS_EP_ALL, pod_download_states = ABS_EP_ALL;
 static int pod_latest_filter = 1; // 1 unheard, 2 heard
 static int pod_rows[ABS_PAGE_LIMIT];
 static int pod_visible;
@@ -191,6 +193,9 @@ static view_t pod_detail_from;
 static http_op_t pod_show_op;
 static char pod_local_path[SONIX_LINKED_PATH_MAX];
 static abs_download_state_t pod_download_state = ABS_DL_STATE_COUNT;
+static lv_obj_t *pod_download_status_label, *pod_download_bar;
+static unsigned pod_list_download_revision;
+static bool pod_list_wifi;
 static char pod_cover_path[ABS_COVER_PATH_MAX];
 static abs_episode_manifest_t pod_identity;
 static char pod_list_server[ABS_SERVER_MAX], pod_list_owner[ABS_ID_MAX];
@@ -203,7 +208,7 @@ static struct {
 	lv_obj_t *widget;
 	char show[ABS_ID_MAX];
 	cover_image_t pixels;
-	bool requested;
+	bool requested, pending;
 } pod_art[ABS_LIST_ROW_POOL];
 static bool pod_played;
 static void run_loading(const job_t *job);
@@ -454,26 +459,25 @@ static void run_loading(const job_t *job) {
 // transient heap copy — taken, read, dropped.
 static void queue_watch_observe(void) {
 	downloads_badge_dirty = false;
-	abs_download_snapshot_t *snap = malloc(sizeof(*snap));
-	if (!snap) return;
-	if (!abs_download_snapshot(snap)) {
+	abs_download_snapshot_t snap = {0};
+	if (!abs_download_snapshot(&snap)) {
 		// Queue disarmed (card absent / quiesced): the badge has nothing to
 		// count. A re-init makes the next observation see the rows again.
-		free(snap);
+		abs_download_snapshot_release(&snap);
 		downloads_badge = 0;
 		return;
 	}
 	int pending = 0;
 	bool done_needs_import = false;
-	for (int i = 0; i < snap->job_count; i++) {
-		const abs_download_job_t *job = &snap->jobs[i];
+	for (int i = 0; i < snap.job_count; i++) {
+		const abs_download_job_t *job = &snap.jobs[i];
 		if (!strcmp(job->kind, ABS_DL_KIND_BOOK) && job->state != ABS_DL_DONE &&
 			job->state != ABS_DL_FAILED && job->state != ABS_DL_CANCELLED)
 			pending++;
 		if (job->state == ABS_DL_DONE && job->index_pending) done_needs_import = true;
 	}
 	downloads_badge = pending;
-	free(snap);
+	abs_download_snapshot_release(&snap);
 
 	if (!done_needs_import || audiobookdb_scan_running()) return;
 	const char *root = config->sd_root_path;
@@ -1415,7 +1419,7 @@ static void clear_podcasts(void) {
 	pod_detail = NULL;
 	pod_show_count = pod_episode_count = pod_page = pod_show_page = 0;
 	pod_show_scroll = pod_episode_scroll = 0;
-	pod_show_states = ABS_EP_ALL;
+	pod_show_states = pod_download_states = ABS_EP_ALL;
 	pod_show_id[0] = pod_show_name[0] = pod_search[0] = pod_detail_title[0] = '\0';
 	pod_more = pod_error = false;
 	pod_local_path[0] = pod_cover_path[0] = '\0';
@@ -1430,6 +1434,7 @@ static void clear_podcasts(void) {
 
 static void request_podcast(job_kind_t kind, int page, const char *episode) {
 	job_t job = {.kind = kind, .page = page, .podcast_filter = pod_latest_filter, .podcast_order = pod_show_by_date ? (pod_show_desc ? 1 : -1) : (pod_show_desc ? 2 : 0)};
+	job.podcast_download_states = pod_download_states;
 	job.pod_local_only = view == VIEW_POD_DOWNLOADS || view == VIEW_POD_LOCAL_SHOW ||
 		(view == VIEW_POD_DETAIL && pod_detail_from == VIEW_POD_LOCAL_SHOW);
 	snprintf(job.id, sizeof(job.id), "%s", kind == JOB_POD_EPISODES || kind >= JOB_POD_LOCAL_SHOW
@@ -1658,8 +1663,9 @@ static void pod_row_bind(void *user, int index, char *title, size_t title_size,
 		long seconds = (long)ep->duration;
 		snprintf(time, sizeof(time), "%ld:%02ld", seconds / 60, seconds % 60);
 	}
-	const char *progress = ep->finished ? tr(view == VIEW_POD_EPISODES ? "audiobook_finished" : "podcast_filter_heard")
-		: ep->in_progress ? tr(view == VIEW_POD_EPISODES ? "abs_podcast_started" : "podcast_continue_listening") : "";
+	bool show_episode = view == VIEW_POD_EPISODES || view == VIEW_POD_LOCAL_SHOW;
+	const char *progress = ep->finished ? tr(show_episode ? "audiobook_finished" : "podcast_filter_heard")
+		: ep->in_progress ? tr(show_episode ? "abs_podcast_started" : "podcast_continue_listening") : "";
 	const char *local = pod_has_download(ep) ? tr("abs_queue_done") : "";
 	snprintf(subtitle, subtitle_size, "%s%s%s%s%s%s%s", local,
 		local[0] && (date[0] || time[0] || progress[0]) ? "  " : "", date,
@@ -1720,7 +1726,7 @@ static void pod_art_reset(int i) {
 	}
 	coverloader_release(COVERLOADER_ABS_EPISODE_BASE + i);
 	cover_free(&pod_art[i].pixels);
-	pod_art[i].requested = false;
+	pod_art[i].requested = pod_art[i].pending = false;
 	pod_art[i].show[0] = '\0';
 }
 
@@ -1728,6 +1734,17 @@ static void pod_art_delete(lv_event_t *e) {
 	int i = (int)(intptr_t)lv_event_get_user_data(e);
 	pod_art[i].widget = NULL;
 	pod_art_reset(i);
+}
+
+static void pod_art_take(int i) {
+	if (!pod_art[i].pending) return;
+	bool finished = false;
+	if (coverloader_take(COVERLOADER_ABS_EPISODE_BASE + i, &pod_art[i].pixels, &finished)) {
+		lv_image_set_src(pod_art[i].widget, &pod_art[i].pixels.dsc);
+		lv_obj_set_style_image_recolor_opa(pod_art[i].widget, LV_OPA_TRANSP, 0);
+		finished = true;
+	}
+	if (finished) pod_art[i].pending = false;
 }
 
 static void pod_art_bind(const abs_episode_row_t *ep, int i, lv_obj_t *image) {
@@ -1749,16 +1766,10 @@ static void pod_art_bind(const abs_episode_row_t *ep, int i, lv_obj_t *image) {
 			abs_cover_cached_shelf(pod_list_server, show, path, sizeof(path)) ||
 			abs_cover_cached(pod_list_server, show, path, sizeof(path))) {
 			coverloader_request_image(COVERLOADER_ABS_EPISODE_BASE + i, path, 64, 64);
-			pod_art[i].requested = true;
+			pod_art[i].requested = pod_art[i].pending = true;
 		}
 	}
-	if (pod_art[i].requested) {
-		bool finished;
-		if (coverloader_take(COVERLOADER_ABS_EPISODE_BASE + i, &pod_art[i].pixels, &finished)) {
-			lv_image_set_src(image, &pod_art[i].pixels.dsc);
-			lv_obj_set_style_image_recolor_opa(image, LV_OPA_TRANSP, 0);
-		}
-	}
+	pod_art_take(i);
 }
 
 static void pod_remove_apply(void *user) {
@@ -1777,19 +1788,27 @@ static void pod_remove_apply(void *user) {
 	request_podcast(JOB_POD_DOWNLOADS, 0, NULL);
 }
 
-static void pod_remove_plan(void *user) {
+static void pod_request_removal(const char *show, bool finished_only) {
 	if (view != VIEW_POD_DOWNLOADS || busy) return;
-	job_t job = {.kind = JOB_POD_REMOVE_PLAN, .pod_local_only = true, .finished_only = (bool)(intptr_t)user};
+	job_t job = {.kind = JOB_POD_REMOVE_PLAN, .pod_local_only = true, .finished_only = finished_only};
 	free(pod_removal.episodes);
 	pod_removal = (abs_episode_removal_t){0};
-	strcpy(job.id, pod_remove_show);
-	strcpy(job.title, pod_remove_title);
+	if (show) strcpy(job.id, show);
 	device_state_t state;
 	device_state_get(&state);
 	if (!abs_episode_playback_local_in_use(state.current_file, job.path, sizeof(job.path)))
 		snprintf(job.path, sizeof(job.path), "%s", state.current_file);
 	abs_profiles_active(job.profile_id, sizeof(job.profile_id));
 	run_loading(&job);
+}
+
+static void pod_remove_plan(void *user) {
+	pod_request_removal(pod_remove_show, (bool)(intptr_t)user);
+}
+
+static void pod_remove_played_cb(lv_event_t *e) {
+	(void)e;
+	pod_request_removal(NULL, true);
 }
 
 static void pod_show_menu(void *user, int index, lv_obj_t *button) {
@@ -1836,22 +1855,56 @@ static void pod_row_decorate(void *user, int index, int slot, lv_obj_t *image, l
 	lv_obj_set_clickable(action, !saved && !status && pod_list_owner[0]);
 }
 
-static abs_download_state_t pod_current_download(void) {
-	return abs_download_episode_state(pod_identity.server, pod_identity.owner,
-		pod_identity.show, pod_identity.episode);
+static abs_download_state_t pod_current_download(long long *done, long long *total) {
+	return abs_download_episode_status(pod_identity.server, pod_identity.owner,
+		pod_identity.show, pod_identity.episode, done, total);
+}
+
+static void pod_update_download_progress(long long done, long long total) {
+	if (!pod_download_status_label || !pod_download_bar) return;
+	char label[192];
+	const char *downloading = tr("abs_queue_downloading");
+	if (total > 0) {
+		int percent = done <= 0 ? 0 : done >= total ? 99 : (int)(100.0 * done / total);
+		if (percent > 99) percent = 99; // Not complete until the file is verified.
+		snprintf(label, sizeof(label), "%s · %d%%", downloading, percent);
+		lv_bar_set_value(pod_download_bar, percent, LV_ANIM_OFF);
+	} else if (done >= 1024) {
+		snprintf(label, sizeof(label), "%s · %lld KiB", downloading, done / 1024);
+	} else {
+		snprintf(label, sizeof(label), "%s", downloading);
+	}
+	lv_obj_set_hidden(pod_download_bar, total <= 0);
+	if (strcmp(lv_label_get_text(pod_download_status_label), label))
+		lv_label_set_text(pod_download_status_label, label);
 }
 
 static void pod_watch_download(void) {
-	if (busy || pod_error || lv_screen_active() != audiobookshelf_screen) return;
+	if (busy || pod_error || lv_screen_active() != audiobookshelf_screen || !power_screen_is_on() ||
+		player_sheet_is_open()) return;
 	if (view != VIEW_POD_DETAIL) {
-		if (view == VIEW_POD_EPISODES || view == VIEW_POD_LATEST || view == VIEW_POD_DOWNLOADS ||
-			view == VIEW_POD_LOCAL_SHOW || view == VIEW_POD_SHOWS)
-			abs_list_refresh(pod_list);
+		if (!pod_list) return;
+		if (view == VIEW_POD_EPISODES || view == VIEW_POD_LATEST || view == VIEW_POD_LOCAL_SHOW) {
+			unsigned revision = abs_download_revision();
+			bool online = wifi_connected();
+			if (revision != pod_list_download_revision || online != pod_list_wifi) {
+				pod_list_download_revision = revision;
+				pod_list_wifi = online;
+				abs_list_refresh(pod_list);
+			}
+		}
+		// Artwork can arrive between queue changes. Take it without rebinding
+		// rows or reopening their on-card manifests.
+		for (int i = 0; i < ABS_LIST_ROW_POOL; i++) pod_art_take(i);
 		return;
 	}
 	if (!pod_detail) return;
-	abs_download_state_t state = pod_current_download();
-	if (state == pod_download_state) return;
+	long long done, total;
+	abs_download_state_t state = pod_current_download(&done, &total);
+	if (state == pod_download_state) {
+		if (state == ABS_DL_DOWNLOADING) pod_update_download_progress(done, total);
+		return;
+	}
 	int scroll = lv_obj_get_scroll_y(content);
 	draw_podcasts();
 	lv_obj_scroll_to_y(content, scroll, LV_ANIM_OFF);
@@ -1874,10 +1927,16 @@ static void pod_filter_menu(lv_event_t *e) {
 }
 
 static void pod_toggle_show_state(lv_event_t *e) {
-	if (busy || view != VIEW_POD_EPISODES) return;
-	pod_show_states ^= (unsigned)(intptr_t)lv_event_get_user_data(e);
-	pod_page = 0;
-	draw_podcasts();
+	if (busy) return;
+	unsigned state = (unsigned)(intptr_t)lv_event_get_user_data(e);
+	if (view == VIEW_POD_LOCAL_SHOW) {
+		pod_download_states ^= state;
+		request_podcast(JOB_POD_LOCAL_SHOW, 0, NULL);
+	} else if (view == VIEW_POD_EPISODES) {
+		pod_show_states ^= state;
+		pod_page = 0;
+		draw_podcasts();
+	} else return;
 	lv_obj_scroll_to_y(content, 0, LV_ANIM_OFF);
 }
 
@@ -1897,7 +1956,8 @@ static void pod_show_state_filters(lv_obj_t *pills) {
 	const char *labels[] = {"abs_podcast_unplayed", "abs_podcast_started", "audiobook_finished"};
 	const unsigned states[] = {ABS_EP_UNPLAYED, ABS_EP_STARTED, ABS_EP_FINISHED};
 	for (int i = 0; i < 3; i++) {
-		bool selected = (pod_show_states & states[i]) != 0;
+		unsigned selected_states = view == VIEW_POD_LOCAL_SHOW ? pod_download_states : pod_show_states;
+		bool selected = (selected_states & states[i]) != 0;
 		char label[96];
 		snprintf(label, sizeof(label), "%s %s", selected ? "✓" : "–", tr(labels[i]));
 		lv_obj_t *pill = settingsrow_pill_text(pills, label, states[i], pod_toggle_show_state);
@@ -1954,6 +2014,7 @@ static void pod_sort_menu(lv_event_t *e) {
 
 static void draw_podcasts(void) {
 	books_list = pod_list = NULL;
+	pod_download_status_label = pod_download_bar = NULL;
 	lv_obj_clean(content);
 	lv_label_set_text(page_title, library_name[0] ? library_name : tr("podcasts"));
 	if (view == VIEW_POD_HOME) {
@@ -1989,7 +2050,8 @@ static void draw_podcasts(void) {
 			if (pod_show_name[0] && pod_detail_from != VIEW_POD_LOCAL_SHOW) show_note_text(pod_show_name);
 			if (pod_identity.owner[0]) settingsrow_action(content,
 				pod_played ? "podcast_mark_unheard" : "podcast_mark_heard", pod_mark_cb, NULL);
-			pod_download_state = pod_current_download();
+			long long done, total;
+			pod_download_state = pod_current_download(&done, &total);
 			if (!pod_local_path[0] && pod_download_state == ABS_DL_DONE) {
 				abs_episode_download_path(pod_identity.server, pod_identity.owner, pod_identity.show,
 					pod_identity.episode, NULL, pod_local_path, sizeof(pod_local_path));
@@ -2006,8 +2068,16 @@ static void draw_podcasts(void) {
 				if (online) settingsrow_action(content, "medialist_play", pod_play_cb, NULL);
 				else show_note("podcast_offline_no_wifi");
 				const char *status = pod_download_label(pod_download_state);
-				if (status) settingsrow_action(content, status, open_podcast_queue_cb, NULL);
-				else if (online) settingsrow_action(content, "podcast_download", pod_enqueue_cb, NULL);
+				if (status) {
+					lv_obj_t *row = settingsrow_action(content, status, open_podcast_queue_cb, NULL);
+					if (pod_download_state == ABS_DL_DOWNLOADING) {
+						pod_download_status_label = settingsrow_name_label(row);
+						pod_download_bar = lv_bar_create(content);
+						lv_obj_set_size(pod_download_bar, lv_pct(100), 6);
+						lv_obj_add_style(pod_download_bar, &theme_style_accent_bg, LV_PART_INDICATOR);
+						pod_update_download_progress(done, total);
+					}
+				} else if (online) settingsrow_action(content, "podcast_download", pod_enqueue_cb, NULL);
 			}
 			if (pod_detail->description[0]) show_note_text(pod_detail->description);
 			if (pod_detail->chapter_count) {
@@ -2054,6 +2124,7 @@ static void draw_podcasts(void) {
 		lv_obj_set_style_text_font(lv_obj_get_child(sort_button, 0), &font_ui_18, 0);
 		settingsrow_pill_active(sort_button, false);
 	}
+	if (view == VIEW_POD_LOCAL_SHOW) pod_show_state_filters(pod_control_strip());
 	int total = view == VIEW_POD_SHOWS ? pod_show_count : pod_project_rows();
 	int count = view == VIEW_POD_SHOWS ? total : pod_visible;
 	if (view == VIEW_POD_EPISODES) more = (pod_page + 1) * ABS_PAGE_LIMIT < total;
@@ -2070,10 +2141,16 @@ static void draw_podcasts(void) {
 			.decorate = pod_row_decorate,
 			.action = view == VIEW_POD_DOWNLOADS ? pod_show_menu : episodes ? pod_row_download : NULL};
 		pod_list = abs_list_create(&rows);
-		if (pod_list) abs_list_set_count(pod_list, count);
+		if (pod_list) {
+			pod_list_download_revision = abs_download_revision();
+			pod_list_wifi = wifi_connected();
+			abs_list_set_count(pod_list, count);
+		}
 	}
 	if (pod_page > 0) settingsrow_action(content, "audiobookshelf_previous_page", pod_page_cb, (void *)(intptr_t)(pod_page - 1));
 	if (more) settingsrow_action(content, "audiobookshelf_next_page", pod_page_cb, (void *)(intptr_t)(pod_page + 1));
+	if (view == VIEW_POD_DOWNLOADS && (count > 0 || pod_page > 0))
+		settingsrow_action(content, "abs_podcast_remove_finished", pod_remove_played_cb, NULL);
 }
 
 static bool back_guard(void) {
@@ -2088,8 +2165,11 @@ static bool back_guard(void) {
 		if (view == VIEW_POD_DETAIL) {
 			free(pod_detail); pod_detail = NULL;
 			view = pod_detail_from;
-			draw_podcasts();
-			lv_obj_scroll_to_y(content, pod_episode_scroll, LV_ANIM_OFF);
+			if (view == VIEW_POD_LOCAL_SHOW) request_podcast(JOB_POD_LOCAL_SHOW, pod_page, NULL);
+			else {
+				draw_podcasts();
+				lv_obj_scroll_to_y(content, pod_episode_scroll, LV_ANIM_OFF);
+			}
 		} else if (view == VIEW_POD_LOCAL_SHOW) {
 			view = VIEW_POD_DOWNLOADS;
 			request_podcast(JOB_POD_DOWNLOADS, pod_downloads_page, NULL);
@@ -2186,7 +2266,10 @@ static void job_done_async(void *user) {
 			else if (!pod_removal.count) gui_notify_popup("abs_podcast_nothing_to_remove");
 			else {
 				char message[ABS_NAME_MAX + 96];
-				snprintf(message, sizeof(message), tr("abs_podcast_remove_confirm"), pod_removal.count, pod_remove_title);
+				if (pod_removal.show[0])
+					snprintf(message, sizeof(message), tr("abs_podcast_remove_confirm"), pod_removal.count, pod_remove_title);
+				else
+					snprintf(message, sizeof(message), tr("abs_podcast_remove_played_confirm"), pod_removal.count);
 				confirm_show(pod_removal.finished_only ? "abs_podcast_remove_finished" : "abs_podcast_remove_all",
 					message, "remove", pod_remove_apply, NULL);
 			}
@@ -2428,7 +2511,7 @@ static void *worker_main(void *user) {
 				} else if (current && (job.kind == JOB_POD_DOWNLOADS || job.kind == JOB_POD_LOCAL_SHOW)) {
 					done.pod_episodes = calloc(ABS_PAGE_LIMIT, sizeof(*done.pod_episodes));
 					if (done.pod_episodes) count = !owner[0] ? 0 : abs_episode_download_list(auth.server, owner,
-						job.kind == JOB_POD_LOCAL_SHOW ? job.id : NULL, job.page * ABS_PAGE_LIMIT,
+						job.kind == JOB_POD_LOCAL_SHOW ? job.id : NULL, job.podcast_download_states, job.page * ABS_PAGE_LIMIT,
 						done.pod_episodes, ABS_PAGE_LIMIT, &done.pod_more);
 				} else if (current && owner[0] && job.kind == JOB_POD_REMOVE_PLAN) {
 					strcpy(done.removal.server, auth.server);

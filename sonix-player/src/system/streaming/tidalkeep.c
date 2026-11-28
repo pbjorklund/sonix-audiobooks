@@ -42,10 +42,46 @@ void tidalkeep_set_quality(int value) {
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 
-static tidalkeep_item_t queue[TIDALKEEP_MAX];
-static int queue_len;
-static tidalkeep_item_t failed[TIDALKEEP_MAX];
-static int failed_len;
+typedef struct keep_node {
+	tidalkeep_item_t item;
+	struct keep_node *next;
+} keep_node_t;
+
+typedef struct {
+	keep_node_t *head, *tail;
+	int count;
+} keep_list_t;
+
+static keep_list_t queue, failed;
+
+static void push(keep_list_t *list, keep_node_t *node) {
+	node->next = NULL;
+	if (list->tail) list->tail->next = node;
+	else list->head = node;
+	list->tail = node;
+	list->count++;
+}
+
+static keep_node_t *pop(keep_list_t *list) {
+	keep_node_t *node = list->head;
+	list->head = node->next;
+	if (!list->head) list->tail = NULL;
+	list->count--;
+	return node;
+}
+
+static void forget_failed(long id) {
+	keep_node_t *prev = NULL;
+	for (keep_node_t *node = failed.head; node; prev = node, node = node->next) {
+		if (node->item.track.id != id) continue;
+		if (prev) prev->next = node->next;
+		else failed.head = node->next;
+		if (failed.tail == node) failed.tail = prev;
+		failed.count--;
+		free(node);
+		break;
+	}
+}
 static int done_count;
 static long current_id;
 static char current_album[TIDAL_ID_MAX];
@@ -83,8 +119,8 @@ static bool is_queued(long id) {
 	if (current_id == id) {
 		return true;
 	}
-	for (int i = 0; i < queue_len; i++) {
-		if (queue[i].track.id == id) {
+	for (keep_node_t *node = queue.head; node; node = node->next) {
+		if (node->item.track.id == id) {
 			return true;
 		}
 	}
@@ -111,7 +147,8 @@ static tidalkeep_enqueue_result_t enqueue_quality(const tidal_track_t *track, in
 		pthread_mutex_unlock(&lock);
 		return TIDALKEEP_SKIPPED;
 	}
-	if (queue_len + (current_id != 0) >= TIDALKEEP_MAX) {
+	keep_node_t *node = malloc(sizeof(*node));
+	if (!node) {
 		pthread_mutex_unlock(&lock);
 		return TIDALKEEP_REJECTED;
 	}
@@ -123,17 +160,14 @@ static tidalkeep_enqueue_result_t enqueue_quality(const tidal_track_t *track, in
 		}
 	}
 	if (!started) {
+		free(node);
 		pthread_mutex_unlock(&lock);
 		return TIDALKEEP_REJECTED;
 	}
-	for (int i = 0; i < failed_len; i++) {
-		if (failed[i].track.id == track->id) {
-			failed[i] = failed[--failed_len];
-			break;
-		}
-	}
-	queue[queue_len++] = (tidalkeep_item_t){.track = *track, .quality = quality, .replace_quality = replace_existing ? kept_quality : TIDALCACHE_QUALITY_NONE,
+	forget_failed(track->id);
+	node->item = (tidalkeep_item_t){.track = *track, .quality = quality, .replace_quality = replace_existing ? kept_quality : TIDALCACHE_QUALITY_NONE,
 		.playlist = playlist, .promote = promote};
+	push(&queue, node);
 	pthread_cond_signal(&wake);
 	pthread_mutex_unlock(&lock);
 	return TIDALKEEP_ADDED;
@@ -157,11 +191,11 @@ tidalkeep_enqueue_result_t tidalkeep_enqueue(const tidal_track_t *track) {
 tidalkeep_state_t tidalkeep_state(void) {
 	pthread_mutex_lock(&lock);
 	tidalkeep_state_t state = {
-		.pending = queue_len,
+		.pending = queue.count,
 		.done = done_count,
-		.failed = failed_len,
+		.failed = failed.count,
 		.current = current_id,
-		.active = queue_len > 0 || current_id != 0,
+		.active = queue.head || current_id != 0,
 	};
 	pthread_mutex_unlock(&lock);
 	return state;
@@ -175,8 +209,8 @@ tidalkeep_activity_t tidalkeep_activity(long track_id, const char *album_id) {
 	if (current_id && (by_album ? strcmp(current_album, album_id) == 0 : current_id == track_id)) {
 		state = TIDALKEEP_ACTIVE;
 	} else {
-		for (int i = 0; i < queue_len; i++) {
-			const tidal_track_t *track = &queue[i].track;
+		for (keep_node_t *node = queue.head; node; node = node->next) {
+			const tidal_track_t *track = &node->item.track;
 			if (by_album ? strcmp(track->album_id, album_id) == 0 : track->id == track_id) {
 				state = TIDALKEEP_QUEUED;
 				break;
@@ -190,13 +224,11 @@ tidalkeep_activity_t tidalkeep_activity(long track_id, const char *album_id) {
 void tidalkeep_retry_failed(void) {
 	pthread_mutex_lock(&lock);
 	// Preserve the failure order and give each retry a fresh attempt budget.
-	int moved = 0;
-	while (moved < failed_len && queue_len + (current_id != 0) < TIDALKEEP_MAX) {
-		queue[queue_len] = failed[moved++];
-		queue[queue_len++].attempts = 0;
+	while (failed.head) {
+		keep_node_t *node = pop(&failed);
+		node->item.attempts = 0;
+		push(&queue, node);
 	}
-	failed_len -= moved;
-	memmove(failed, failed + moved, sizeof(failed[0]) * (size_t)failed_len);
 	pthread_cond_signal(&wake);
 	pthread_mutex_unlock(&lock);
 }
@@ -206,13 +238,12 @@ static void *worker_main(void *unused) {
 	thread_be_background("tidal keep");
 	for (;;) {
 		pthread_mutex_lock(&lock);
-		while (queue_len == 0) {
+		while (!queue.head) {
 			current_id = 0;
 			pthread_cond_wait(&wake, &lock);
 		}
-		tidalkeep_item_t item = queue[0];
-		memmove(&queue[0], &queue[1], sizeof(queue[0]) * (size_t)(queue_len - 1));
-		queue_len--;
+		keep_node_t *node = pop(&queue);
+		tidalkeep_item_t item = node->item;
 		current_id = item.track.id;
 		snprintf(current_album, sizeof(current_album), "%s", item.track.album_id);
 		pthread_mutex_unlock(&lock);
@@ -257,12 +288,12 @@ static void *worker_main(void *unused) {
 		}
 		if (ok) {
 			done_count++;
-		} else if (retry && queue_len < TIDALKEEP_MAX) {
-			queue[queue_len++] = item; // the back: later, and fair to the rest
-		} else if (failed_len < TIDALKEEP_MAX) {
-			failed[failed_len++] = item;
+			free(node);
+		} else {
+			node->item.attempts = item.attempts;
+			push(retry ? &queue : &failed, node);
 		}
-		bool drained = queue_len == 0 && current_id == 0;
+		bool drained = !queue.head && current_id == 0;
 		tidalkeep_done_cb_t cb = done_cb;
 		pthread_mutex_unlock(&lock);
 

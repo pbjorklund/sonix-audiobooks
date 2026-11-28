@@ -15,7 +15,7 @@
 // clear-finished action.
 //
 // Knowledge boundaries: this file holds no HTTP and no SQLite. Every state
-// read is `abs_download_snapshot()` — one copy per 4 Hz timer tick, taken into
+// read is `abs_download_snapshot_update()` — checked at 4 Hz, copied into
 // one screen-lifetime buffer and repainted only when it actually changed
 // (coalesced, generation-tagged; the worker never posts an LVGL event for
 // reads). Job rows are engine mirrors; nothing here retains a book or show

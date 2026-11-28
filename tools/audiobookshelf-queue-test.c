@@ -127,13 +127,15 @@ static long long file_bytes(const char *path) {
 	return (long long)st.st_size;
 }
 
+enum { MANY_JOBS = 48 };
+
 static const char *itemname(int i) {
-	static char names[ABS_DL_JOB_CAP + 2][16];
+	static char names[MANY_JOBS][16];
 	static bool built;
 	if (!built) {
 		// Hand-rolled, because "%02d" analysis warns on an unbounded int and
 		// the ids are two digits by construction here.
-		for (int k = 0; k < ABS_DL_JOB_CAP + 2; k++) {
+		for (int k = 0; k < MANY_JOBS; k++) {
 			char *p = names[k];
 			*p++ = 'i';
 			*p++ = 't';
@@ -446,7 +448,7 @@ static bool op_fetch_identity(void *user, const abs_download_op_ctx_t *ctx,
 		// §8.1/§8.2 line 463: the next FIFO job must not begin until the
 		// previous job's stop was acknowledged. This fetch runs on the worker
 		// after begin_next_locked(), so the probe reads the durable mirror.
-		abs_download_snapshot_t snap;
+		abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 		CHECK(abs_download_snapshot(&snap), "probe snapshot\n");
 		const abs_download_job_t *before = snap_job(prev_job_probe, &snap);
 		CHECK(before != NULL && before->state == ABS_DL_CANCELLED,
@@ -629,7 +631,9 @@ static bool op_file_download(void *user, const abs_download_op_ctx_t *ctx, const
 		return false;
 	}
 	fake_transfer(file, (size_t)file->expected_size, false);
+	unsigned revision = abs_download_revision();
 	abs_download_op_progress(ctx, file->expected_size, file->expected_size);
+	CHECK(abs_download_revision() == revision, "byte progress changed the queue revision\n");
 	*final_size_out = file->expected_size;
 	return true;
 }
@@ -788,7 +792,7 @@ static const abs_download_job_t *snap_job(long long id, abs_download_snapshot_t 
 }
 
 static abs_download_state_t job_state(long long id) {
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(j != NULL, "job %lld missing from snapshot\n", id);
 	return j->state;
@@ -801,7 +805,7 @@ static void pump_until(long long id, abs_download_state_t want) {
 			return;
 		}
 		if (s == ABS_DL_FAILED && want != ABS_DL_FAILED) {
-			abs_download_snapshot_t snap;
+			abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 			const abs_download_job_t *j = snap_job(id, &snap);
 			CHECK(0, "job %lld FAILED at %s while waiting for %s\n", id, j->error,
 				  abs_download_state_name(want));
@@ -813,7 +817,7 @@ static void pump_until(long long id, abs_download_state_t want) {
 
 static void run_to_done(long long id) {
 	pump_until(id, ABS_DL_DONE);
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(strcmp(j->error, "") == 0, "DONE with error: %s\n", j->error);
 	CHECK(j->index_pending == 1 && j->ack_reset_done == 1, "DONE flags wrong (index %d ack %d)\n",
@@ -829,7 +833,7 @@ static void file_record(long long job_id, int ordinal, abs_download_file_t *out)
 }
 
 static long long sole_job(void) {
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap) && snap.job_count == 1, "expected exactly one job, have %d\n",
 		  snap.job_count);
 	return snap.jobs[0].id;
@@ -937,7 +941,7 @@ static void test_crash_download(void) {
 		  file_bytes(part2));
 	// §8.2: the orphan restarts from zero on the next attempt; the queue keeps
 	// it until then and never treats the partial bytes as content.
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap) && !snap.storage_paused, "recovery side flags\n");
 	CHECK(!abs_download_busy(), "recovering queues is never busy\n");
 
@@ -1040,7 +1044,7 @@ static void test_crash_finalize(void) {
 		  "recovery redownloaded audio (%d/%d/%d)\n", file_writes[1], file_writes[2],
 		  file_writes[3]);
 	CHECK(file_exists(manifest) && file_bytes(manifest) == 96, "manifest not rewritten by recovery\n");
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(strcmp(j->resume_file, "track01.mp3") == 0, "recovered resume file %s\n", j->resume_file);
 	CHECK(j->resume_seconds == 12.5, "recovered resume seconds %f\n", j->resume_seconds);
@@ -1075,7 +1079,7 @@ static void test_crash_finalize_fail(void) {
 	CHECK(abs_download_init(&cfg), "recovery init failed\n");
 	long long id = sole_job();
 	pump_until(id, ABS_DL_FAILED);
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(strcmp(j->error_stage, "manifest") == 0, "error stage %s\n", j->error_stage);
 	CHECK(strstr(j->error, "manifest write failed") != NULL, "error message: %s\n", j->error);
@@ -1154,11 +1158,11 @@ static void test_schema(void) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Capacity + dedup (§8.1)
+// 3. Growing queue + dedup (§8.1)
 // ---------------------------------------------------------------------------
 
 static void test_capacity_dedup(void) {
-	printf("capacity/dedup... ");
+	printf("large queue/dedup... ");
 	const char *root = mkcard("capacity");
 	fake_reset();
 	abs_download_config_t cfg = make_config(root, false);
@@ -1166,78 +1170,33 @@ static void test_capacity_dedup(void) {
 
 	char title[32];
 	char err[128] = {0};
-	long long ids[ABS_DL_JOB_CAP] = {0};
-	for (int i = 0; i < ABS_DL_JOB_CAP; i++) {
+	long long ids[MANY_JOBS] = {0};
+	for (int i = 0; i < MANY_JOBS; i++) {
 		snprintf(title, sizeof(title), "Book %02d", i);
 		abs_download_enqueue_t req = book_req(itemname(i), title, FAKE_DEST);
 		CHECK(abs_download_enqueue_book(&req, &ids[i], NULL, err, sizeof(err)), "enqueue %d: %s\n", i, err);
-		CHECK(ids[i] > 0, "enqueue %d got id %lld\n", i, ids[i]);
 	}
-	abs_download_snapshot_t snap;
-	CHECK(abs_download_snapshot(&snap) && snap.job_count == ABS_DL_JOB_CAP, "mirror has %d jobs\n",
-		  snap.job_count);
+	abs_download_quiesce_storage();
+	CHECK(abs_download_init(&cfg), "restart with large queue failed\n");
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
+	CHECK(abs_download_snapshot(&snap) && snap.job_count == MANY_JOBS, "mirror has %d jobs\n", snap.job_count);
+	for (int i = 0; i < MANY_JOBS; i++) CHECK(snap.jobs[i].id == ids[i], "FIFO changed on restart at %d\n", i);
+	bool changed = true;
+	CHECK(abs_download_snapshot_update(&snap, &changed) && !changed, "idle large snapshot recopied\n");
 
-	abs_download_enqueue_t over = book_req("item-99", "Book over", FAKE_DEST);
-	CHECK(!abs_download_enqueue_book(&over, NULL, NULL, err, sizeof(err)), "17th enqueue passed\n");
-	CHECK(strstr(err, "full") != NULL, "wrong full-queue error: %s\n", err);
-
-	// §8.1: selecting an already queued item opens its existing row.
 	bool deduped = false;
 	long long again = 0;
-	abs_download_enqueue_t dup = book_req(itemname(5), "Book 05", FAKE_DEST);
-	CHECK(abs_download_enqueue_book(&dup, &again, &deduped, err, sizeof(err)), "dedup enqueue failed\n");
-	CHECK(deduped && again == ids[5], "dedup mismatch (deduped %d id %lld vs %lld)\n", deduped, again,
-		  ids[5]);
-	CHECK(abs_download_snapshot(&snap) && snap.job_count == ABS_DL_JOB_CAP, "dedup added a row\n");
-
-	// The 16-job bound counts terminal history too (§8.1); capacity frees only
-	// when the finished row is removed or cleared.
-	CHECK(abs_download_cancel(ids[7], err, sizeof(err)), "cancel failed: %s\n", err);
-	CHECK(!abs_download_enqueue_book(&over, NULL, NULL, err, sizeof(err)),
-		  "enqueue past the bound with terminal history present\n");
-	CHECK(abs_download_remove(ids[7], err, sizeof(err)), "remove failed: %s\n", err);
-	CHECK(abs_download_enqueue_book(&over, NULL, NULL, err, sizeof(err)), "enqueue after remove failed\n");
-
-	// A finished identity can be enqueued again after removal (§8.2 partial
-	// unique index covers unfinished rows only).
-	CHECK(abs_download_cancel(ids[8], err, sizeof(err)), "cancel 8 failed: %s\n", err);
-	CHECK(abs_download_remove(ids[8], err, sizeof(err)), "remove 8 failed: %s\n", err);
-	bool deduped2 = true;
-	long long twin = 0;
-	abs_download_enqueue_t fresh8 = book_req(itemname(8), "Book 08", FAKE_DEST);
-	CHECK(abs_download_enqueue_book(&fresh8, &twin, &deduped2, err, sizeof(err)), "re-enqueue failed\n");
-	CHECK(!deduped2 && twin != ids[8], "terminal row leaked into dedup\n");
-
-	// The bound counts terminal history (§8.1): nothing is terminal right now
-	// (ids 7/8 were removed and re-enqueued), so Clear-finished must remove
-	// nothing; the explicit cancels then give the second clear work to do.
+	abs_download_enqueue_t dup = book_req(itemname(30), "Book 30", FAKE_DEST);
+	CHECK(abs_download_enqueue_book(&dup, &again, &deduped, err, sizeof(err)) && deduped && again == ids[30],
+		"large queue duplicate did not reuse the row\n");
+	CHECK(abs_download_cancel(ids[30], err, sizeof(err)), "cancel failed: %s\n", err);
+	CHECK(abs_download_enqueue_book(&dup, &again, &deduped, err, sizeof(err)) && !deduped && again != ids[30],
+		"terminal history blocked a re-enqueue\n");
+	CHECK(abs_download_snapshot_update(&snap, &changed) && changed && snap.job_count == MANY_JOBS + 1,
+		"new row missing from large queue\n");
 	CHECK(abs_download_clear_finished(err, sizeof(err)), "clear finished failed: %s\n", err);
-	CHECK(abs_download_snapshot(&snap) && snap.job_count == ABS_DL_JOB_CAP,
-		  "first clear removed unfinished rows (%d)\n", snap.job_count);
-	CHECK(abs_download_cancel(ids[1], err, sizeof(err)) && abs_download_cancel(ids[2], err, sizeof(err)),
-		  "cancels failed: %s\n", err);
-	CHECK(abs_download_clear_finished(err, sizeof(err)), "second clear failed: %s\n", err);
-	CHECK(abs_download_snapshot(&snap) && snap.job_count == ABS_DL_JOB_CAP - 2,
-		  "clear left %d rows (wanted 14 unfinished)\n", snap.job_count);
-
-	// Freed capacity is usable again, and the dedup row of `over` is still the
-	// one row (two refills cannot stack).
-	long long again_over = 0;
-	CHECK(abs_download_enqueue_book(&over, &again_over, NULL, err, sizeof(err)), "refill enqueue failed\n");
-	long long over_id = 0;
-	CHECK(abs_download_enqueue_book(&over, &over_id, NULL, err, sizeof(err)), "dedup refill failed\n");
-	CHECK(again_over == over_id, "deduped enqueues returned different ids\n");
-	// Two fresh enqueues reach the bound; a third distinct identity is refused
-	// before any network activity (§8.1).
-	long long r1 = 0, r2 = 0;
-	abs_download_enqueue_t f1 = book_req("item-96", "Book 96", FAKE_DEST);
-	abs_download_enqueue_t f2 = book_req("item-97", "Book 97", FAKE_DEST);
-	CHECK(abs_download_enqueue_book(&f1, &r1, NULL, err, sizeof(err)), "refill 96 failed\n");
-	CHECK(abs_download_enqueue_book(&f2, &r2, NULL, err, sizeof(err)), "refill 97 failed\n");
-	abs_download_enqueue_t third = book_req("item-98", "Book 98", FAKE_DEST);
-	CHECK(!abs_download_enqueue_book(&third, NULL, NULL, err, sizeof(err)), "capacity leaked\n");
-	CHECK(abs_download_remove(r1, err, sizeof(err)) && abs_download_remove(r2, err, sizeof(err)),
-		  "refill cleanup failed\n");
+	CHECK(abs_download_snapshot_update(&snap, &changed) && changed && snap.job_count == MANY_JOBS &&
+		snap.jobs[MANY_JOBS - 1].id == again, "clear finished removed unfinished rows\n");
 
 	// Field validation: books reject episode ids; episodes require one.
 	abs_download_enqueue_t bogus = book_req("item-x0", "X", FAKE_DEST);
@@ -1260,17 +1219,34 @@ static void test_capacity_dedup(void) {
 	e.owner_id = "owner-b";
 	CHECK(abs_download_enqueue_episode(&e, &other_owner, &deduped, err, sizeof(err)) &&
 		!deduped && other_owner != ep_id, "different owner deduped\n");
-	CHECK(abs_download_episode_state(e.server, "owner-b", e.item_id, e.episode_id) == ABS_DL_QUEUED,
-		"queued episode state missing\n");
+	long long bytes = -99, total = -99;
+	CHECK(abs_download_episode_status(e.server, "owner-b", e.item_id, e.episode_id, &bytes, &total) == ABS_DL_QUEUED &&
+		bytes == 0 && total == -1, "queued episode reported unexpected transfer counters\n");
+	bytes = total = 42;
+	CHECK(abs_download_episode_status(e.server, "owner-c", e.item_id, e.episode_id, &bytes, &total) == ABS_DL_STATE_COUNT &&
+		bytes == 0 && total == -1, "missing episode left old transfer counters\n");
 	CHECK(abs_download_episode_state(e.server, "owner-c", e.item_id, e.episode_id) == ABS_DL_STATE_COUNT &&
 		abs_download_episode_state(e.server, "owner-b", "other-show", e.episode_id) == ABS_DL_STATE_COUNT &&
 		abs_download_episode_state("http://other.test", "owner-b", e.item_id, e.episode_id) == ABS_DL_STATE_COUNT,
 		"episode state leaked across accounts, servers, or shows\n");
+	unsigned revision = abs_download_revision();
 	CHECK(abs_download_remove(other_owner, err, sizeof(err)) &&
 		abs_download_episode_state(e.server, "owner-b", e.item_id, e.episode_id) == ABS_DL_STATE_COUNT,
 		"removed episode still reports a queue state: %s\n", err);
+	CHECK(abs_download_revision() != revision, "removing an episode did not invalidate the queue revision\n");
 	e.owner_id = NULL;
 	CHECK(!abs_download_enqueue_episode(&e, NULL, NULL, err, sizeof(err)), "episode without an owner passed\n");
+	enum { MANY_EPISODES = 24 };
+	for (int i = 0; i < MANY_EPISODES; i++) {
+		char episode_id[24];
+		snprintf(episode_id, sizeof(episode_id), "large-feed-%d", i);
+		abs_download_enqueue_t episode = episode_req("large-feed", episode_id, "Another episode");
+		CHECK(abs_download_enqueue_episode(&episode, NULL, NULL, err, sizeof(err)), "large episode queue: %s\n", err);
+	}
+	abs_download_quiesce_storage();
+	CHECK(abs_download_init(&cfg), "restart with large episode queue failed\n");
+	CHECK(abs_download_snapshot(&snap) && snap.job_count == MANY_JOBS + MANY_EPISODES + 1 &&
+		!strcmp(snap.jobs[snap.job_count - 1].episode_id, "large-feed-23"), "large episode queue was truncated\n");
 
 	abs_download_quiesce_storage();
 	printf("ok\n");
@@ -1312,7 +1288,7 @@ static void test_remove_paused_part(void) {
 	CHECK(file_exists(part2), "the paused job's .part was not planted\n");
 
 	CHECK(abs_download_remove(id, err, sizeof(err)), "remove paused: %s\n", err);
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap), "snapshot\n");
 	for (int i = 0; i < snap.job_count; i++) {
 		CHECK(snap.jobs[i].id != id, "removed job still in the mirror\n");
@@ -1346,7 +1322,7 @@ static void test_lifecycle(void) {
 	CHECK(abs_download_cancel(b3, err, sizeof(err)), "cancel queued: %s\n", err);
 	CHECK(job_state(b3) == ABS_DL_CANCELLED, "cancel state\n");
 	CHECK(abs_download_remove(b3, err, sizeof(err)), "remove: %s\n", err);
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(abs_download_snapshot(&snap), "snapshot\n");
 	for (int i = 0; i < snap.job_count; i++) {
 		CHECK(snap.jobs[i].id != b3, "removed job still in the mirror\n");
@@ -1529,7 +1505,7 @@ static void test_no_token(void) {
 	fetch_fail_error = "rejected: Authorization: Bearer eyJhbGciOi and token=qwerty1234";
 	long long e1 = enqueue_book("nt3", "Leak attempt");
 	pump_until(e1, ABS_DL_FAILED);
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(e1, &snap);
 	CHECK(strstr(j->error, "[redacted]") != NULL, "error not redacted: %s\n", j->error);
 	CHECK(!strstr(j->error, "eyJhbGciOi") && !strstr(j->error, "qwerty1234"),
@@ -1598,7 +1574,7 @@ static void test_card_generation(void) {
 	abs_download_enqueue_t over = book_req("g2", "Generation 2", FAKE_DEST);
 	CHECK(!abs_download_enqueue_book(&over, NULL, NULL, err, sizeof(err)), "enqueue while quiesced\n");
 	CHECK(strstr(err, "not available") != NULL, "wrong quiesced error: %s\n", err);
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(!abs_download_snapshot(&snap) && snap.generation == 0, "snapshot while quiesced must refuse\n");
 	CHECK(abs_download_card_generation() == base + 1, "quiesce changed the generation\n");
 
@@ -1653,7 +1629,7 @@ static void test_worker_thread(void) {
 	enqueue_book("w9b", "Thread 2");
 	bool both_done = false;
 	for (int i = 0; i < 20000 && !both_done; i++) {
-		abs_download_snapshot_t snap;
+		abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 		CHECK(abs_download_snapshot(&snap), "snapshot in thread mode\n");
 		both_done = snap.job_count == 2;
 		for (int k = 0; both_done && k < snap.job_count; k++) {
@@ -1708,7 +1684,7 @@ static void test_wake_pause_during_fetch(void) {
 	wake_put_bool(&block_fetch_next, true);
 	wait_flag(&blocked_seen, "the identity fetch to block");
 	CHECK(abs_download_probe_ops_unlocked(), "self-check: the probe works outside ops\n");
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(j->state == ABS_DL_FETCHING, "state while blocked: %s\n", abs_download_state_name(j->state));
 
@@ -1760,7 +1736,7 @@ static void test_wake_cancel_next_job_ordering(void) {
 	fake_paths("track01.mp3", ".part", part, sizeof(part));
 	CHECK(file_exists(part), "the transfer's .part exists while blocked\n");
 
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(b, &snap);
 	CHECK(j->state == ABS_DL_QUEUED, "the next job must still be queued\n");
 
@@ -1892,7 +1868,7 @@ static void test_storage_lifecycle(void) {
 	wait_flag(&unblocked_seen, "the teardown to wake the blocked op");
 	CHECK(op_thread_closed, "the op thread alone closed its woken stream\n");
 	CHECK(!abs_download_busy(), "quiesce must leave the power decisions idle\n");
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	CHECK(!abs_download_snapshot(&snap) && snap.generation == 0,
 		  "the queue must be disarmed after quiesce\n");
 	CHECK(abs_download_card_generation() == gen0 + 1, "quiesce must not move the generation\n");
@@ -2010,7 +1986,7 @@ static void test_import_coordinator(void) {
 	long long c = enqueue_book_dest("ic", "Import C", FAKE_DEST "-C");
 	run_to_done(c);
 
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(c, &snap);
 	CHECK(j->state == ABS_DL_DONE && j->index_pending == 1, "DONE flags on c\n");
 	CHECK(fabs(j->resume_seconds - 7.25) < 1e-9 && strcmp(j->resume_file, "track03.mp3") == 0,
@@ -2176,7 +2152,7 @@ static void test_turn_interleave(void) {
 	streamturn_abandon_all();
 	wait_flag(&unblocked_seen, "the abandon to wake the blocked transfer");
 	wait_state(id, ABS_DL_WAITING_NETWORK, "the abandoned attempt waits for the network");
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(strcmp(j->error_stage, "network") == 0, "the give-way records a network stage\n");
 	CHECK(j->bytes_done >= 0, "the abandoned attempt keeps an honest counter\n");
@@ -2417,7 +2393,7 @@ static void test_giant_byte_counters(void) {
 	// The op publishes PAUSE_AT above 2^31 and issues the pause itself; the
 	// queue records the PAUSED transition with that exact counter pair.
 	pump_until(id, ABS_DL_PAUSED);
-	abs_download_snapshot_t snap;
+	abs_download_snapshot_t snap __attribute__((cleanup(abs_download_snapshot_release))) = {0};
 	const abs_download_job_t *j = snap_job(id, &snap);
 	CHECK(j->bytes_done == PAUSE_AT,
 		  "the RAM counter read %lld, wanted %lld: a wrapped or truncated >2 GiB counter\n",
